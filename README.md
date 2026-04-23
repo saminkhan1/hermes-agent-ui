@@ -4,11 +4,11 @@
 
 # Cursor Cats
 
-**Vibecode with cats** — little pixel familiars on your desktop while **Cursor Agents** do the real work. One cat per run, prowling on top of every window, purring until the task lands. Click a cat to read the thread; spawn another, pick a folder, drop a prompt, and let it pad off to code. Frameless, transparent, click-through: the overlay stays out of your way; the cats keep the hearth warm.
+**Vibecode with cats**, little pixel familiars on your desktop while **Cursor Agents** do the real work. One cat per run, prowling on top of every window, purring until the task lands, and occasionally fighting with eachother. Click a cat to read the thread; spawn another, pick a folder, drop a prompt, and let it pad off to code.
 
 ## Cursor Agent SDK
 
-Cats on your desktop are **New Cursor Cat (SDK-backed)** runs. Spawning a cat from the modal creates a [`@cursor/february`](https://www.npmjs.com/package/@cursor/february) `Agent` via `Agent.create({ apiKey, model: { id: 'composer-2' }, local: { cwd: folder } })` rooted at the folder you pick. The prompt is sent with `agent.send(prompt)`, and the returned `Run`'s `run.stream()` is drained into a per-cat conversation log (user / assistant / thinking / tool_call / status events). `run.wait()` resolves the final status and result, which flips the cat into "in review". Follow-up messages reuse the same `Agent` instance with another `agent.send(text)` call. Requires `CURSOR_API_KEY`. See `src/main/agents.js`.
+Cats on your desktop are enabled from Cursor SDK runs. Spawning a cat from the modal creates a [`@cursor/february`](https://www.npmjs.com/package/@cursor/february) `Agent` via `Agent.create({ apiKey, model: { id: 'composer-2' }, local: { cwd: folder } })` rooted at the folder you pick. The prompt is sent with `agent.send(prompt)`, and the returned `Run`'s `run.stream()` is drained into a per-cat conversation log (user / assistant / thinking / tool_call / status events). `run.wait()` resolves the final status and result, which flips the cat into "in review". Follow-up messages reuse the same `Agent` instance with another `agent.send(text)` call. Requires `CURSOR_API_KEY`. See `src/main/agents.js`.
 
 ## Cursor Cats CLI
 
