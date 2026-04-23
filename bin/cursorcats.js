@@ -45,6 +45,15 @@ if (!fs.existsSync(mainEntry)) {
 
 const electron = require('electron');
 
+console.log(`+------------------------------------------+
+|                                          |
+|              Cursor Cats                 |
+|                                          |
++------------------------------------------+
+
+Use Cmd+Shift+C to launch a Cursor Cat.
+`);
+
 const child = spawn(electron, [mainEntry, ...process.argv.slice(2)], {
   cwd: pkgRoot,
   stdio: 'inherit',

@@ -4,14 +4,11 @@
 
 # Cursor Cats
 
-Your desktop is lonely. Fix it. **Cursor Cats** lets tiny pixel cats prowl across your screen while **Cursor Agents** do the actual work: one cat per agent, roaming on top of every window, purring quietly until their task is done. Click a cat, see what it's thinking. Spawn a new one, point it at a folder, give it a prompt, and watch it wander off to code. It's a frameless, transparent, click-through overlay that stays out of your way and keeps your agents adorable.
+Need to fire off a quick agent? Let a Cursor cat handle that for you. **Cursor Cats** lets tiny pixel cats prowl across your screen while **Cursor Agents** do the actual work: one cat per agent, roaming on top of every window, purring quietly until their task is done. Click a cat, see what it's thinking. Spawn a new one, point it at a folder, give it a prompt, and watch it wander off to code. It's a frameless, transparent, click-through overlay that stays out of your way and keeps your agents adorable.
 
 ## Cursor Agent SDK
 
-Cats on your desktop represent Cursor agent work in two different ways:
-
-- **New Cursor Cat (SDK-backed)**: spawning a cat from the modal creates a [`@cursor/february`](https://www.npmjs.com/package/@cursor/february) `Agent` via `Agent.create({ apiKey, model: { id: 'composer-2' }, local: { cwd: folder } })` rooted at the folder you pick. The prompt is sent with `agent.send(prompt)`, and the returned `Run`'s `run.stream()` is drained into a per-cat conversation log (user / assistant / thinking / tool_call / status events). `run.wait()` resolves the final status and result, which flips the cat into "in review". Follow-up messages reuse the same `Agent` instance with another `agent.send(text)` call. Requires `CURSOR_API_KEY`. See `src/main/agents.js`.
-- **IDE session cat (hook-bridged)**: cats that mirror **interactive Agent Chat sessions** inside the Cursor IDE. User-level Cursor hooks under `~/.cursor/hooks.json` run `sessionStart` / `sessionEnd` commands that load scripts from `~/.cursor/hooks/cursorcats/`; those scripts POST to a loopback HTTP server in the app (port + auth token in `~/.cursorcats/ipc.json`, written when the app starts). A cat appears when a foreground Cursor composer session starts (background-agent sessions are ignored). When the session ends, the cat plays the same “finished” flow as SDK cats, then the overlay removes it automatically after a short delay; no API key is required because Cursor runs the agent. Clicking the cat activates the Cursor app. Install hooks once with **`cursorcats add-hooks`** (see below); use **`cursorcats remove-hooks`** to strip those entries and delete the copied scripts. Hook sources live in `assets/cursor-plugin/hooks/` (including `notify.js`, which the session hooks require); see `src/main/hook-server.js` and `src/main/ide-sessions.js`.
+Cats on your desktop are **New Cursor Cat (SDK-backed)** runs. Spawning a cat from the modal creates a [`@cursor/february`](https://www.npmjs.com/package/@cursor/february) `Agent` via `Agent.create({ apiKey, model: { id: 'composer-2' }, local: { cwd: folder } })` rooted at the folder you pick. The prompt is sent with `agent.send(prompt)`, and the returned `Run`'s `run.stream()` is drained into a per-cat conversation log (user / assistant / thinking / tool_call / status events). `run.wait()` resolves the final status and result, which flips the cat into "in review". Follow-up messages reuse the same `Agent` instance with another `agent.send(text)` call. Requires `CURSOR_API_KEY`. See `src/main/agents.js`.
 
 ## Cursor Cats CLI
 
@@ -48,7 +45,6 @@ While the app is running, use **Cmd+Shift+C** (macOS) or **Ctrl+Shift+C** (Windo
 ### Usage
 
 - **Launch**: `cursorcats` (or `npx github:fieldsphere/cursor-cats`).
-- **IDE session cats (Cursor hooks)**: run **`cursorcats add-hooks`** once. It copies `sessionStart.js`, `sessionEnd.js`, and `notify.js` into `~/.cursor/hooks/cursorcats/` and merges `sessionStart` / `sessionEnd` entries into **`~/.cursor/hooks.json`** (other hook entries are preserved). Reload Cursor (**Developer: Reload Window**) afterward. Re-run **`add-hooks`** after upgrading cursorcats so the copied files stay in sync. To uninstall: **`cursorcats remove-hooks`** removes the cursorcats hook commands from `hooks.json` and deletes `~/.cursor/hooks/cursorcats/` (then reload Cursor again).
 - **Cursor API key** (for **New Cursor Cat** agent runs): set before starting:
 
 ```bash
@@ -57,8 +53,6 @@ cursorcats
 ```
 
 Without `CURSOR_API_KEY`, the app still runs; the CLI prints a warning and **New Cursor Cat** agents will not run.
-
-The subcommands **`add-hooks`** and **`remove-hooks`** are handled by the CLI itself (see `bin/cursorcats.js`). Any other arguments are passed through to Electron.
 
 ### Quit
 
