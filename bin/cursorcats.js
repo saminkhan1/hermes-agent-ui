@@ -8,6 +8,17 @@ const path = require('node:path');
 const pkgRoot = path.resolve(__dirname, '..');
 const mainEntry = path.join(pkgRoot, 'out', 'main', 'index.js');
 
+if (process.argv[2] === 'add-hooks') {
+  try {
+    const { addHooks } = require(path.join(pkgRoot, 'scripts', 'add-hooks.js'));
+    addHooks(pkgRoot, { log: console.log.bind(console) });
+  } catch (e) {
+    console.error('[cursorcats] add-hooks failed:', (e && e.message) || e);
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
 if (!process.env.CURSOR_API_KEY) {
   console.error(
     '[cursorcats] Warning: CURSOR_API_KEY is not set. New Cursor Cat agents will not run; set it before launching if you use that feature.'

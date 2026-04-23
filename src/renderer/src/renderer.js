@@ -34,9 +34,41 @@
   const PERCH_BOUNDS_DRIFT = 24;
   /** Block ground interactions while commuting / on another window. */
   const INTERACT_BLOCK_MAX = 1e9;
+  /** After this long sitting in the finished slot, a cat pops back up to perch on the active window and reshow its "finished" bubble. */
+  const FINISH_RESHOW_INTERVAL_MS = 60 * 1000;
+  /** Backoff between reshow attempts when the active window can't be used (missing, too narrow). */
+  const FINISH_RESHOW_RETRY_MS = 4000;
+  /** How long a reshowing cat sits on top of the active window before falling / walking back to its slot. */
+  const FINISH_RESHOW_PERCH_MIN_MS = 4000;
+  const FINISH_RESHOW_PERCH_MAX_MS = 7000;
 
   const canvas = document.getElementById('cat');
   const ctx = canvas.getContext('2d', { alpha: true });
+  const bubbleLayer = document.getElementById('bubble-layer');
+
+  /** Shown in a bubble when an agent cat reaches the finished parking slot (random pick per cat). */
+  const FINISH_BUBBLE_MESSAGES = [
+    "I'm finished — time for a nap.",
+    'All done. Got treats?',
+    "I'm wrapped up. Your turn.",
+    'Task complete. Stretch break!',
+    'Shipped it. Signing off.',
+    "Finished here. Don't forget me.",
+    'Mission accomplished. Purr.',
+    "That's a wrap from this cat.",
+    'Agent idle. Going offline.',
+    'Done dealing. Lap time?',
+    'Wrapped my bit. Nice work.',
+    "I'm clocking out. Meow.",
+    'Closing this thread. Zzz.',
+    'Edits sent. Victory pose.',
+    'Work over — find my string?',
+    'All clear on my side.',
+    'Finished strong. Nap soon.',
+    "That's all from me today.",
+    'Done! Where was the catnip?',
+    'Tasks closed. Tiny parade.',
+  ];
 
   let dpr = 1;
   let manifestPaths = null; // cached list of sprite manifest relative paths
@@ -56,7 +88,7 @@
     let active = 0;
     let inReview = 0;
     for (const c of cats) {
-      if (c.finished || c.finishing) inReview += 1;
+      if (c.finished || c.finishing || c.finishReshowing) inReview += 1;
       else active += 1;
     }
     return { active, inReview };
@@ -466,7 +498,7 @@
   /** Park finished agent cats along the bottom-right; cats still running there get an updated target. */
   function relayoutFinishedCats() {
     const list = cats
-      .filter((c) => c.finished || c.finishing)
+      .filter((c) => (c.finished || c.finishing) && !c.finishReshowing)
       .sort((a, b) => (a.finishedOrder || 0) - (b.finishedOrder || 0));
     if (list.length === 0) return;
     const W = canvas.clientWidth;
@@ -569,6 +601,58 @@
     return true;
   }
 
+  /** Send a finished cat up onto the active window so it can display its finished bubble again. */
+  function startFinishReshow(cat, bounds, ts) {
+    if (!cat || !cat.finished || cat.finishReshowing) return false;
+    if (!bounds) return false;
+    const { w } = getDrawSize(cat);
+    const minX = MARGIN;
+    const maxX = Math.max(MARGIN, canvas.clientWidth - MARGIN - w);
+    const minLanding = Math.max(minX, bounds.left + MARGIN);
+    const maxLanding = Math.min(maxX, bounds.right - MARGIN - w);
+    if (minLanding > maxLanding) return false;
+    if (bounds.right - bounds.left < Math.max(PERCH_MIN_WIDTH, w + 2 * MARGIN)) return false;
+    destroyFinishBubble(cat);
+    cat.finished = false;
+    cat.finishing = false;
+    cat.finishReshowing = true;
+    cat.perch = { left: bounds.left, right: bounds.right, top: bounds.top };
+    cat.walkTargetX = rand(minLanding, maxLanding);
+    cat.walkTargetY = getBottomY(cat);
+    cat.sprinting = true;
+    cat.state = 'walkToPerch';
+    cat.canInteractAt = ts + INTERACT_BLOCK_MAX;
+    cat.idleEndAt = ts + rand(1000, 3000);
+    return true;
+  }
+
+  /** Every FINISH_RESHOW_INTERVAL_MS, finished cats jump back up to the active window and reshow their message. */
+  function maybeStartFinishReshow(cat, ts) {
+    if (!cat.finished || cat.finishReshowing || cat.finishReshowPending) return;
+    if (cat.finishedAt == null) return;
+    if (ts - cat.finishedAt < FINISH_RESHOW_INTERVAL_MS) return;
+    if (ts < (cat.nextFinishReshowAttemptAt || 0)) return;
+    if (!window.cursorcats || typeof window.cursorcats.getFrontmostWindowBounds !== 'function') return;
+    cat.finishReshowPending = true;
+    cat.nextFinishReshowAttemptAt = ts + FINISH_RESHOW_RETRY_MS;
+    window.cursorcats
+      .getFrontmostWindowBounds()
+      .then((b) => {
+        cat.finishReshowPending = false;
+        if (!cat.finished) return;
+        if (!b) return;
+        const started = startFinishReshow(cat, b, performance.now());
+        if (started) {
+          // Reset the clock so the next reshow fires FINISH_RESHOW_INTERVAL_MS
+          // after the cat settles back in its slot (finishedAt stamp).
+          cat.nextFinishReshowAttemptAt = 0;
+        }
+      })
+      .catch(() => {
+        cat.finishReshowPending = false;
+      });
+  }
+
   async function maybeRequestPerch(cat, ts) {
     if (cat.finished) return;
     if (Math.random() >= PERCH_CHANCE_PER_IDLE) return;
@@ -667,6 +751,7 @@
         setAnim(cat, 'idle', false);
         advanceAnim(cat, dt);
       }
+      maybeStartFinishReshow(cat, ts);
       return;
     }
     if (cat.finishing) {
@@ -681,6 +766,13 @@
         cat.sprinting = false;
         cat.state = 'idle';
         cat.idleEndAt = 1e12;
+        cat.finishedAt = ts;
+        cat.nextFinishReshowAttemptAt = ts + FINISH_RESHOW_INTERVAL_MS;
+        cat.finishBubbleText =
+          FINISH_BUBBLE_MESSAGES[
+            Math.floor(Math.random() * FINISH_BUBBLE_MESSAGES.length)
+          ];
+        ensureFinishBubbleDom(cat);
         return;
       }
       cat.x += (dx > 0 ? 1 : -1) * move;
@@ -716,6 +808,19 @@
         const min = MARGIN;
         const max = Math.max(MARGIN, canvas.clientWidth - MARGIN - w);
         cat.x = Math.min(max, Math.max(min, cat.x));
+        if (cat.finishReshowing) {
+          cat.finishReshowing = false;
+          destroyFinishBubble(cat);
+          cat.finishing = true;
+          cat.finished = false;
+          cat.state = 'runToFinish';
+          cat.sprinting = true;
+          cat.idleEndAt = 1e12;
+          cat.canInteractAt = ts + INTERACT_BLOCK_MAX;
+          cat.walkTargetX = cat.x;
+          cat.walkTargetY = getBottomY(cat);
+          relayoutFinishedCats();
+        }
       }
       return;
     }
@@ -750,7 +855,18 @@
           cat.perchLeaving = false;
           cat.perchCheckPending = false;
           cat.idleEndAt = ts + rand(1000, 3000);
-          cat.perchUntil = ts + rand(PERCH_DURATION_MIN, PERCH_DURATION_MAX);
+          if (cat.finishReshowing) {
+            cat.perchUntil = ts + rand(FINISH_RESHOW_PERCH_MIN_MS, FINISH_RESHOW_PERCH_MAX_MS);
+            // Keep reshowing cats idle so the bubble stays centered above them.
+            cat.idleEndAt = cat.perchUntil + 1;
+            cat.finishBubbleText =
+              FINISH_BUBBLE_MESSAGES[
+                Math.floor(Math.random() * FINISH_BUBBLE_MESSAGES.length)
+              ];
+            ensureFinishBubbleDom(cat);
+          } else {
+            cat.perchUntil = ts + rand(PERCH_DURATION_MIN, PERCH_DURATION_MAX);
+          }
           cat.lastPerchQueryAt = ts;
           cat.canInteractAt = ts + INTERACT_BLOCK_MAX;
           return;
@@ -1004,6 +1120,7 @@
       renderCat(cat);
     }
     relayoutFinishedCats();
+    syncFinishBubbles();
     postCatScreenRects();
     requestAnimationFrame(gameLoop);
   }
@@ -1145,6 +1262,13 @@
       perchLeaving: false,
       climb: null,
       fall: null,
+      finishBubbleEl: null,
+      finishBubbleText: null,
+      finishBubbleTimer: null,
+      finishedAt: null,
+      finishReshowing: false,
+      finishReshowPending: false,
+      nextFinishReshowAttemptAt: 0,
     };
     const { max } = getHorizontalRange(cat);
     cat.x = max;
@@ -1152,6 +1276,51 @@
     cat.facingRight = false;
     cat.idleEndAt = performance.now() + rand(1000, 3000);
     return cat;
+  }
+
+  /** How long the "I'm finished" speech bubble lingers before auto-hiding. */
+  const FINISH_BUBBLE_TTL_MS = 30000;
+
+  function destroyFinishBubble(cat) {
+    if (!cat) return;
+    if (cat.finishBubbleTimer) {
+      clearTimeout(cat.finishBubbleTimer);
+      cat.finishBubbleTimer = null;
+    }
+    const el = cat.finishBubbleEl;
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+    cat.finishBubbleEl = null;
+    cat.finishBubbleText = null;
+  }
+
+  function ensureFinishBubbleDom(cat) {
+    if (!bubbleLayer || !cat || (!cat.finished && !cat.finishReshowing) || !cat.finishBubbleText) return;
+    if (!cat.finishBubbleEl) {
+      const el = document.createElement('div');
+      el.className = 'cat-finish-bubble';
+      el.textContent = cat.finishBubbleText;
+      bubbleLayer.appendChild(el);
+      cat.finishBubbleEl = el;
+      if (cat.finishBubbleTimer) clearTimeout(cat.finishBubbleTimer);
+      cat.finishBubbleTimer = setTimeout(() => {
+        cat.finishBubbleTimer = null;
+        const bubble = cat.finishBubbleEl;
+        if (bubble && bubble.parentNode) bubble.parentNode.removeChild(bubble);
+        cat.finishBubbleEl = null;
+        cat.finishBubbleText = null;
+      }, FINISH_BUBBLE_TTL_MS);
+    }
+  }
+
+  function syncFinishBubbles() {
+    if (!bubbleLayer) return;
+    for (const cat of cats) {
+      if ((!cat.finished && !cat.finishReshowing) || !cat.finishBubbleEl) continue;
+      const { w } = getDrawSize(cat);
+      const cx = cat.x + w / 2;
+      cat.finishBubbleEl.style.left = `${cx}px`;
+      cat.finishBubbleEl.style.top = `${cat.y}px`;
+    }
   }
 
   function detachPartnerIfInteracting(cat) {
@@ -1189,6 +1358,9 @@
     }
     cat.finishing = true;
     cat.finished = false;
+    cat.finishReshowing = false;
+    cat.finishReshowPending = false;
+    cat.nextFinishReshowAttemptAt = 0;
     cat.state = 'runToFinish';
     cat.sprinting = true;
     cat.perch = null;
@@ -1201,6 +1373,7 @@
     cat.walkTargetY = getBottomY(cat);
     cat.idleEndAt = 1e12;
     cat.canInteractAt = performance.now() + INTERACT_BLOCK_MAX;
+    destroyFinishBubble(cat);
     detachPartnerIfInteracting(cat);
   }
 
@@ -1211,6 +1384,7 @@
     const cat = cats.find((c) => c.catId != null && String(c.catId) === id);
     if (!cat) return;
     if (!cat.finished && !cat.finishing) return;
+    destroyFinishBubble(cat);
     detachPartnerIfInteracting(cat);
     cat.finished = false;
     cat.finishing = false;
@@ -1225,6 +1399,10 @@
     cat.fall = null;
     cat.state = 'idle';
     cat.canInteractAt = 0;
+    cat.finishedAt = null;
+    cat.finishReshowing = false;
+    cat.finishReshowPending = false;
+    cat.nextFinishReshowAttemptAt = 0;
     const nowTs = performance.now();
     cat.idleEndAt = nowTs + rand(200, 600);
     cat.y = getBottomY(cat);
@@ -1300,6 +1478,7 @@
           pendingFinishes.delete(rid);
           const idx = cats.findIndex((c) => c.catId != null && String(c.catId) === rid);
           if (idx >= 0) {
+            destroyFinishBubble(cats[idx]);
             cats.splice(idx, 1);
             relayoutFinishedCats();
             reportCatCountsIfChanged();

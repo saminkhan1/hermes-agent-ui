@@ -10,6 +10,7 @@
     "bin",
     "out",
     "assets",
+    "scripts",
     "src",
     "README.md",
     "electron.vite.config.mjs"

@@ -23,7 +23,6 @@ const {
   dismissAgent,
   sendFollowup,
 } = require('./agents');
-const { ensureCursorPluginInstalled } = require('./plugin-installer');
 const { startHookServer } = require('./hook-server');
 const {
   handleIdeSessionStart,
@@ -400,32 +399,56 @@ function createTray() {
   const trayPng = path.join(app.getAppPath(), 'assets', 'tray.png');
   const iconPng = path.join(app.getAppPath(), 'assets', 'icon.png');
   let image;
-  let usingFallbackTitle = false;
+  let imageIsEmpty = false;
   if (fs.existsSync(trayPng)) {
+    // Electron auto-picks up assets/tray@2x.png for retina when it's siblings.
     image = nativeImage.createFromPath(trayPng);
   } else if (fs.existsSync(iconPng)) {
     const source = nativeImage.createFromPath(iconPng);
     // macOS menu bar icons render at ~22pt; resizing avoids a giant blurry icon.
     image = source.isEmpty() ? source : source.resize({ width: 22, height: 22, quality: 'best' });
-    if (process.platform === 'darwin' && !image.isEmpty()) {
-      // Treat as a template image so macOS tints it for light/dark menu bars.
-      image.setTemplateImage(true);
-    }
   } else {
     // 1×1 transparent PNG so Tray always has a valid image
     const onePx =
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
     image = nativeImage.createFromBuffer(Buffer.from(onePx, 'base64'));
-    usingFallbackTitle = true;
+    imageIsEmpty = true;
+  }
+  if (process.platform === 'darwin' && !image.isEmpty()) {
+    // Treat as a template image so macOS tints it for light/dark menu bars.
+    image.setTemplateImage(true);
   }
   tray = new Tray(image);
-  if (process.platform === 'darwin' && usingFallbackTitle) {
-    // Ensure the tray is always visible in the macOS menu bar even when no
-    // icon asset is provided (the fallback image is fully transparent).
-    tray.setTitle('🐱');
+  // Always give the tray some visible text on macOS. This does two things:
+  //   1. Belt-and-suspenders fallback if the icon asset is missing/empty.
+  //   2. Widens the tray item so it's less likely to be hidden by the notch
+  //      or a crowded menu bar (macOS drops menu bar extras that can't fit).
+  // The title is kept in sync with live counts by `updateTrayTitle()`.
+  if (process.platform === 'darwin') {
+    updateTrayTitle({ forceFallback: imageIsEmpty });
   }
   tray.setToolTip('CursorCats');
   rebuildAppMenus();
+}
+
+function updateTrayTitle({ forceFallback = false } = {}) {
+  if (!tray || tray.isDestroyed() || process.platform !== 'darwin') return;
+  const active = Number.isFinite(catCounts.active) ? catCounts.active : 0;
+  const review = Number.isFinite(catCounts.inReview) ? catCounts.inReview : 0;
+  let title;
+  if (active > 0 && review > 0) {
+    title = `${active}·${review}`;
+  } else if (active > 0) {
+    title = String(active);
+  } else if (review > 0) {
+    title = `·${review}`;
+  } else {
+    // No cats — if we have a visible icon, keep text empty so we don't clutter
+    // the menu bar. If the icon is empty (asset missing), always show a glyph
+    // so the tray is still clickable.
+    title = forceFallback ? '🐱' : '';
+  }
+  tray.setTitle(title);
 }
 
 /** Translate active window to overlay-local coords; exclude our own app window. */
@@ -565,6 +588,7 @@ ipcMain.on('cat-counts', (_event, payload) => {
   if (!Number.isFinite(active) || !Number.isFinite(inReview)) return;
   catCounts = { active: Math.max(0, Math.floor(active)), inReview: Math.max(0, Math.floor(inReview)) };
   rebuildAppMenus();
+  updateTrayTitle();
 });
 
 ipcMain.on('cat-screen-rects', (_event, rects) => {
@@ -645,12 +669,6 @@ app.whenReady().then(() => {
   }
   createTray();
 
-  try {
-    ensureCursorPluginInstalled({ log: console });
-  } catch (e) {
-    // eslint-disable-next-line no-console
-    console.warn('[cursorcats] plugin install', e);
-  }
   void startHookServer({
     onIdeSessionStart: (p) => handleIdeSessionStart(p, { getMainWindow: () => mainWindow, log: console }),
     onIdeSessionEnd: (p) => handleIdeSessionEnd(p, { getMainWindow: () => mainWindow, log: console }),
