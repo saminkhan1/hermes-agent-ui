@@ -8,7 +8,7 @@
 
 Cats on your desktop are enabled from Cursor SDK runs. Spawning a cat from the modal creates a [`@cursor/february`](https://www.npmjs.com/package/@cursor/february) `Agent` via `Agent.create({ apiKey, model: { id: 'composer-2' }, local: { cwd: folder } })` rooted at the folder you pick. The prompt is sent with `agent.send(prompt)`, and the returned `Run`'s `run.stream()` is drained into a per-cat conversation log (user / assistant / thinking / tool_call / status events). `run.wait()` resolves the final status and result, which flips the cat into "in review". Follow-up messages reuse the same `Agent` instance with another `agent.send(text)` call. Requires `CURSOR_API_KEY`. See `src/main/agents.js`.
 
-## Cursor Cats CLI
+## Running Cursor Cats
 
 The published command is **`cursorcats`** (see `bin` in `package.json`). It starts Electron with the built main process from `out/main/index.js`. Installing the package runs **`prepare`**, which runs `electron-vite build` (so `out/` exists before first launch).
 
@@ -52,12 +52,6 @@ cursorcats
 
 Without `CURSOR_API_KEY`, the app still runs; the CLI prints a warning and **New Cursor Cat** agents will not run.
 
-### Quit
-
-- **Tray**: right-click (or left-click, depending on the platform) the tray icon → **Quit**. On macOS the tray can also show live cat counts next to the icon; if the tray image looks like a tiny placeholder, the menu still works.
-- **Keyboard**: **Cmd+Q** (macOS) or **Ctrl+Q** (Windows/Linux).
-
-On macOS the Dock icon is hidden while the overlay is running; use the tray or the shortcut to exit. Most tray and shortcut behavior is tuned for macOS; Windows and Linux should still get the tray menu and **Ctrl+Q**, but details (e.g. menu bar title badges) may differ.
 
 ## Setup (clone for development)
 
