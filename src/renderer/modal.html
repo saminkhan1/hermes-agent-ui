@@ -22,7 +22,17 @@
           height="20"
           draggable="false"
         />
-        <input id="prompt" type="text" autocomplete="off" placeholder="What should I work on?" autofocus />
+        <div class="header-input-col">
+          <textarea
+            id="prompt"
+            rows="1"
+            autocomplete="off"
+            placeholder="What should I work on?"
+            spellcheck="true"
+            autofocus
+          ></textarea>
+          <div id="prompt-send-hint" class="prompt-send-hint" aria-live="polite"></div>
+        </div>
       </div>
       
       <div class="section-title">Projects</div>
@@ -52,7 +62,7 @@
 
       <div class="footer">
         <span id="error" class="error" role="alert" hidden></span>
-        <span class="hint">Press <kbd>Enter</kbd> to spawn cat. <kbd>Esc</kbd> to cancel.</span>
+        <span id="spawn-hint" class="hint"></span>
       </div>
     </div>
     <script type="module" src="/src/modal.js"></script>

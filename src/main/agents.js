@@ -13,11 +13,52 @@ const active = new Map();
 /** @type {Map<string, { folder: string, prompt: string, items: Array<{ kind: string, text: string, at: number, streamId?: string }>, runStatus: string, endResult?: string, durationMs?: number, activeAssistantBubble?: boolean }>} */
 const conversations = new Map();
 
-/** @type {(info: { catId: string }) => void} */
+/** @type {(info: { catId: string, streamBubble?: string | null }) => void} */
 let onConversationPushed = () => {};
 
 function setOnConversationPushed(fn) {
   onConversationPushed = typeof fn === 'function' ? fn : () => {};
+}
+
+/** Max chars of user task embedded in the cat-bubble system prefix (keeps sends bounded). */
+const CAT_TASK_SNIPPET_MAX = 420;
+
+/**
+ * System text prepended to each `agent.send()` so replies match the on-screen cat bubble
+ * and the playful first line fits the actual task.
+ * @param {string} userTask
+ */
+function buildAddedSystemInstruction(userTask) {
+  const task = String(userTask || '')
+    .trim()
+    .replace(/\s+/g, ' ');
+  const snippet =
+    task.length > CAT_TASK_SNIPPET_MAX ? `${task.slice(0, CAT_TASK_SNIPPET_MAX)}…` : task;
+  const taskGrounding =
+    snippet.length > 0
+      ? `Ground that metaphor in this job—same topic, files, or outcome—not random cat jokes. You are working on: ${JSON.stringify(snippet)}`
+      : 'Ground that metaphor in what you are doing this turn—tools, paths, errors, wins—not random cat jokes.';
+
+  return (
+    "A pixel cat on the user's screen represents this run. In each assistant " +
+    'message, if you are sharing progress or a final result, start with a single ' +
+    'very short, playful line (ideally 6 words or fewer), as if the cat is ' +
+    'speaking: use a tiny metaphor or image (trails, maps, knots, hearths, weather, ' +
+    'small crafts) that still clearly fits the real work. Then a blank line, then the rest. ' +
+    'Avoid a long first line.\n\n' +
+    `${taskGrounding}\n\n`
+  );
+}
+
+/** First line before a paragraph break — matches the overlay “cat line” system prompt. */
+function leadAssistantBubbleText(fullText) {
+  const raw = String(fullText || '').trim();
+  if (!raw) return null;
+  const para = raw.indexOf('\n\n');
+  const head = para >= 0 ? raw.slice(0, para) : raw;
+  const firstLine = head.split('\n')[0].trim();
+  if (!firstLine) return null;
+  return firstLine.length > 120 ? `${firstLine.slice(0, 117)}…` : firstLine;
 }
 
 function getNotify(getMainWindow) {
@@ -129,14 +170,14 @@ function applyStreamMessage(ev, catId) {
         }
         last.at = now();
         if (msgId) last.streamId = msgId;
-        onConversationPushed({ catId });
+        onConversationPushed({ catId, streamBubble: leadAssistantBubbleText(last.text) });
         return;
       }
       line = { kind: 'assistant', text, at: now() };
       if (msgId) line.streamId = msgId;
       rec.activeAssistantBubble = true;
       rec.items.push(line);
-      onConversationPushed({ catId });
+      onConversationPushed({ catId, streamBubble: leadAssistantBubbleText(text) });
       return;
     }
     case 'thinking': {
@@ -287,6 +328,8 @@ async function ensureAgent(catId, folder, notify, log) {
   }
 
   const { Agent } = require('@cursor/february/agent');
+  /** Tied to the desktop pet: short first lines read best in a tiny cat speech bubble. */
+
   const agent = Agent.create({
     apiKey,
     model: { id: 'composer-2' },
@@ -319,8 +362,9 @@ function runOnAgent(catId, notify, log, prompt) {
   const work = (async () => {
     try {
       let run;
+      const addedSystemInstruction = buildAddedSystemInstruction(prompt);
       try {
-        run = await entry.agent.send(String(prompt));
+        run = await entry.agent.send(String(addedSystemInstruction + prompt));
       } catch (e) {
         log.warn('agent.send failed', e);
         const r = conversations.get(id);

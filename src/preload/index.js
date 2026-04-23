@@ -34,6 +34,17 @@ contextBridge.exposeInMainWorld('cursorcats', {
     ipcRenderer.on('agent-finished', listener);
     return () => ipcRenderer.removeListener('agent-finished', listener);
   },
+  onAgentStreamBubble: (callback) => {
+    const listener = (_event, payload) => {
+      try {
+        callback(payload);
+      } catch {
+        // ignore
+      }
+    };
+    ipcRenderer.on('agent-stream-bubble', listener);
+    return () => ipcRenderer.removeListener('agent-stream-bubble', listener);
+  },
   postCatScreenRects: (rects) => {
     ipcRenderer.send('cat-screen-rects', rects);
   },
@@ -85,5 +96,16 @@ contextBridge.exposeInMainWorld('cursorcats', {
   },
   reportCatCounts: (counts) => {
     ipcRenderer.send('cat-counts', counts);
+  },
+  onClearFinishedCats: (callback) => {
+    const listener = () => {
+      try {
+        callback();
+      } catch {
+        // ignore
+      }
+    };
+    ipcRenderer.on('clear-finished-cats', listener);
+    return () => ipcRenderer.removeListener('clear-finished-cats', listener);
   },
 });

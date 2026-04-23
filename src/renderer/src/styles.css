@@ -63,3 +63,35 @@ body {
   border-right: 6px solid transparent;
   border-top: 6px solid #000;
 }
+
+/* In-progress assistant “cat line” (throttled from main). */
+.cat-stream-bubble {
+  position: absolute;
+  max-width: 240px;
+  padding: 8px 12px;
+  background: #14120b;
+  color: #edecec;
+  border: 2px solid #f54e00;
+  font-family:
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    sans-serif;
+  font-size: 12px;
+  line-height: 1.35;
+  border-radius: 10px;
+  transform: translate(-50%, calc(-100% + 24px));
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  text-align: center;
+}
+
+.cat-stream-bubble::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  margin-left: -6px;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 6px solid #f54e00;
+}

@@ -8,6 +8,30 @@ if (headerAppIcon) {
   headerAppIcon.src = appIconUrl;
 }
 const errorEl = document.getElementById('error');
+const hintEl = document.getElementById('spawn-hint');
+const promptSendHintEl = document.getElementById('prompt-send-hint');
+
+const isApple =
+  /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+  (navigator.userAgentData?.platform || '').toLowerCase().includes('mac');
+
+if (promptSendHintEl) {
+  if (isApple) {
+    promptSendHintEl.innerHTML =
+      '<kbd>Enter</kbd> new line · <kbd>⌘</kbd>+<kbd>Enter</kbd> send';
+  } else {
+    promptSendHintEl.innerHTML =
+      '<kbd>Enter</kbd> new line · <kbd>Ctrl</kbd>+<kbd>Enter</kbd> send';
+  }
+}
+
+if (hintEl) {
+  if (isApple) {
+    hintEl.innerHTML = '<kbd>⌘</kbd>+<kbd>O</kbd> folder · <kbd>Esc</kbd> cancel';
+  } else {
+    hintEl.innerHTML = '<kbd>Ctrl</kbd>+<kbd>O</kbd> folder · <kbd>Esc</kbd> cancel';
+  }
+}
 const btnChoose = document.getElementById('btn-choose-folder');
 const recentFoldersContainer = document.getElementById('recent-folders-container');
 const recentFoldersList = document.getElementById('recent-folders-list');
@@ -107,6 +131,7 @@ async function loadRecentFolders() {
   } catch (e) {
     // ignore
   }
+  syncPromptHeight();
 }
 
 async function onChooseFolder() {
@@ -154,8 +179,24 @@ btnChoose.addEventListener('click', () => {
   onChooseFolder();
 });
 
+function syncPromptHeight() {
+  if (!promptEl) return;
+  promptEl.style.height = '1px';
+  const sh = promptEl.scrollHeight;
+  promptEl.style.height = `${sh}px`;
+  pushContentHeight();
+}
+
+promptEl.addEventListener('input', () => {
+  syncPromptHeight();
+});
+
+window.addEventListener('resize', () => {
+  syncPromptHeight();
+});
+
 promptEl.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
     e.preventDefault();
     submit();
   }
@@ -221,7 +262,10 @@ const mo = new MutationObserver(() => pushContentHeight());
 if (recentFoldersList) {
   mo.observe(recentFoldersList, { childList: true, subtree: true });
 }
-window.addEventListener('load', pushContentHeight);
+window.addEventListener('load', () => {
+  syncPromptHeight();
+});
 
 loadRecentFolders();
 promptEl.focus();
+syncPromptHeight();

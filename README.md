@@ -4,7 +4,7 @@
 
 # Cursor Cats
 
-Need to fire off a quick agent? Let a Cursor cat handle that for you. **Cursor Cats** lets tiny pixel cats prowl across your screen while **Cursor Agents** do the actual work: one cat per agent, roaming on top of every window, purring quietly until their task is done. Click a cat, see what it's thinking. Spawn a new one, point it at a folder, give it a prompt, and watch it wander off to code. It's a frameless, transparent, click-through overlay that stays out of your way and keeps your agents adorable.
+**Vibecode with cats** — little pixel familiars on your desktop while **Cursor Agents** do the real work. One cat per run, prowling on top of every window, purring until the task lands. Click a cat to read the thread; spawn another, pick a folder, drop a prompt, and let it pad off to code. Frameless, transparent, click-through: the overlay stays out of your way; the cats keep the hearth warm.
 
 ## Cursor Agent SDK
 

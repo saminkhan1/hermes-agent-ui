@@ -363,6 +363,15 @@ function buildAppMenu() {
       enabled: false,
     },
     {
+      label: 'Clear finished cats',
+      enabled: reviewN > 0,
+      click: () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('clear-finished-cats');
+        }
+      },
+    },
+    {
       label: 'Show Cats',
       type: 'checkbox',
       checked: catsVisible,
@@ -665,10 +674,35 @@ app.whenReady().then(() => {
       console.warn('[cursorcats] hook server failed to start', e);
     });
 
-  setOnConversationPushed(({ catId: _id }) => {
+  /** Throttle overlay speech bubbles so streaming tokens do not flood IPC. */
+  const streamBubbleThrottle = new Map();
+
+  function sendStreamBubbleThrottled(catId, text) {
+    const id = String(catId);
+    const msg = String(text || '').trim();
+    if (!msg) return;
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    let slot = streamBubbleThrottle.get(id);
+    if (!slot) {
+      slot = {};
+      streamBubbleThrottle.set(id, slot);
+    }
+    slot.text = msg;
+    if (slot.timer) return;
+    slot.timer = setTimeout(() => {
+      slot.timer = null;
+      const t = slot.text;
+      if (!t || !mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.webContents.send('agent-stream-bubble', { catId: id, text: t });
+    }, 120);
+  }
+
+  setOnConversationPushed(({ catId, streamBubble }) => {
+    const _id = String(catId);
     if (conversationWindow && !conversationWindow.isDestroyed()) {
       conversationWindow.webContents.send('conversation-updated', { catId: _id });
     }
+    if (streamBubble) sendStreamBubbleThrottled(_id, streamBubble);
   });
 
   void tickActiveWindowTracker();
