@@ -45,7 +45,8 @@ function buildAddedSystemInstruction(userTask) {
     'very short, playful line (ideally 6 words or fewer), as if the cat is ' +
     'speaking: use a tiny metaphor or image (trails, maps, knots, hearths, weather, ' +
     'small crafts) that still clearly fits the real work. Then a blank line, then the rest. ' +
-    'Avoid a long first line.\n\n' +
+    'Avoid a long first line. Use the same pattern on your last message of the run—' +
+    'never skip the short cat line on the closing reply.\n\n' +
     `${taskGrounding}\n\n`
   );
 }
@@ -59,6 +60,19 @@ function leadAssistantBubbleText(fullText) {
   const firstLine = head.split('\n')[0].trim();
   if (!firstLine) return null;
   return firstLine.length > 120 ? `${firstLine.slice(0, 117)}…` : firstLine;
+}
+
+/** Same line as live stream bubbles: last assistant turn’s short first line. */
+function finishBubbleLineFromConversation(rec) {
+  if (!rec || !Array.isArray(rec.items)) return undefined;
+  for (let i = rec.items.length - 1; i >= 0; i--) {
+    const it = rec.items[i];
+    if (it && it.kind === 'assistant' && it.text) {
+      const line = leadAssistantBubbleText(it.text);
+      if (line) return line;
+    }
+  }
+  return undefined;
 }
 
 function getNotify(getMainWindow) {
@@ -306,7 +320,7 @@ async function dismissAgent(catId, opts = {}) {
 
 /**
  * @param {string} catId
- * @param {(payload: { catId: string, status: string, result?: string, durationMs?: number }) => void} notify
+ * @param {(payload: { catId: string, status: string, result?: string, durationMs?: number, finishBubbleLine?: string }) => void} notify
  * @param {Console} log
  * @param {string} folder
  */
@@ -341,7 +355,7 @@ async function ensureAgent(catId, folder, notify, log) {
 
 /**
  * @param {string} catId
- * @param {(payload: { catId: string, status: string, result?: string, durationMs?: number }) => void} notify
+ * @param {(payload: { catId: string, status: string, result?: string, durationMs?: number, finishBubbleLine?: string }) => void} notify
  * @param {Console} log
  * @param {string} prompt
  */
@@ -376,7 +390,12 @@ function runOnAgent(catId, notify, log, prompt) {
           r.activeAssistantBubble = false;
           onConversationPushed({ catId: id });
         }
-        notify({ catId: id, status: 'error', result: (e && e.message) || String(e) });
+        notify({
+          catId: id,
+          status: 'error',
+          result: (e && e.message) || String(e),
+          finishBubbleLine: finishBubbleLineFromConversation(r),
+        });
         try {
           if (entry.agent && typeof entry.agent[Symbol.asyncDispose] === 'function') {
             await entry.agent[Symbol.asyncDispose]();
@@ -414,7 +433,13 @@ function runOnAgent(catId, notify, log, prompt) {
         const status = result && result.status != null ? result.status : 'finished';
         const res = result && result.result != null ? String(result.result) : undefined;
         const durationMs = result && result.durationMs != null ? result.durationMs : undefined;
-        notify({ catId: id, status: String(status), result: res, durationMs });
+        notify({
+          catId: id,
+          status: String(status),
+          result: res,
+          durationMs,
+          finishBubbleLine: finishBubbleLineFromConversation(r),
+        });
       } catch (e) {
         log.warn('run.wait failed', e);
         const r = conversations.get(id);
@@ -426,7 +451,12 @@ function runOnAgent(catId, notify, log, prompt) {
           r.activeAssistantBubble = false;
           onConversationPushed({ catId: id });
         }
-        notify({ catId: id, status: 'error', result: (e && e.message) || String(e) });
+        notify({
+          catId: id,
+          status: 'error',
+          result: (e && e.message) || String(e),
+          finishBubbleLine: finishBubbleLineFromConversation(r),
+        });
       } finally {
         entry.run = null;
         const r2 = conversations.get(id);

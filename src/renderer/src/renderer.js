@@ -898,10 +898,10 @@
             cat.perchUntil = ts + rand(FINISH_RESHOW_PERCH_MIN_MS, FINISH_RESHOW_PERCH_MAX_MS);
             // Keep reshowing cats idle so the bubble stays centered above them.
             cat.idleEndAt = cat.perchUntil + 1;
+            const saved = cat.savedFinishBubbleLine && String(cat.savedFinishBubbleLine).trim();
             cat.finishBubbleText =
-              FINISH_BUBBLE_MESSAGES[
-                Math.floor(Math.random() * FINISH_BUBBLE_MESSAGES.length)
-              ];
+              saved ||
+              FINISH_BUBBLE_MESSAGES[Math.floor(Math.random() * FINISH_BUBBLE_MESSAGES.length)];
             ensureFinishBubbleDom(cat);
           } else if (cat.perchTiedToStableWindow) {
             cat.perchUntil = ts + 365 * 24 * 60 * 60 * 1000;
@@ -1307,6 +1307,8 @@
       fall: null,
       finishBubbleEl: null,
       finishBubbleText: null,
+      /** Same line as stream bubbles; kept for finish-reshow instead of picking a new random phrase. */
+      savedFinishBubbleLine: null,
       finishedAt: null,
       finishReshowing: false,
       finishReshowPending: false,
@@ -1524,11 +1526,18 @@
     cat.walkTargetX = cat.x;
     cat.walkTargetY = getBottomY(cat);
     cat.canInteractAt = nowTs + 4000;
+    const fromStream =
+      cat.streamBubbleText != null ? String(cat.streamBubbleText).trim() : '';
+    const fromRun =
+      ev && ev.finishBubbleLine != null ? String(ev.finishBubbleLine).trim() : '';
     destroyStreamBubble(cat);
     destroyFinishBubble(cat);
     detachPartnerIfInteracting(cat);
-    cat.finishBubbleText =
+    const fallback =
       FINISH_BUBBLE_MESSAGES[Math.floor(Math.random() * FINISH_BUBBLE_MESSAGES.length)];
+    const line = fromRun || fromStream || fallback;
+    cat.savedFinishBubbleLine = line;
+    cat.finishBubbleText = line;
     ensureFinishBubbleDom(cat);
     if (cat.kind === 'ide') {
       scheduleIdeCatRemoval(cat);
@@ -1550,6 +1559,7 @@
     cat.finishedOrder = null;
     cat.endStatus = null;
     cat.endResult = null;
+    cat.savedFinishBubbleLine = null;
     cat.sprinting = false;
     cat.perch = null;
     cat.perchLeaving = false;
