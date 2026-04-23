@@ -25,9 +25,9 @@ cursorcats
 
 While the app is running, use **Cmd+Shift+C** (macOS) or **Ctrl+Shift+C** (Windows/Linux) to add a new Cursor Cat.
 
-### Usage
+## Usage
 
-- **Cursor API key** (for **New Cursor Cat** agent runs): set before starting:
+- **Add Cursor API key** to your env:
 
 ```bash
 export CURSOR_API_KEY=your_key
