@@ -58,7 +58,7 @@ let closeHookServer = null;
 let mainWindowMouseable = false;
 let lastCatScreenRects = [];
 let tray;
-/** `setVisibleOnAllWorkspaces(true)` on the overlay breaks `app.dock.show()` after `dock.hide()` on macOS; restore when the modal closes. */
+/** Opening a modal child temporarily clears `setVisibleOnAllWorkspaces` on the overlay (stacking/focus on macOS); restore when the modal closes. */
 let mainWindowWasVisibleOnAllWorkspaces = false;
 /** Latest overlay cat counts from renderer (dock / tray menu). */
 let catCounts = { active: 0, inReview: 0 };
@@ -193,7 +193,6 @@ function openNewCatModal() {
   if (modalWindow && !modalWindow.isDestroyed()) {
     modalWindow.focus();
     if (process.platform === 'darwin') {
-      app.dock?.show();
       app.focus({ steal: true });
     }
     return;
@@ -202,10 +201,6 @@ function openNewCatModal() {
   if (process.platform === 'darwin' && mainWindow && !mainWindow.isDestroyed()) {
     mainWindowWasVisibleOnAllWorkspaces = true;
     mainWindow.setVisibleOnAllWorkspaces(false);
-  }
-
-  if (process.platform === 'darwin' && app.dock) {
-    app.dock.show();
   }
 
   modalWindow = new BrowserWindow({
@@ -245,9 +240,6 @@ function openNewCatModal() {
       mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
       mainWindowWasVisibleOnAllWorkspaces = false;
     }
-    if (process.platform === 'darwin' && app.dock) {
-      app.dock.hide();
-    }
   });
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -280,7 +272,6 @@ function openConversationWindow(catId) {
     conversationWindow.show();
     conversationWindow.focus();
     if (process.platform === 'darwin') {
-      app.dock?.show();
       app.focus({ steal: true });
     }
     return;
@@ -289,9 +280,6 @@ function openConversationWindow(catId) {
   if (process.platform === 'darwin' && mainWindow && !mainWindow.isDestroyed()) {
     mainWindowWasVisibleOnAllWorkspaces = true;
     mainWindow.setVisibleOnAllWorkspaces(false);
-  }
-  if (process.platform === 'darwin' && app.dock) {
-    app.dock.show();
   }
 
   conversationWindow = new BrowserWindow({
@@ -329,9 +317,6 @@ function openConversationWindow(catId) {
     if (process.platform === 'darwin' && mainWindow && !mainWindow.isDestroyed() && mainWindowWasVisibleOnAllWorkspaces) {
       mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
       mainWindowWasVisibleOnAllWorkspaces = false;
-    }
-    if (process.platform === 'darwin' && app.dock) {
-      app.dock.hide();
     }
   });
 
@@ -399,9 +384,6 @@ function rebuildAppMenus() {
   const menu = buildAppMenu();
   if (tray && !tray.isDestroyed()) {
     tray.setContextMenu(menu);
-  }
-  if (process.platform === 'darwin' && app.dock) {
-    app.dock.setMenu(menu);
   }
 }
 
@@ -658,25 +640,16 @@ ipcMain.on('agent-followup', (_e, { catId, text } = {}) => {
 ipcMain.handle('get-agent-conversation', (_e, catId) => getAgentConversation(catId));
 
 app.whenReady().then(() => {
+  if (process.platform === 'darwin' && app.dock) {
+    app.dock.hide();
+  }
   if (!process.env.CURSOR_API_KEY) {
     // eslint-disable-next-line no-console
     console.warn(
       'CURSOR_API_KEY is not set. New cats will appear briefly and disappear; set the env var to run agents.'
     );
   }
-  if (process.platform === 'darwin' && app.dock) {
-    const iconPath = path.join(getPackageRoot(), 'assets', 'icon.png');
-    if (fs.existsSync(iconPath)) {
-      const icon = nativeImage.createFromPath(iconPath);
-      if (!icon.isEmpty()) {
-        app.dock.setIcon(icon);
-      }
-    }
-  }
   createWindow();
-  if (process.platform === 'darwin' && app.dock) {
-    app.dock.hide();
-  }
   createTray();
 
   void startHookServer({
