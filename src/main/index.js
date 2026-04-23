@@ -30,8 +30,18 @@ const {
   removeIdeCatIfPresent,
 } = require('./ide-sessions');
 
+/**
+ * Root of the installed package (`package.json`, `assets/`, `out/`).
+ * Do not use `app.getAppPath()` for files here: when Electron is started with an explicit
+ * main module (e.g. `npx …` / `electron out/main/index.js`), it returns `out/main/`, not
+ * the package root, so `assets/` would not be found.
+ */
+function getPackageRoot() {
+  return path.resolve(__dirname, '..', '..');
+}
+
 function assertPathInsideApp(relPath) {
-  const root = path.resolve(app.getAppPath());
+  const root = path.resolve(getPackageRoot());
   const full = path.resolve(path.join(root, relPath));
   if (full !== root && !full.startsWith(root + path.sep)) {
     throw new Error('Path escapes app root');
@@ -396,8 +406,8 @@ function rebuildAppMenus() {
 }
 
 function createTray() {
-  const trayPng = path.join(app.getAppPath(), 'assets', 'tray.png');
-  const iconPng = path.join(app.getAppPath(), 'assets', 'icon.png');
+  const trayPng = path.join(getPackageRoot(), 'assets', 'tray.png');
+  const iconPng = path.join(getPackageRoot(), 'assets', 'icon.png');
   let image;
   let imageIsEmpty = false;
   if (fs.existsSync(iconPng)) {
@@ -480,7 +490,7 @@ function getFrontmostWindowInfo() {
   return { id: activeWindowState.id, bounds, stableMs };
 }
 
-ipcMain.handle('get-app-path', () => app.getAppPath());
+ipcMain.handle('get-app-path', () => getPackageRoot());
 ipcMain.handle('get-frontmost-window-bounds', getFrontmostWindowBoundsInOverlay);
 ipcMain.handle('get-frontmost-window-info', () => getFrontmostWindowInfo());
 
@@ -655,7 +665,7 @@ app.whenReady().then(() => {
     );
   }
   if (process.platform === 'darwin' && app.dock) {
-    const iconPath = path.join(app.getAppPath(), 'assets', 'icon.png');
+    const iconPath = path.join(getPackageRoot(), 'assets', 'icon.png');
     if (fs.existsSync(iconPath)) {
       const icon = nativeImage.createFromPath(iconPath);
       if (!icon.isEmpty()) {
