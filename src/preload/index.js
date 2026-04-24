@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld('cursorcats', {
   chooseFolder: () => ipcRenderer.invoke('choose-folder'),
   getRecentFolders: () => ipcRenderer.invoke('get-recent-folders'),
   addRecentFolder: (folder) => ipcRenderer.invoke('add-recent-folder', folder),
+  listModels: () => ipcRenderer.invoke('list-models'),
+  getSelectedModel: () => ipcRenderer.invoke('get-selected-model'),
+  setSelectedModel: (modelId) => ipcRenderer.invoke('set-selected-model', modelId),
   submitNewCat: (payload) => ipcRenderer.send('new-cat-submit', payload),
   cancelNewCat: () => ipcRenderer.send('new-cat-cancel'),
   resizeModal: (height) => ipcRenderer.send('resize-modal', { height }),
@@ -52,6 +55,7 @@ contextBridge.exposeInMainWorld('cursorcats', {
     ipcRenderer.send('open-cat-conversation', { catId });
   },
   getAgentConversation: (catId) => ipcRenderer.invoke('get-agent-conversation', catId),
+  revertCat: (catId) => ipcRenderer.invoke('revert-cat-changes', { catId }),
   openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', url),
   onConversationUpdated: (callback) => {
     const listener = (_event, payload) => {

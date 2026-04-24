@@ -13,25 +13,43 @@
   <body>
     <div class="wrap">
       <div class="header">
-        <img
+        <div
           id="header-app-icon"
           class="header-app-icon"
-          src=""
-          alt=""
-          width="20"
-          height="20"
-          draggable="false"
-        />
+          role="img"
+          aria-label="Cursor Cat"
+        ></div>
         <div class="header-input-col">
           <textarea
             id="prompt"
             rows="1"
             autocomplete="off"
-            placeholder="What should I work on?"
+            placeholder="Meow, what should I work on?"
             spellcheck="true"
             autofocus
           ></textarea>
-          <div id="prompt-send-hint" class="prompt-send-hint" aria-live="polite"></div>
+          <div class="prompt-meta-wrap">
+            <div class="prompt-meta">
+              <button
+                id="model-picker"
+                class="model-chip"
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+                aria-controls="model-menu"
+              >
+                <svg class="model-chip-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
+                </svg>
+                <span id="model-chip-label">Composer 2</span>
+                <svg class="model-chip-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+              </button>
+              <div id="prompt-send-hint" class="prompt-send-hint" aria-live="polite"></div>
+            </div>
+            <div id="model-menu" class="model-menu" role="listbox" aria-labelledby="model-picker" hidden></div>
+          </div>
         </div>
       </div>
 

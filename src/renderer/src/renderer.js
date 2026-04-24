@@ -1,6 +1,9 @@
 /* global cursorcats */
 (function () {
   const MARGIN = 8;
+  /** Matches `.cat-stream-bubble` / `.cat-finish-bubble` translateY `calc(-100% + Npx)`. */
+  const BUBBLE_ABOVE_ANCHOR_DOWN_PX = 24;
+  const BUBBLE_SIDE_GAP_PX = -2;
   const BOTTOM_MARGIN = 0; // cats walk flush on the bottom edge of the window
   /** When true, cats can climb the frontmost app window; after it stays stable long enough, all floor cats gather there until you switch windows. */
   const PERCH_ON_OTHER_WINDOWS = true;
@@ -14,8 +17,15 @@
   /** Desired horizontal gap between hitboxes when an interaction starts (world px). */
   const CONTACT_GAP = 2;
   /** After any interaction, cats ignore new collisions until this (random range applied in code). */
-  const INTERACT_COOLDOWN_MIN = 3000;
-  const INTERACT_COOLDOWN_MAX = 6000;
+  const INTERACT_COOLDOWN_MIN = 2000;
+  const INTERACT_COOLDOWN_MAX = 4500;
+  /**
+   * Hitboxes are inflated this much (each side) when deciding if a pair can start
+   * an interaction, so a “near-miss” still becomes a meet-up.
+   */
+  const INTERACT_REACH_PX = 10;
+  /** Pixels per frame swap between who “strikes” in fight or play. */
+  const FIGHT_PLAY_PHASE_MS = 420;
   const PASSTHROUGH_COOLDOWN = 1000;
   const POST_INTERACT_IDLE_MIN = 200;
   const POST_INTERACT_IDLE_MAX = 500;
@@ -30,6 +40,14 @@
   const STAGGER_STEP_LIFT = 18;
   const STAGGER_OFFSET = 22;
   const STABLE_THRESHOLD_MS = 30000;
+  /**
+   * Title-bar cats (`perchTiedToStableWindow`) otherwise never leave; after this long on the perch
+   * they walk off for a floor roam, then `stableFloorRoamUntil` blocks an immediate gather-back.
+   */
+  const STABLE_PERCH_FLOOR_BREAK_MIN_MS = 22000;
+  const STABLE_PERCH_FLOOR_BREAK_MAX_MS = 85000;
+  const STABLE_FLOOR_ROAM_MIN_MS = 10000;
+  const STABLE_FLOOR_ROAM_MAX_MS = 38000;
   /** How often the renderer checks front-window id / stability (IPC reads main’s cached state). */
   const FRONT_WINDOW_POLL_MS = 500;
   const FALL_GRAVITY = 2200;
@@ -47,6 +65,13 @@
   /** How long a reshowing cat sits on top of the active window before falling back to the floor. */
   const FINISH_RESHOW_PERCH_MIN_MS = 12000;
   const FINISH_RESHOW_PERCH_MAX_MS = 28000;
+  /**
+   * When the “done” chat bubble auto-hides, the cat is still the finished run: reshow
+   * that same line on the floor this often (independent of window-perch reshows).
+   */
+  const FLOOR_FINISH_BUBBLE_REPEAT_MS = 60 * 1000;
+  /** After a reshow-to-window cat lands, flash the line again this soon. */
+  const FLOOR_FINISH_BUBBLE_AFTER_RESHOW_LAND_MS = 500;
 
   const canvas = document.getElementById('cat');
   const ctx = canvas.getContext('2d', { alpha: true });
@@ -125,6 +150,13 @@
 
   function rand(min, max) {
     return min + Math.random() * (max - min);
+  }
+
+  function clearStablePerchRoamingSchedule(cat) {
+    if (!cat) return;
+    cat.nextStableFloorBreakAt = null;
+    cat.justLeftStableForRoam = false;
+    cat.stableFloorRoamUntil = null;
   }
 
   /** Softer than linear, without full stops between stagger hops. */
@@ -298,9 +330,16 @@
     return ra.x < rb.x + rb.w && rb.x < ra.x + ra.w && ra.y < rb.y + rb.h && rb.y < ra.y + ra.h;
   }
 
-  /** 2D overlap using auto-detected visible hitboxes (not full frame padding). */
-  function catsOverlap(a, b) {
-    return rectsOverlap2D(getHitboxRect(a), getHitboxRect(b));
+  /** Slightly puffed hitboxes: pairs that almost touch can still start an interaction. */
+  function getInflatedHitboxRect(cat, extraEachSide) {
+    const e = Math.max(0, extraEachSide);
+    const r = getHitboxRect(cat);
+    return { x: r.x - e, y: r.y - e, w: r.w + 2 * e, h: r.h + 2 * e };
+  }
+
+  function catsInInteractionRange(a, b) {
+    const pad = INTERACT_REACH_PX / 2;
+    return rectsOverlap2D(getInflatedHitboxRect(a, pad), getInflatedHitboxRect(b, pad));
   }
 
   /** Slide two walking cats so their hitboxes sit CONTACT_GAP apart; then face each other. */
@@ -407,39 +446,58 @@
     if (!a || !b) return;
     if (!canGroundInteract(a) || !canGroundInteract(b)) return;
     if (ts < a.canInteractAt || ts < b.canInteractAt) return;
-    if (!catsOverlap(a, b)) return;
+    if (!catsInInteractionRange(a, b)) return;
 
     if (a.state === 'idle') a.state = 'walk';
     if (b.state === 'idle') b.state = 'walk';
 
     const r = Math.random();
-    if (r < 0.02) {
+    if (r < 0.005) {
       a.canInteractAt = ts + PASSTHROUGH_COOLDOWN;
       b.canInteractAt = ts + PASSTHROUGH_COOLDOWN;
       return;
     }
-    a.interactKind = r < 0.97 ? 'fight' : 'greet';
-    b.interactKind = a.interactKind;
+    let kind;
+    if (r < 0.1) {
+      kind = 'greet';
+    } else if (r < 0.2) {
+      kind = 'play';
+    } else {
+      kind = 'fight';
+    }
+    a.interactKind = kind;
+    b.interactKind = kind;
     a.interactPartner = b;
     b.interactPartner = a;
+    a.interactStartAt = ts;
+    b.interactStartAt = ts;
+    a.interactGreetMode = 0;
+    b.interactGreetMode = 0;
     const aIsAttacker = Math.random() < 0.5;
-    if (a.interactKind === 'fight') {
+    if (a.interactKind === 'fight' || a.interactKind === 'play') {
       a.interactRole = aIsAttacker ? 'attacker' : 'defender';
       b.interactRole = aIsAttacker ? 'defender' : 'attacker';
     } else {
       a.interactRole = 'greeter';
       b.interactRole = 'greeter';
+      a.interactGreetMode = b.interactGreetMode = Math.floor(Math.random() * 3);
     }
     if (a.interactKind === 'fight') {
-      const dur = rand(1200, 1800);
+      const dur = rand(1200, 2000);
+      a.interactEndAt = ts + dur;
+      b.interactEndAt = ts + dur;
+    } else if (a.interactKind === 'play') {
+      const dur = rand(900, 1500);
       a.interactEndAt = ts + dur;
       b.interactEndAt = ts + dur;
     } else {
-      const dur = rand(1000, 1500);
+      const dur = rand(1000, 1800);
       a.interactEndAt = ts + dur;
       b.interactEndAt = ts + dur;
     }
     snapCatsToContact(a, b);
+    a.interactBaseX = a.x;
+    b.interactBaseX = b.x;
     a.state = 'interact';
     b.state = 'interact';
   }
@@ -458,11 +516,14 @@
       c.interactKind = null;
       c.interactRole = null;
       c.interactEndAt = 0;
+      c.interactStartAt = 0;
+      c.interactGreetMode = 0;
+      c.interactBaseX = 0;
       c.state = 'idle';
       c.canInteractAt = ts + rand(INTERACT_COOLDOWN_MIN, INTERACT_COOLDOWN_MAX);
       c.idleEndAt = ts + rand(POST_INTERACT_IDLE_MIN, POST_INTERACT_IDLE_MAX);
       if (!c.finished) {
-        if (kind === 'fight' || kind === 'greet') {
+        if (kind === 'fight' || kind === 'greet' || kind === 'play') {
           pickWalkTargetAwayFrom(c, other);
         } else {
           pickNewWalkTarget(c);
@@ -479,7 +540,7 @@
         const b = cats[j];
         if (!canGroundInteract(a) || !canGroundInteract(b)) continue;
         if (ts < a.canInteractAt || ts < b.canInteractAt) continue;
-        if (!catsOverlap(a, b)) continue;
+        if (!catsInInteractionRange(a, b)) continue;
         startInteraction(a, b, ts);
       }
     }
@@ -615,6 +676,11 @@
     cat.perch = { left: b.left, right: b.right, top: b.top };
     cat.perchWindowId = windowId;
     cat.perchTiedToStableWindow = stableTie;
+    if (stableTie) {
+      cat.stableFloorRoamUntil = null;
+    } else {
+      clearStablePerchRoamingSchedule(cat);
+    }
     const landingX = rand(minLanding, maxLanding);
     cat.walkTargetX = landingX;
     cat.walkTargetY = getBottomY(cat);
@@ -715,6 +781,7 @@
     if (!bounds || windowId == null) return;
     for (const cat of cats) {
       if (cat.finished || cat.finishReshowing) continue;
+      if (typeof cat.stableFloorRoamUntil === 'number' && ts < cat.stableFloorRoamUntil) continue;
       if (cat.state === 'interact') continue;
       if (cat.state === 'fallOff') continue;
       if (cat.state === 'perched' && cat.perchTiedToStableWindow && cat.perchWindowId === windowId) {
@@ -783,6 +850,7 @@
     cat.perchSub = 'idle';
     cat.sprinting = false;
     cat.canInteractAt = ts + INTERACT_BLOCK_MAX;
+    clearStablePerchRoamingSchedule(cat);
   }
 
   function runWalkFrame(cat, dt) {
@@ -811,6 +879,25 @@
     }
   }
 
+  function maybeResurfaceFinishBubbleOnFloor(cat, ts) {
+    if (!cat.finished || cat.finishReshowing || cat.perch) return;
+    if (cat.state !== 'idle' && cat.state !== 'walk') return;
+    if (cat.finishBubbleEl) return;
+    if (cat.finishFloorBubbleReshowAt == null || ts < cat.finishFloorBubbleReshowAt) return;
+    const line = (
+      (cat.savedFinishBubbleLine && String(cat.savedFinishBubbleLine).trim()) ||
+      (cat.finishBubbleText && String(cat.finishBubbleText).trim()) ||
+      ''
+    ).trim();
+    if (!line) {
+      cat.finishFloorBubbleReshowAt = null;
+      return;
+    }
+    cat.finishFloorBubbleReshowAt = null;
+    cat.finishBubbleText = line;
+    ensureFinishBubbleDom(cat);
+  }
+
   function updateCat(cat, dt, ts) {
     if (!cat.spriteSource || !cat.manifest) return;
     if (
@@ -819,6 +906,7 @@
       (cat.state === 'idle' || cat.state === 'walk') &&
       !cat.perch
     ) {
+      maybeResurfaceFinishBubbleOnFloor(cat, ts);
       maybeStartFinishReshow(cat, ts);
     }
     if (cat.state === 'fallOff' && cat.fall) {
@@ -847,6 +935,10 @@
         const min = MARGIN;
         const max = Math.max(MARGIN, canvas.clientWidth - MARGIN - w);
         cat.x = Math.min(max, Math.max(min, cat.x));
+        if (cat.justLeftStableForRoam) {
+          cat.justLeftStableForRoam = false;
+          cat.stableFloorRoamUntil = ts + rand(STABLE_FLOOR_ROAM_MIN_MS, STABLE_FLOOR_ROAM_MAX_MS);
+        }
         if (cat.finishReshowing) {
           cat.finishReshowing = false;
           destroyFinishBubble(cat);
@@ -858,6 +950,7 @@
           cat.finishedAt = ts;
           cat.nextFinishReshowAttemptAt = ts + FINISH_RESHOW_INTERVAL_MS;
           cat.canInteractAt = ts + INTERACT_BLOCK_MAX;
+          cat.finishFloorBubbleReshowAt = ts + FLOOR_FINISH_BUBBLE_AFTER_RESHOW_LAND_MS;
         }
       }
       return;
@@ -905,6 +998,8 @@
             ensureFinishBubbleDom(cat);
           } else if (cat.perchTiedToStableWindow) {
             cat.perchUntil = ts + 365 * 24 * 60 * 60 * 1000;
+            cat.nextStableFloorBreakAt =
+              ts + rand(STABLE_PERCH_FLOOR_BREAK_MIN_MS, STABLE_PERCH_FLOOR_BREAK_MAX_MS);
           } else {
             cat.perchUntil = ts + rand(PERCH_DURATION_MIN, PERCH_DURATION_MAX);
           }
@@ -932,6 +1027,14 @@
       return;
     }
     if (cat.state === 'perched' && cat.perch) {
+      if (
+        cat.perchTiedToStableWindow &&
+        !cat.finishReshowing &&
+        cat.nextStableFloorBreakAt == null &&
+        !cat.perchLeaving
+      ) {
+        cat.nextStableFloorBreakAt = ts + rand(STABLE_PERCH_FLOOR_BREAK_MIN_MS, STABLE_PERCH_FLOOR_BREAK_MAX_MS);
+      }
       if (cat.perchLeaving) {
         runWalkFrame(cat, dt);
         playWalkAnims(cat, dt);
@@ -980,7 +1083,16 @@
           cat.perchCheckPending = false;
         }
       }
-      if (!cat.perchTiedToStableWindow && ts >= cat.perchUntil) {
+      const stableTimedFloorBreak =
+        cat.perchTiedToStableWindow &&
+        !cat.finishReshowing &&
+        cat.nextStableFloorBreakAt != null &&
+        ts >= cat.nextStableFloorBreakAt;
+      if ((!cat.perchTiedToStableWindow && ts >= cat.perchUntil) || stableTimedFloorBreak) {
+        if (stableTimedFloorBreak) {
+          cat.nextStableFloorBreakAt = null;
+          cat.justLeftStableForRoam = true;
+        }
         cat.perchLeaving = true;
         cat.perchSub = 'walk';
         const { w: pw } = getDrawSize(cat);
@@ -1068,6 +1180,13 @@
       cat.y = getBottomY(cat);
       const partner = cat.interactPartner;
       if (!partner || partner.state !== 'interact' || partner.interactPartner !== cat) {
+        cat.interactPartner = null;
+        cat.interactKind = null;
+        cat.interactRole = null;
+        cat.interactEndAt = 0;
+        cat.interactStartAt = 0;
+        cat.interactGreetMode = 0;
+        cat.interactBaseX = 0;
         cat.state = 'walk';
         pickNewWalkTarget(cat);
         maybeStartSprint(cat);
@@ -1081,17 +1200,46 @@
       }
       faceEachOther(cat, partner);
       const flip = !cat.facingRight;
-      if (cat.interactKind === 'fight') {
-        if (cat.interactRole === 'attacker') {
+      if (cat.interactKind === 'fight' || cat.interactKind === 'play') {
+        const isPlay = cat.interactKind === 'play';
+        const start = cat.interactStartAt > 0 ? cat.interactStartAt : ts;
+        const swap = Math.floor((ts - start) / FIGHT_PLAY_PHASE_MS) % 2 === 1;
+        const isAttacking = (cat.interactRole === 'attacker') !== swap;
+        if (isAttacking) {
           const name = getAnimDef(cat, 'attack') ? 'attack' : 'idle';
           setAnim(cat, name, flip);
+        } else if (isPlay) {
+          if (getAnimDef(cat, 'idle')) {
+            setAnim(cat, 'idle', flip);
+          }
         } else {
           const name = getAnimDef(cat, 'hurt') ? 'hurt' : 'idle';
           setAnim(cat, name, flip);
         }
         advanceAnim(cat, dt);
       } else if (cat.interactKind === 'greet') {
-        if (getAnimDef(cat, 'idle')) {
+        const t0 = cat.interactStartAt > 0 ? cat.interactStartAt : ts;
+        const g = (cat.interactGreetMode | 0) % 3;
+        if (g === 1 && getAnimDef(cat, 'jump')) {
+          const step = 650;
+          const onJump = Math.floor((ts - t0) / step) % 2 === 0;
+          if (onJump) {
+            setAnim(cat, 'jump', flip);
+          } else if (getAnimDef(cat, 'idle')) {
+            setAnim(cat, 'idle', flip);
+          }
+        } else if (g === 2) {
+          const bx = cat.interactBaseX != null ? cat.interactBaseX : cat.x;
+          const tw = (ts - t0) / 190;
+          cat.x = bx + Math.sin(tw) * 5;
+          const wiggleRight = Math.sin(tw) >= 0;
+          const wk = pickWalkAnim(cat, wiggleRight);
+          if (getAnimDef(cat, wk.key)) {
+            setAnim(cat, wk.key, wk.flip);
+          } else if (getAnimDef(cat, 'idle')) {
+            setAnim(cat, 'idle', flip);
+          }
+        } else if (getAnimDef(cat, 'idle')) {
           setAnim(cat, 'idle', flip);
         }
         advanceAnim(cat, dt);
@@ -1293,6 +1441,10 @@
       interactRole: null,
       interactPartner: null,
       interactEndAt: 0,
+      interactStartAt: 0,
+      interactGreetMode: 0,
+      /** Floor X when an interaction started (greet wiggle / sync). */
+      interactBaseX: 0,
       canInteractAt: 0,
       sprinting: false,
       perch: null,
@@ -1313,6 +1465,14 @@
       finishReshowing: false,
       finishReshowPending: false,
       nextFinishReshowAttemptAt: 0,
+      /** `performance.now()` when the finish bubble may reappear on the floor (not window perch). */
+      finishFloorBubbleReshowAt: null,
+      /** When to stroll off a stable title-bar perch for a floor jaunt. */
+      nextStableFloorBreakAt: null,
+      /** After that jaunt, `batchSendFloorCatsToStablePerch` must not immediately yank the cat back up. */
+      stableFloorRoamUntil: null,
+      /** True between leaving the stable perch and hitting the floor (see `stableFloorRoamUntil`). */
+      justLeftStableForRoam: false,
       /** @type {ReturnType<typeof setTimeout> | null} */
       ideRemovalTimer: null,
       /** @type {ReturnType<typeof setTimeout> | null} */
@@ -1359,29 +1519,49 @@
     cat.finishBubbleHideTimer = null;
   }
 
-  /** Hides the on-cat text bubble; the cat can still be `finished` / in review. */
-  function hideFinishBubbleVisually(cat) {
+  /**
+   * Timed auto-hide: remove the bubble from the screen but keep `savedFinishBubbleLine`
+   * and schedule a floor re-flash (see `maybeResurfaceFinishBubbleOnFloor`).
+   */
+  function finishBubbleAfterAutoHideDisplay(cat) {
     if (!cat) return;
     const el = cat.finishBubbleEl;
     if (el && el.parentNode) el.parentNode.removeChild(el);
     cat.finishBubbleEl = null;
     cat.finishBubbleText = null;
+    cat.finishBubbleHideTimer = null;
+    if (!cats.includes(cat)) return;
+    const now = performance.now();
+    if (cat.finished && !cat.finishReshowing && !cat.perch) {
+      const hasLine =
+        cat.savedFinishBubbleLine && String(cat.savedFinishBubbleLine).trim().length > 0;
+      if (hasLine) {
+        cat.finishFloorBubbleReshowAt = now + FLOOR_FINISH_BUBBLE_REPEAT_MS;
+      } else {
+        cat.finishFloorBubbleReshowAt = null;
+      }
+    } else {
+      cat.finishFloorBubbleReshowAt = null;
+    }
   }
 
   function scheduleFinishBubbleAutoHide(cat) {
     if (!cat) return;
     clearFinishBubbleHideTimer(cat);
     cat.finishBubbleHideTimer = setTimeout(() => {
-      cat.finishBubbleHideTimer = null;
       if (!cats.includes(cat)) return;
-      hideFinishBubbleVisually(cat);
+      finishBubbleAfterAutoHideDisplay(cat);
     }, FINISH_BUBBLE_MS);
   }
 
   function destroyFinishBubble(cat) {
     if (!cat) return;
     clearFinishBubbleHideTimer(cat);
-    hideFinishBubbleVisually(cat);
+    const el = cat.finishBubbleEl;
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+    cat.finishBubbleEl = null;
+    cat.finishBubbleText = null;
+    cat.finishFloorBubbleReshowAt = null;
   }
 
   function clearStreamBubbleHideTimer(cat) {
@@ -1437,19 +1617,81 @@
     ensureStreamBubbleDom(cat);
   }
 
+  /**
+   * Places speech bubbles above the cat, or to the left/right when that would clip past the top edge.
+   */
+  function positionCatBubble(el, cat) {
+    if (!el || !cat) return;
+    const isStream = el.classList.contains('cat-stream-bubble');
+    const isFinish = el.classList.contains('cat-finish-bubble');
+    if (!isStream && !isFinish) return;
+
+    const prefix = isStream ? 'cat-stream-bubble' : 'cat-finish-bubble';
+    el.classList.remove(`${prefix}--side-left`, `${prefix}--side-right`);
+
+    const { w, h } = getDrawSize(cat);
+    const cx = cat.x + w / 2;
+    el.style.left = `${cx}px`;
+    el.style.top = `${cat.y}px`;
+
+    const bh = el.offsetHeight;
+    const bw = el.offsetWidth;
+    if (bh <= 0 || bw <= 0) return;
+
+    const bubbleTopIfAbove = cat.y - bh + BUBBLE_ABOVE_ANCHOR_DOWN_PX;
+    if (bubbleTopIfAbove >= MARGIN) {
+      return;
+    }
+
+    const vw = (bubbleLayer && bubbleLayer.clientWidth) || window.innerWidth || 0;
+    const gap = BUBBLE_SIDE_GAP_PX;
+    const vAnchor = cat.y + Math.min(26, Math.max(12, Math.round(h * 0.32)));
+
+    const fitsRight = cx + w / 2 + gap + bw <= vw - MARGIN;
+    const fitsLeft = cx - w / 2 - gap - bw >= MARGIN;
+
+    let side = null;
+    if (cx <= vw / 2) {
+      if (fitsRight) side = 'right';
+      else if (fitsLeft) side = 'left';
+    } else {
+      if (fitsLeft) side = 'left';
+      else if (fitsRight) side = 'right';
+    }
+    if (!side) {
+      const spaceR = vw - MARGIN - (cx + w / 2 + gap);
+      const spaceL = cx - w / 2 - gap - MARGIN;
+      if (spaceR >= spaceL && spaceR >= bw * 0.45) side = 'right';
+      else if (spaceL >= bw * 0.45) side = 'left';
+    }
+    if (!side) return;
+
+    if (side === 'right') {
+      el.classList.add(`${prefix}--side-right`);
+      el.style.left = `${cx + w / 2 + gap}px`;
+      el.style.top = `${vAnchor}px`;
+    } else {
+      el.classList.add(`${prefix}--side-left`);
+      el.style.left = `${cx - w / 2 - gap}px`;
+      el.style.top = `${vAnchor}px`;
+    }
+  }
+
   function syncStreamBubbles() {
     if (!bubbleLayer) return;
     for (const cat of cats) {
       if (cat.finished || !cat.streamBubbleEl) continue;
-      const { w } = getDrawSize(cat);
-      const cx = cat.x + w / 2;
-      cat.streamBubbleEl.style.left = `${cx}px`;
-      cat.streamBubbleEl.style.top = `${cat.y}px`;
+      positionCatBubble(cat.streamBubbleEl, cat);
     }
   }
 
   function ensureFinishBubbleDom(cat) {
-    if (!bubbleLayer || !cat || (!cat.finished && !cat.finishReshowing) || !cat.finishBubbleText) return;
+    if (!bubbleLayer || !cat || (!cat.finished && !cat.finishReshowing)) return;
+    if (!cat.finishBubbleText) {
+      const s = cat.savedFinishBubbleLine && String(cat.savedFinishBubbleLine).trim();
+      if (s) cat.finishBubbleText = s;
+    }
+    if (!cat.finishBubbleText) return;
     if (!cat.finishBubbleEl) {
       const el = document.createElement('div');
       el.className = 'cat-finish-bubble';
@@ -1464,10 +1706,7 @@
     if (!bubbleLayer) return;
     for (const cat of cats) {
       if ((!cat.finished && !cat.finishReshowing) || !cat.finishBubbleEl) continue;
-      const { w } = getDrawSize(cat);
-      const cx = cat.x + w / 2;
-      cat.finishBubbleEl.style.left = `${cx}px`;
-      cat.finishBubbleEl.style.top = `${cat.y}px`;
+      positionCatBubble(cat.finishBubbleEl, cat);
     }
   }
 
@@ -1479,6 +1718,9 @@
       partner.interactKind = null;
       partner.interactRole = null;
       partner.interactEndAt = 0;
+      partner.interactStartAt = 0;
+      partner.interactGreetMode = 0;
+      partner.interactBaseX = 0;
       if (!partner.finished) {
         partner.state = 'walk';
         pickNewWalkTarget(partner);
@@ -1489,6 +1731,9 @@
     cat.interactKind = null;
     cat.interactRole = null;
     cat.interactEndAt = 0;
+    cat.interactStartAt = 0;
+    cat.interactGreetMode = 0;
+    cat.interactBaseX = 0;
   }
 
   function applyAgentFinishToCat(cat, ev) {
@@ -1518,6 +1763,7 @@
     cat.perchTiedToStableWindow = false;
     cat.climb = null;
     cat.fall = null;
+    clearStablePerchRoamingSchedule(cat);
     cat.y = getBottomY(cat);
     clampPos(cat);
     cat.state = 'idle';
@@ -1574,6 +1820,7 @@
     cat.finishReshowing = false;
     cat.finishReshowPending = false;
     cat.nextFinishReshowAttemptAt = 0;
+    clearStablePerchRoamingSchedule(cat);
     clearIdeRemovalTimer(cat);
     const nowTs = performance.now();
     cat.idleEndAt = nowTs + rand(200, 600);

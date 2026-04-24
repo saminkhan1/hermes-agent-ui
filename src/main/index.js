@@ -23,6 +23,7 @@ const {
   setOnConversationPushed,
   dismissAgent,
   sendFollowup,
+  revertAgentChanges,
 } = require('./agents');
 const { startHookServer } = require('./hook-server');
 const {
@@ -556,8 +557,77 @@ ipcMain.handle('add-recent-folder', (_event, folder) => {
   }
 });
 
+const FALLBACK_MODEL_LIST = [{ id: 'composer-2', displayName: 'Composer 2', description: '' }];
+
+function getModelSelectionPath() {
+  const dir = path.join(os.homedir(), '.cursorcats');
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return path.join(dir, 'model.json');
+}
+
+ipcMain.handle('list-models', async () => {
+  const apiKey = process.env.CURSOR_API_KEY;
+  if (!apiKey) {
+    return FALLBACK_MODEL_LIST;
+  }
+  try {
+    const { Cursor } = require('@cursor/february');
+    const models = await Cursor.models.list({ apiKey });
+    if (!Array.isArray(models) || models.length === 0) {
+      return FALLBACK_MODEL_LIST;
+    }
+    return models.map((m) => ({
+      id: String(m.id),
+      displayName: (m.displayName && String(m.displayName)) || String(m.id),
+      description: m.description != null ? String(m.description) : '',
+    }));
+  } catch (e) {
+    console.warn('list-models failed', e);
+    return FALLBACK_MODEL_LIST;
+  }
+});
+
+ipcMain.handle('get-selected-model', () => {
+  try {
+    const file = getModelSelectionPath();
+    if (fs.existsSync(file)) {
+      const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (data && typeof data.id === 'string' && data.id.trim()) {
+        return { id: data.id.trim() };
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
+  return null;
+});
+
+ipcMain.handle('set-selected-model', (_event, modelId) => {
+  const id = typeof modelId === 'string' ? modelId.trim() : '';
+  if (!id) return;
+  try {
+    const file = getModelSelectionPath();
+    fs.writeFileSync(file, JSON.stringify({ id }, null, 2), 'utf8');
+  } catch (e) {
+    // ignore
+  }
+});
+
 ipcMain.on('new-cat-submit', (_event, payload) => {
   const catId = randomUUID();
+  const modelRaw = payload && payload.model;
+  const modelId =
+    typeof modelRaw === 'string' && modelRaw.trim() ? modelRaw.trim() : null;
+  if (modelId) {
+    try {
+      const file = getModelSelectionPath();
+      fs.writeFileSync(file, JSON.stringify({ id: modelId }, null, 2), 'utf8');
+    } catch (e) {
+      // ignore
+    }
+  }
   const out = { ...payload, catId };
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('spawn-cat', out);
@@ -567,6 +637,7 @@ ipcMain.on('new-cat-submit', (_event, payload) => {
       catId,
       folder: payload.folder,
       prompt: payload.prompt,
+      model: modelId || undefined,
     },
     { getMainWindow: () => mainWindow }
   );
@@ -656,6 +727,34 @@ ipcMain.on('agent-followup', (_e, { catId, text } = {}) => {
 });
 
 ipcMain.handle('get-agent-conversation', (_e, catId) => getAgentConversation(catId));
+
+ipcMain.handle('revert-cat-changes', async (_e, { catId } = {}) => {
+  if (!catId) return { ok: false, error: 'missing cat id' };
+  const id = String(catId);
+  if (id.startsWith('ide:')) {
+    return { ok: false, error: 'Revert is not available for this cat.' };
+  }
+  const c = getAgentConversation(id);
+  if (!c.found || !c.folder) {
+    return { ok: false, error: 'Conversation not found.' };
+  }
+  const parent =
+    (conversationWindow && !conversationWindow.isDestroyed() && conversationWindow) ||
+    (mainWindow && !mainWindow.isDestroyed() && mainWindow) ||
+    undefined;
+  const { response } = await dialog.showMessageBox(parent, {
+    type: 'warning',
+    message: 'Revert all changes this cat made?',
+    detail: `This will restore the folder to how it was when the cat was spawned:\n\n${c.folder}\n\nThis cannot be undone.`,
+    buttons: ['Cancel', 'Revert'],
+    defaultId: 0,
+    cancelId: 0,
+  });
+  if (response !== 1) {
+    return { ok: false, cancelled: true };
+  }
+  return revertAgentChanges(id, { log: console });
+});
 
 ipcMain.handle('open-external-url', async (_e, url) => {
   if (typeof url !== 'string' || !url.trim()) {

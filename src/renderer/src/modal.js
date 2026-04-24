@@ -1,12 +1,12 @@
 /* global cursorcats */
 
-import appIconUrl from '../../../assets/icon.png';
+import catSpriteUrl from '../../../assets/cats/cat.png';
 import { insertNewlineAtCursor } from './insert-newline-at-cursor.js';
 
 const promptEl = document.getElementById('prompt');
 const headerAppIcon = document.getElementById('header-app-icon');
 if (headerAppIcon) {
-  headerAppIcon.src = appIconUrl;
+  headerAppIcon.style.backgroundImage = `url("${catSpriteUrl}")`;
 }
 const errorEl = document.getElementById('error');
 const hintEl = document.getElementById('spawn-hint');
@@ -36,6 +36,16 @@ if (hintEl) {
 const btnChoose = document.getElementById('btn-choose-folder');
 const recentFoldersContainer = document.getElementById('recent-folders-container');
 const recentFoldersList = document.getElementById('recent-folders-list');
+const modelPicker = document.getElementById('model-picker');
+const modelChipLabel = document.getElementById('model-chip-label');
+const modelMenu = document.getElementById('model-menu');
+
+const DEFAULT_MODEL_ID = 'composer-2';
+
+/** @type {Array<{ id: string, displayName: string, description: string }>} */
+let modelsList = [];
+let selectedModelId = DEFAULT_MODEL_ID;
+let modelMenuOpen = false;
 
 let selectedFolder = '';
 
@@ -166,7 +176,11 @@ function submit() {
     window.cursorcats.addRecentFolder(selectedFolder);
   }
   if (window.cursorcats?.submitNewCat) {
-    window.cursorcats.submitNewCat({ folder: selectedFolder, prompt });
+    window.cursorcats.submitNewCat({
+      folder: selectedFolder,
+      prompt,
+      model: selectedModelId,
+    });
   }
 }
 
@@ -175,6 +189,142 @@ function cancel() {
     window.cursorcats.cancelNewCat();
   }
 }
+
+function updateModelChipLabel() {
+  if (!modelChipLabel) return;
+  const m = modelsList.find((x) => x.id === selectedModelId);
+  modelChipLabel.textContent = m ? m.displayName || m.id : selectedModelId;
+}
+
+function renderModelMenu() {
+  if (!modelMenu) return;
+  modelMenu.innerHTML = '';
+  for (const m of modelsList) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'model-menu-item';
+    btn.setAttribute('role', 'option');
+    btn.dataset.modelId = m.id;
+    btn.setAttribute('aria-selected', m.id === selectedModelId ? 'true' : 'false');
+    const title = document.createElement('span');
+    title.textContent = m.displayName || m.id;
+    btn.appendChild(title);
+    if (m.description && m.description.trim()) {
+      const desc = document.createElement('span');
+      desc.className = 'model-menu-item-desc';
+      desc.textContent = m.description.trim();
+      btn.appendChild(desc);
+    }
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      void selectModel(m.id);
+      closeModelMenu();
+      promptEl.focus();
+    });
+    modelMenu.appendChild(btn);
+  }
+}
+
+function syncModelMenuWrapPadding() {
+  const w = document.querySelector('.wrap');
+  if (!w) return;
+  if (!modelMenuOpen || !modelMenu || modelMenu.hidden) {
+    w.style.paddingBottom = '';
+    pushContentHeight();
+    return;
+  }
+  const h = Math.min(modelMenu.scrollHeight, 220) + 14;
+  w.style.paddingBottom = `${h}px`;
+  pushContentHeight();
+}
+
+function openModelMenu() {
+  if (!modelMenu || !modelPicker) return;
+  modelMenuOpen = true;
+  modelMenu.hidden = false;
+  modelPicker.setAttribute('aria-expanded', 'true');
+  renderModelMenu();
+  syncModelMenuWrapPadding();
+}
+
+function closeModelMenu() {
+  if (!modelMenu || !modelPicker) return;
+  modelMenuOpen = false;
+  modelMenu.hidden = true;
+  modelPicker.setAttribute('aria-expanded', 'false');
+  syncModelMenuWrapPadding();
+}
+
+async function selectModel(id) {
+  const next = String(id || '').trim() || DEFAULT_MODEL_ID;
+  selectedModelId = next;
+  if (window.cursorcats?.setSelectedModel) {
+    try {
+      await window.cursorcats.setSelectedModel(next);
+    } catch {
+      /* ignore */
+    }
+  }
+  updateModelChipLabel();
+}
+
+async function initModels() {
+  if (!window.cursorcats?.listModels) {
+    modelsList = [{ id: DEFAULT_MODEL_ID, displayName: 'Composer 2', description: '' }];
+    selectedModelId = DEFAULT_MODEL_ID;
+    updateModelChipLabel();
+    return;
+  }
+  try {
+    const list = await window.cursorcats.listModels();
+    if (Array.isArray(list) && list.length > 0) {
+      modelsList = list;
+    } else {
+      modelsList = [{ id: DEFAULT_MODEL_ID, displayName: 'Composer 2', description: '' }];
+    }
+  } catch {
+    modelsList = [{ id: DEFAULT_MODEL_ID, displayName: 'Composer 2', description: '' }];
+  }
+  let saved = null;
+  if (window.cursorcats?.getSelectedModel) {
+    try {
+      saved = await window.cursorcats.getSelectedModel();
+    } catch {
+      saved = null;
+    }
+  }
+  const savedId = saved && saved.id ? String(saved.id).trim() : '';
+  if (savedId && modelsList.some((m) => m.id === savedId)) {
+    selectedModelId = savedId;
+  } else {
+    selectedModelId = modelsList[0].id;
+  }
+  updateModelChipLabel();
+  syncPromptHeight();
+}
+
+if (modelPicker) {
+  modelPicker.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (modelMenuOpen) {
+      closeModelMenu();
+    } else {
+      openModelMenu();
+    }
+  });
+}
+
+document.addEventListener(
+  'mousedown',
+  (e) => {
+    if (!modelMenuOpen || !modelPicker || !modelMenu) return;
+    const t = e.target;
+    if (modelPicker.contains(t)) return;
+    if (modelMenu.contains(t)) return;
+    closeModelMenu();
+  },
+  true
+);
 
 btnChoose.addEventListener('click', () => {
   onChooseFolder();
@@ -210,6 +360,11 @@ promptEl.addEventListener('keydown', (e) => {
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    if (modelMenuOpen) {
+      e.preventDefault();
+      closeModelMenu();
+      return;
+    }
     e.preventDefault();
     cancel();
   } else if (e.key === 'o' && (e.metaKey || e.ctrlKey)) {
@@ -250,11 +405,13 @@ function pushContentHeight() {
   const wrapStyle = getComputedStyle(wrap);
   const wrapBorder =
     parseFloat(wrapStyle.borderTopWidth || '0') + parseFloat(wrapStyle.borderBottomWidth || '0');
+  const wrapPadY =
+    parseFloat(wrapStyle.paddingTop || '0') + parseFloat(wrapStyle.paddingBottom || '0');
   const headerH = header ? header.getBoundingClientRect().height : 0;
   const sectionH = sectionTitle ? sectionTitle.getBoundingClientRect().height : 0;
   const footerH = footer ? footer.getBoundingClientRect().height : 0;
   const listNatural = measureListNaturalHeight();
-  const total = bodyPad + wrapBorder + headerH + sectionH + listNatural + footerH;
+  const total = bodyPad + wrapBorder + wrapPadY + headerH + sectionH + listNatural + footerH;
   window.cursorcats.resizeModal(total);
 }
 
@@ -263,6 +420,12 @@ if (typeof ResizeObserver !== 'undefined') {
   if (header) ro.observe(header);
   if (footer) ro.observe(footer);
   if (sectionTitle) ro.observe(sectionTitle);
+  if (modelMenu) {
+    const rom = new ResizeObserver(() => {
+      if (modelMenuOpen) syncModelMenuWrapPadding();
+    });
+    rom.observe(modelMenu);
+  }
 }
 const mo = new MutationObserver(() => pushContentHeight());
 if (recentFoldersList) {
@@ -272,6 +435,8 @@ window.addEventListener('load', () => {
   syncPromptHeight();
 });
 
-loadRecentFolders();
-promptEl.focus();
-syncPromptHeight();
+void (async () => {
+  await Promise.all([loadRecentFolders(), initModels()]);
+  promptEl.focus();
+  syncPromptHeight();
+})();

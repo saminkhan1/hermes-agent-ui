@@ -4,15 +4,19 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { pathToFileURL } = require('url');
+const { promisify } = require('util');
+const { execFile } = require('child_process');
+
+const execFileAsync = promisify(execFile);
 
 /**
  * One Cursor SDK agent per on-screen cat; multiple `send` runs over its lifetime.
  * Streams `run.stream()` into a per-cat conversation log for the UI.
  */
 
-/** @typedef {{ agent: import('@cursor/february').Agent, run: import('@cursor/february').Run | null, folder: string, busy: boolean, runPromise?: Promise<void> }} ActiveEntry */
+/** @typedef {{ agent: import('@cursor/february').Agent, run: import('@cursor/february').Run | null, folder: string, modelId: string, busy: boolean, runPromise?: Promise<void> }} ActiveEntry */
 
-/** @type {Map<string, { folder: string, prompt: string, items: Array<{ kind: string, text: string, at: number, streamId?: string }>, runStatus: string, endResult?: string, durationMs?: number, activeAssistantBubble?: boolean, answerHtmlFileUrl?: string, answerHtmlWriteError?: string }>} */
+/** @type {Map<string, { folder: string, prompt: string, items: Array<{ kind: string, text: string, at: number, streamId?: string }>, runStatus: string, endResult?: string, durationMs?: number, activeAssistantBubble?: boolean, answerHtmlFileUrl?: string, answerHtmlWriteError?: string, snapshotTree?: string, headShaAtSnapshot?: string, snapshotCapturedAt?: number, reverted?: boolean, revertError?: string }>} */
 const conversations = new Map();
 
 /** @type {Map<string, ActiveEntry>} */
@@ -154,6 +158,22 @@ ${fragment}
  * @param {object} rec
  * @param {Console} log
  */
+/**
+ * Removes the on-disk answer page for this cat (`~/.cursorcats/answers/<catId>/`).
+ * Called when the conversation is finished (dismiss) so HTML souvenirs do not linger.
+ * @param {string} catId
+ * @param {Console} log
+ */
+function deleteAnswerHtmlDirForCat(catId, log = console) {
+  const id = String(catId);
+  const dir = path.join(os.homedir(), '.cursorcats', 'answers', id);
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch (e) {
+    log.warn('answer html cleanup failed', e);
+  }
+}
+
 function commitAnswerHtmlPage(catId, rec, log) {
   const id = String(catId);
   const dir = path.join(os.homedir(), '.cursorcats', 'answers', id);
@@ -265,6 +285,106 @@ function notifyRestarted(getMainWindow, catId) {
 
 function now() {
   return Date.now();
+}
+
+/**
+ * Captures a git tree object for the current working tree (tracked + untracked, .gitignore respected)
+ * using a temp index, without touching the user's real index. Returns null if not a git worktree
+ * or on failure.
+ * @param {string} folder
+ * @param {Console} [log]
+ * @returns {Promise<{ tree: string, headSha: string | null, capturedAt: number } | null>}
+ */
+async function captureGitSnapshotForFolder(folder, log = console) {
+  const f = String(folder || '').trim();
+  if (!f) return null;
+  try {
+    const { stdout: inTree } = await execFileAsync('git', ['-C', f, 'rev-parse', '--is-inside-work-tree'], {
+      encoding: 'utf8',
+    });
+    if (String(inTree).trim() !== 'true') return null;
+  } catch {
+    return null;
+  }
+  let headSha = null;
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', f, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
+    const h = String(stdout).trim();
+    headSha = h || null;
+  } catch {
+    headSha = null;
+  }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cursorcats-git-'));
+  const indexFile = path.join(tmp, 'index');
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  try {
+    await execFileAsync('git', ['add', '-A'], { cwd: f, env, encoding: 'utf8' });
+    const { stdout: treeOut } = await execFileAsync('git', ['write-tree'], { cwd: f, env, encoding: 'utf8' });
+    const tree = String(treeOut).trim();
+    if (!/^[0-9a-f]{40}$/i.test(tree)) {
+      log.warn('captureGitSnapshot: unexpected write-tree output', treeOut);
+      return null;
+    }
+    return { tree, headSha, capturedAt: now() };
+  } catch (e) {
+    log.warn('captureGitSnapshot failed', e);
+    return null;
+  } finally {
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/**
+ * Restores the cat's folder to the git tree captured at spawn. Git-only; requires a prior snapshot.
+ * Refuses if the cat is still running, already reverted, or missing snapshot.
+ * @param {string} catId
+ * @param {{ log?: Console }} [opts]
+ * @returns {Promise<{ ok: true } | { ok: false, error: string, cancelled?: boolean }>}
+ */
+async function revertAgentChanges(catId, opts = {}) {
+  const { log = console } = opts;
+  const id = String(catId);
+  const rec = conversations.get(id);
+  if (!rec || !rec.snapshotTree) {
+    return { ok: false, error: 'No git snapshot to revert to.' };
+  }
+  if (rec.reverted) {
+    return { ok: false, error: 'Already reverted.' };
+  }
+  if (String(rec.runStatus || '').toLowerCase() === 'running') {
+    return { ok: false, error: 'Agent is still running. Wait for it to finish, then try again.' };
+  }
+  const folder = rec.folder;
+  if (!String(folder || '').trim()) {
+    return { ok: false, error: 'Missing folder for this cat.' };
+  }
+  const tree = rec.snapshotTree;
+  try {
+    await execFileAsync('git', ['read-tree', '--reset', '-u', tree], {
+      cwd: folder,
+      encoding: 'utf8',
+    });
+    await execFileAsync('git', ['clean', '-fd'], { cwd: folder, encoding: 'utf8' });
+  } catch (e) {
+    const msg = (e && e.message) || String(e);
+    log.warn('revertAgentChanges failed', e);
+    rec.revertError = msg;
+    onConversationPushed({ catId: id });
+    return { ok: false, error: msg };
+  }
+  rec.reverted = true;
+  rec.revertError = undefined;
+  rec.items.push({
+    kind: 'system',
+    text: 'Changes reverted to the folder state at spawn.',
+    at: now(),
+  });
+  onConversationPushed({ catId: id });
+  return { ok: true };
 }
 
 /**
@@ -446,7 +566,11 @@ async function drainStream(run, catId) {
   }
 }
 
-function initConversationState(catId, { folder, prompt }) {
+/**
+ * @param {string} catId
+ * @param {{ folder: string, prompt: string, snapshotTree?: string, headShaAtSnapshot?: string | null, snapshotCapturedAt?: number }} params
+ */
+function initConversationState(catId, { folder, prompt, snapshotTree, headShaAtSnapshot, snapshotCapturedAt }) {
   conversations.set(catId, {
     folder: String(folder || ''),
     prompt: String(prompt || ''),
@@ -455,6 +579,11 @@ function initConversationState(catId, { folder, prompt }) {
     activeAssistantBubble: false,
     answerHtmlFileUrl: undefined,
     answerHtmlWriteError: undefined,
+    snapshotTree: snapshotTree || undefined,
+    headShaAtSnapshot: headShaAtSnapshot != null ? String(headShaAtSnapshot) : undefined,
+    snapshotCapturedAt: snapshotCapturedAt != null ? snapshotCapturedAt : undefined,
+    reverted: false,
+    revertError: undefined,
   });
   onConversationPushed({ catId });
 }
@@ -462,6 +591,7 @@ function initConversationState(catId, { folder, prompt }) {
 function getAgentConversation(catId) {
   const c = conversations.get(String(catId));
   if (!c) return { found: false, items: [] };
+  const hasSnapshot = !!c.snapshotTree;
   return {
     found: true,
     folder: c.folder,
@@ -472,6 +602,9 @@ function getAgentConversation(catId) {
     durationMs: c.durationMs,
     answerHtmlFileUrl: c.answerHtmlFileUrl || null,
     answerHtmlWriteError: c.answerHtmlWriteError || null,
+    canRevert: hasSnapshot,
+    reverted: !!c.reverted,
+    revertError: c.revertError != null ? String(c.revertError) : null,
   };
 }
 
@@ -487,6 +620,7 @@ async function dismissAgent(catId, opts = {}) {
   const { getMainWindow, log = console } = opts;
   const id = String(catId);
   await disposeAgentResources(id, { log });
+  deleteAnswerHtmlDirForCat(id, log);
   deleteConversationState(id);
   const win = getMainWindow && getMainWindow();
   if (win && !win.isDestroyed()) {
@@ -494,21 +628,25 @@ async function dismissAgent(catId, opts = {}) {
   }
 }
 
+const DEFAULT_AGENT_MODEL_ID = 'composer-2';
+
 /**
  * @param {string} catId
  * @param {(payload: { catId: string, status: string, result?: string, durationMs?: number, finishBubbleLine?: string }) => void} notify
  * @param {Console} log
  * @param {string} folder
+ * @param {string} [modelId]
  */
-async function ensureAgent(catId, folder, notify, log) {
+async function ensureAgent(catId, folder, notify, log, modelId) {
   const id = String(catId);
   const folderStr = String(folder || '');
+  const modelIdStr = String(modelId || '').trim() || DEFAULT_AGENT_MODEL_ID;
   const existing = active.get(id);
 
-  if (existing && existing.agent && existing.folder === folderStr) {
+  if (existing && existing.agent && existing.folder === folderStr && existing.modelId === modelIdStr) {
     return existing.agent;
   }
-  if (existing && existing.agent && existing.folder !== folderStr) {
+  if (existing && existing.agent && (existing.folder !== folderStr || existing.modelId !== modelIdStr)) {
     await disposeAgentResources(id, { log });
   }
 
@@ -522,10 +660,10 @@ async function ensureAgent(catId, folder, notify, log) {
 
   const agent = Agent.create({
     apiKey,
-    model: { id: 'composer-2' },
+    model: { id: modelIdStr },
     local: { cwd: folderStr },
   });
-  active.set(id, { agent, run: null, folder: folderStr, busy: false });
+  active.set(id, { agent, run: null, folder: folderStr, modelId: modelIdStr, busy: false });
   return agent;
 }
 
@@ -651,7 +789,7 @@ function runOnAgent(catId, notify, log, prompt) {
   return work;
 }
 
-async function runAgentLifecycle({ catId, folder, prompt, notify, log }) {
+async function runAgentLifecycle({ catId, folder, prompt, model, notify, log }) {
   const id = String(catId);
   const apiKey = process.env.CURSOR_API_KEY;
   if (!apiKey) {
@@ -666,6 +804,11 @@ async function runAgentLifecycle({ catId, folder, prompt, notify, log }) {
       activeAssistantBubble: false,
       answerHtmlFileUrl: undefined,
       answerHtmlWriteError: undefined,
+      snapshotTree: undefined,
+      headShaAtSnapshot: undefined,
+      snapshotCapturedAt: undefined,
+      reverted: false,
+      revertError: undefined,
     });
     const recNoKey = conversations.get(id);
     if (recNoKey) commitAnswerHtmlPage(id, recNoKey, log);
@@ -674,10 +817,17 @@ async function runAgentLifecycle({ catId, folder, prompt, notify, log }) {
     return;
   }
 
-  initConversationState(id, { folder, prompt });
+  const snap = await captureGitSnapshotForFolder(String(folder), log);
+  initConversationState(id, {
+    folder,
+    prompt,
+    snapshotTree: snap?.tree,
+    headShaAtSnapshot: snap?.headSha != null ? snap.headSha : undefined,
+    snapshotCapturedAt: snap?.capturedAt,
+  });
 
   try {
-    await ensureAgent(id, folder, notify, log);
+    await ensureAgent(id, folder, notify, log, model);
   } catch (e) {
     log.warn('Failed to create Cursor agent', e);
     const rec = conversations.get(id);
@@ -700,12 +850,13 @@ async function runAgentLifecycle({ catId, folder, prompt, notify, log }) {
  * Starts an async agent run for this cat. Does not block. Completion is
  * reported via `agent-finished` on the main window.
  */
-function startAgentForCat({ catId, folder, prompt }, { getMainWindow, log = console } = {}) {
+function startAgentForCat({ catId, folder, prompt, model }, { getMainWindow, log = console } = {}) {
   const notify = getNotify(getMainWindow);
   void runAgentLifecycle({
     catId: String(catId),
     folder,
     prompt,
+    model,
     notify,
     log,
   });
@@ -770,4 +921,5 @@ module.exports = {
   deleteConversationState,
   dismissAgent,
   sendFollowup,
+  revertAgentChanges,
 };

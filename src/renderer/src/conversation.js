@@ -8,6 +8,9 @@ const logEl = document.getElementById('log');
 const metaEl = document.getElementById('meta');
 const closeBtn = document.getElementById('btn-close');
 const dismissBtn = document.getElementById('btn-dismiss');
+const revertBtn = document.getElementById('btn-revert');
+const revertErrorRow = document.getElementById('revert-error-row');
+const revertErrorEl = document.getElementById('revert-error');
 const answerToggleBar = document.getElementById('answer-toggle-bar');
 const btnViewConversation = document.getElementById('btn-view-conversation');
 const btnViewAnswer = document.getElementById('btn-view-answer');
@@ -28,8 +31,9 @@ const followupInput = document.getElementById('followup-input');
 const sendBtn = document.getElementById('btn-send');
 
 let unsubUpdated = null;
-/** @type {{ runStatus?: string } | null} */
+/** @type {{ runStatus?: string, canRevert?: boolean, reverted?: boolean, revertError?: string | null } | null} */
 let lastData = null;
+let revertInFlight = false;
 
 function escapeText(s) {
   const t = String(s);
@@ -61,6 +65,43 @@ function updateComposerFromData(data) {
   const ok = data && data.found;
   followupInput.disabled = !ok;
   sendBtn.disabled = !ok || running;
+}
+
+/**
+ * @param {{ canRevert?: boolean, reverted?: boolean, runStatus?: string, found?: boolean } | null} data
+ */
+function updateRevertFromData(data) {
+  if (!revertBtn) return;
+  if (!data || !data.found || !data.canRevert) {
+    revertBtn.hidden = true;
+    return;
+  }
+  revertBtn.hidden = false;
+  const running = String(data.runStatus || '').toLowerCase() === 'running';
+  if (revertInFlight) {
+    revertBtn.disabled = true;
+    revertBtn.textContent = 'Reverting…';
+  } else if (data.reverted) {
+    revertBtn.disabled = true;
+    revertBtn.textContent = 'Reverted';
+  } else {
+    revertBtn.disabled = running;
+    revertBtn.textContent = 'Revert changes';
+  }
+}
+
+/**
+ * @param {{ found?: boolean, revertError?: string | null } | null} data
+ */
+function updateRevertErrorRow(data) {
+  if (!revertErrorRow || !revertErrorEl) return;
+  if (!data || !data.found || !data.revertError) {
+    revertErrorRow.hidden = true;
+    revertErrorEl.textContent = '';
+    return;
+  }
+  revertErrorRow.hidden = false;
+  revertErrorEl.textContent = `Could not revert: ${data.revertError}`;
 }
 
 function clearAnswerPreview() {
@@ -161,6 +202,8 @@ async function render() {
     logEl.textContent = 'No conversation to show.';
     updateComposerFromData(null);
     updateAnswerPagePanel(null);
+    updateRevertFromData(null);
+    updateRevertErrorRow(null);
     return;
   }
   const data = await window.cursorcats.getAgentConversation(catId);
@@ -169,6 +212,8 @@ async function render() {
     logEl.textContent = 'This conversation is not available yet, or the agent was not started.';
     updateComposerFromData(null);
     updateAnswerPagePanel(null);
+    updateRevertFromData(null);
+    updateRevertErrorRow(null);
     return;
   }
 
@@ -193,6 +238,8 @@ async function render() {
   logEl.scrollTop = logEl.scrollHeight;
   updateComposerFromData(data);
   updateAnswerPagePanel(data);
+  updateRevertFromData(data);
+  updateRevertErrorRow(data);
 }
 
 function sendFollowup() {
@@ -239,6 +286,23 @@ closeBtn.addEventListener('click', () => {
 if (dismissBtn) {
   dismissBtn.addEventListener('click', () => {
     dismiss();
+  });
+}
+
+if (revertBtn) {
+  revertBtn.addEventListener('click', async () => {
+    if (!catId || typeof window.cursorcats?.revertCat !== 'function') return;
+    if (revertInFlight) return;
+    if (lastData && String(lastData.runStatus || '').toLowerCase() === 'running') return;
+    if (lastData && lastData.reverted) return;
+    revertInFlight = true;
+    updateRevertFromData(lastData);
+    try {
+      await window.cursorcats.revertCat(catId);
+    } finally {
+      revertInFlight = false;
+      void render();
+    }
   });
 }
 

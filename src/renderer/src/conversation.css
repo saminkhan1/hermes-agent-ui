@@ -72,6 +72,32 @@ body {
   border-color: rgba(255, 255, 255, 0.22);
 }
 
+.header-btn.revert-btn {
+  position: absolute;
+  right: 200px;
+  top: 10px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px;
+  border: 1px solid rgba(245, 78, 0, 0.45);
+  cursor: pointer;
+  background: rgba(245, 78, 0, 0.15);
+  color: #f54e00;
+  transition: color 0.1s, background 0.1s, border-color 0.1s, opacity 0.1s;
+}
+
+.header-btn.revert-btn:hover:not(:disabled) {
+  color: #fff;
+  background: rgba(245, 78, 0, 0.5);
+  border-color: rgba(245, 78, 0, 0.85);
+}
+
+.header-btn.revert-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .close-btn {
   position: absolute;
   right: 12px;
@@ -139,6 +165,20 @@ body {
 
 .answer-error-row .answer-page-error {
   flex: none;
+}
+
+.revert-error-row {
+  flex: 0 0 auto;
+  padding: 8px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 60, 40, 0.08);
+}
+
+.revert-error {
+  font-size: 11px;
+  color: #ff8a7a;
+  display: block;
+  word-break: break-word;
 }
 
 .answer-page-btn--secondary {
@@ -271,12 +311,32 @@ footer.composer {
   flex: 0 1 auto;
 }
 
-.composer-answer-toggle {
+/* Text-link style (not the solid answer-page pill buttons). */
+.composer-answer-link {
   flex: 0 0 auto;
-  white-space: nowrap;
-  padding: 5px 10px;
-  font-size: 11px;
   align-self: center;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: #f54e00;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.composer-answer-link:hover {
+  color: #ff6a33;
+}
+
+.composer-answer-link:focus-visible {
+  outline: 2px solid #f54e00;
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 .composer-row {
