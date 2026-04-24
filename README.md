@@ -2,11 +2,11 @@
   <img src="assets/repo-banner.png" alt="Cursor Cats" width="100%" />
 </p>
 
-**Code with Cursor Cats**, little pixel familiars on your desktop while Cursor Agents do the real work. One cat per run, prowling on top of every window, purring until the task lands, while occasionally fighting with eachother. Click a cat to read its conversation or to see its final message. CMD+Shift+S to launch a new cat.
+Write code with Cursor Cat, little pixel familiars on your desktop. One cat per run, prowling on top of every window, purring until the task lands, while occasionally fighting with eachother. Click a cat to read its conversation or to see its final message. CMD+Shift+S to launch a new cat.
 
 ## Powered by the Cursor SDK
 
-Cursor Cats are powered by the Cursor SDK. Spawning a cat from the modal creates a [`@cursor/february`](https://www.npmjs.com/package/@cursor/february) `Agent` via `Agent.create({ apiKey, model: { id: 'composer-2' }, local: { cwd: folder } })` rooted at the folder you pick.
+Cursor Cats are powered by the Cursor SDK. Spawning a cat from the modal creates a [`@cursor/february`](https://www.npmjs.com/package/@cursor/february) `Agent` rooted at the folder you pick.
 
 ## Installation
 
