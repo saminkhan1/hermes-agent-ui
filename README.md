@@ -2,7 +2,7 @@
   <img src="assets/repo-banner.png" alt="Cursor Cats" width="100%" />
 </p>
 
-Write code with Cursor Cat, little pixel familiars on your desktop. One cat per run, prowling on top of every window, purring until the task lands, while occasionally fighting with eachother. Click a cat to read its conversation or to see its final message. CMD+Shift+S to launch a new cat.
+Write code with your Cursor Cats, little pixel familiars on your desktop. One cat per run, prowling on top of every window, purring until the task lands, while occasionally fighting with eachother. Click a cat to read its conversation or to see its final message. CMD+Shift+S to launch a new cat.
 
 ## Powered by the Cursor SDK
 
@@ -23,15 +23,13 @@ npm install -g github:fieldsphere/cursor-cats
 cursorcats
 ```
 
-While the app is running, use **Cmd+Shift+C** (macOS) or **Ctrl+Shift+C** (Windows/Linux) to add a new Cursor Cat.
 
 ## Usage
 
 - **Add Cursor API key** to your env:
-
 ```bash
 export CURSOR_API_KEY=your_key
 cursorcats
 ```
-
 - **Launch**: `cursorcats` (or `npx github:fieldsphere/cursor-cats`).
+- While the app is running, use **Cmd+Shift+C** (macOS) or **Ctrl+Shift+C** (Windows/Linux) to add a new Cursor Cat.
