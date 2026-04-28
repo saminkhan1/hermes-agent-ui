@@ -8,6 +8,19 @@ const path = require('node:path');
 const pkgRoot = path.resolve(__dirname, '..');
 const mainEntry = path.join(pkgRoot, 'out', 'main', 'index.js');
 
+function envWithQuietSdkLogs(env) {
+  if (String(env.CURSORCATS_AGENT_LOG_VERBOSE || '').trim() === '1') {
+    return env;
+  }
+  return {
+    ...env,
+    RUST_LOG: env.RUST_LOG || 'error',
+    LOG_LEVEL: env.LOG_LEVEL || 'warn',
+    OTEL_LOG_LEVEL: env.OTEL_LOG_LEVEL || 'error',
+    DEBUG: '',
+  };
+}
+
 if (process.argv[2] === 'add-hooks') {
   try {
     const { addHooks } = require(path.join(pkgRoot, 'scripts', 'add-hooks.js'));
@@ -57,7 +70,7 @@ Use Cmd+Shift+C to launch a Cursor Cat.
 const child = spawn(electron, [mainEntry, ...process.argv.slice(2)], {
   cwd: pkgRoot,
   stdio: 'inherit',
-  env: process.env,
+  env: envWithQuietSdkLogs(process.env),
 });
 
 child.on('error', (err) => {

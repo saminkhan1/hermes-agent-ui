@@ -696,6 +696,23 @@ async function dismissAgent(catId, opts = {}) {
 const DEFAULT_AGENT_MODEL_ID = 'composer-2';
 
 /**
+ * Lower-noise env merged into local agent runs (child inherits `process.env` with these overrides).
+ * Set `CURSORCATS_AGENT_LOG_VERBOSE=1` to leave the parent environment unchanged for this field.
+ * @returns {Record<string, string> | undefined}
+ */
+function quietLocalAgentEnvVars() {
+  if (String(process.env.CURSORCATS_AGENT_LOG_VERBOSE || '').trim() === '1') {
+    return undefined;
+  }
+  return {
+    RUST_LOG: 'error',
+    LOG_LEVEL: 'warn',
+    OTEL_LOG_LEVEL: 'error',
+    DEBUG: '',
+  };
+}
+
+/**
  * @param {string} catId
  * @param {(payload: { catId: string, status: string, result?: string, durationMs?: number, finishBubbleLine?: string }) => void} notify
  * @param {Console} log
@@ -740,10 +757,15 @@ async function ensureAgent(catId, target, notify, log, modelId) {
       autoCreatePR: true,
     };
   } else {
-    options.local = {
+    const local = {
       cwd: folderStr,
       settingSources: ['project', 'user', 'team', 'plugins'],
     };
+    const extraEnv = quietLocalAgentEnvVars();
+    if (extraEnv) {
+      local.envVars = extraEnv;
+    }
+    options.local = local;
   }
 
   const agent = await Agent.create(options);

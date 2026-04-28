@@ -174,17 +174,6 @@ function updateAnswerPagePanel(data) {
     return;
   }
 
-  const running = String(data.runStatus || '').toLowerCase() === 'running';
-  if (running) {
-    answerToggleBar.hidden = true;
-    answerErrorRow.hidden = true;
-    answerPreviewPane.hidden = true;
-    conversationSection.hidden = false;
-    lastBoundAnswerUrl = null;
-    clearAnswerPreview();
-    return;
-  }
-
   const url = data.answerHtmlFileUrl;
   const writeErr = data.answerHtmlWriteError;
 
@@ -201,17 +190,8 @@ function updateAnswerPagePanel(data) {
 
   answerErrorRow.hidden = true;
 
-  if (!url) {
-    answerToggleBar.hidden = true;
-    answerPreviewPane.hidden = true;
-    conversationSection.hidden = false;
-    lastBoundAnswerUrl = null;
-    clearAnswerPreview();
-    return;
-  }
-
-  answerPageUrl = String(url);
-  if (answerPageUrl !== lastBoundAnswerUrl) {
+  answerPageUrl = url ? String(url) : null;
+  if (answerPageUrl !== lastBoundAnswerUrl && answerPageUrl) {
     answerViewMode = 'answer';
     lastBoundAnswerUrl = answerPageUrl;
   }
@@ -220,9 +200,17 @@ function updateAnswerPagePanel(data) {
   btnViewConversation.hidden = answerViewMode !== 'answer';
   btnViewAnswer.hidden = answerViewMode !== 'conversation';
 
-  if (lastIframeBoundUrl !== answerPageUrl) {
-    answerPreviewIframe.src = answerPageUrl;
-    lastIframeBoundUrl = answerPageUrl;
+  const answerWorkingPane = document.getElementById('answer-working-pane');
+  if (answerPageUrl) {
+    if (lastIframeBoundUrl !== answerPageUrl) {
+      answerPreviewIframe.src = answerPageUrl;
+      lastIframeBoundUrl = answerPageUrl;
+    }
+    answerPreviewIframe.hidden = false;
+    if (answerWorkingPane) answerWorkingPane.hidden = true;
+  } else {
+    answerPreviewIframe.hidden = true;
+    if (answerWorkingPane) answerWorkingPane.hidden = false;
   }
 
   if (answerViewMode === 'answer') {
