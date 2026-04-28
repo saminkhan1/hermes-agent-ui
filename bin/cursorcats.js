@@ -94,11 +94,16 @@ if (!fs.existsSync(mainEntry)) {
 
 const electron = require('electron');
 
-console.log(`+------------------------------------------+
-|                                          |
-|              Cursor Cats                 |
-|                                          |
-+------------------------------------------+
+const cyan = '\x1b[36m';
+const reset = '\x1b[0m';
+const yellow = '\x1b[33m';
+
+console.log(`
+${cyan}   |\\__/,|   (\`\\${reset}
+${cyan} _.|o o  |_   ) )${reset}
+${cyan}-(((---(((--------${reset}
+${yellow}   Cursor Cats${reset}
+${cyan}------------------${reset}
 
 Use Cmd+Shift+C to launch a Cursor Cat.
 `);

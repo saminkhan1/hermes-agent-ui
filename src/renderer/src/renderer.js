@@ -1645,10 +1645,16 @@
 
     const vw = (bubbleLayer && bubbleLayer.clientWidth) || window.innerWidth || 0;
     const gap = BUBBLE_SIDE_GAP_PX;
-    const vAnchor = cat.y + Math.min(26, Math.max(12, Math.round(h * 0.32)));
+    const hb = getHitboxRect(cat);
+    const catLeft = hb.w > 0 ? hb.x : cat.x;
+    const catRight = hb.w > 0 ? hb.x + hb.w : cat.x + w;
+    const catTop = hb.h > 0 ? hb.y : cat.y;
+    const catBottom = hb.h > 0 ? hb.y + hb.h : cat.y + h;
+    const catVisibleH = catBottom - catTop;
+    const vAnchor = catTop + Math.round(catVisibleH * 0.62);
 
-    const fitsRight = cx + w / 2 + gap + bw <= vw - MARGIN;
-    const fitsLeft = cx - w / 2 - gap - bw >= MARGIN;
+    const fitsRight = catRight + gap + bw <= vw - MARGIN;
+    const fitsLeft = catLeft - gap - bw >= MARGIN;
 
     let side = null;
     if (cx <= vw / 2) {
@@ -1659,8 +1665,8 @@
       else if (fitsRight) side = 'right';
     }
     if (!side) {
-      const spaceR = vw - MARGIN - (cx + w / 2 + gap);
-      const spaceL = cx - w / 2 - gap - MARGIN;
+      const spaceR = vw - MARGIN - (catRight + gap);
+      const spaceL = catLeft - gap - MARGIN;
       if (spaceR >= spaceL && spaceR >= bw * 0.45) side = 'right';
       else if (spaceL >= bw * 0.45) side = 'left';
     }
@@ -1668,11 +1674,11 @@
 
     if (side === 'right') {
       el.classList.add(`${prefix}--side-right`);
-      el.style.left = `${cx + w / 2 + gap}px`;
+      el.style.left = `${catRight + gap}px`;
       el.style.top = `${vAnchor}px`;
     } else {
       el.classList.add(`${prefix}--side-left`);
-      el.style.left = `${cx - w / 2 - gap}px`;
+      el.style.left = `${catLeft - gap}px`;
       el.style.top = `${vAnchor}px`;
     }
   }

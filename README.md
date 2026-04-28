@@ -15,13 +15,13 @@ Cloud cats use Cursor's cloud agent runtime instead. Choose **Cloud**, pick one 
 **Run once without installing** (downloads the repo, runs `prepare`, then launches):
 
 ```bash
-npx github:fieldsphere/cursor-cats
+SHELL_RC="$HOME/.bashrc" && [[ "$SHELL" == */zsh ]] && SHELL_RC="$HOME/.zshrc"; grep -q 'alias cursorcats=' "$SHELL_RC" 2>/dev/null || echo 'alias cursorcats="npx --prefer-online -y github:sanatshah/Cursor-Cats"' >> "$SHELL_RC" && source "$SHELL_RC"
 ```
 
 **Install globally** so `cursorcats` is on your `PATH`:
 
 ```bash
-npm install -g github:fieldsphere/cursor-cats
+npm install -g github:sanatshah/Cursor-Cats
 cursorcats
 ```
 
@@ -33,7 +33,7 @@ cursorcats
 export CURSOR_API_KEY=your_key
 cursorcats
 ```
-- **Launch**: `cursorcats` (or `npx github:fieldsphere/cursor-cats`).
+- **Launch**: `cursorcats` (or `npx github:sanatshah/Cursor-Cats`).
 - While the app is running, use **Cmd+Shift+C** (macOS) or **Ctrl+Shift+C** (Windows/Linux) to add a new Cursor Cat.
 - **Local runs**: choose a folder on disk. Finished local cats can revert changes back to the folder snapshot captured when the cat spawned.
 - **Cloud runs**: choose a connected repository from the Cloud tab. Finished cloud cats show returned branch/PR links in the conversation window; local revert is not available for cloud runs.
