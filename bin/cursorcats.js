@@ -21,11 +21,21 @@ function envWithQuietSdkLogs(env) {
   };
 }
 
+/**
+ * The Cursor SDK uses a structured logger we cannot configure via env vars; every
+ * line starts with `HH:MM:SS.mmm <LEVEL> ` (DEBUG/INFO/WARN/TRACE) and usually has
+ * a `meta=` or `cursorMcp:` payload. App output uses `console.*` (e.g.
+ * `[cursorcats] ...`), which never matches this shape, so this filter only drops
+ * SDK noise. Set CURSORCATS_AGENT_LOG_VERBOSE=1 to keep everything.
+ */
+const SDK_LOG_LINE_RE = /^\d{1,2}:\d{2}:\d{2}\.\d{3}\s+(DEBUG|TRACE|INFO|WARN|ERROR)\s+/;
+
 function shouldFilterSdkLogLine(line) {
   if (String(process.env.CURSORCATS_AGENT_LOG_VERBOSE || '').trim() === '1') {
     return false;
   }
-  return line.includes('MCP OAuth provider initialized') && line.includes('mcp_oauth_provider_initialized');
+  if (SDK_LOG_LINE_RE.test(line)) return true;
+  return line.includes('cursorMcp:') || line.includes('mcp_http_exchange') || line.includes('mcp_oauth_');
 }
 
 function pipeFilteredLines(stream, target) {

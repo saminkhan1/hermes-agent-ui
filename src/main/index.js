@@ -6,6 +6,52 @@ function quietSdkLogsByDefault() {
   process.env.LOG_LEVEL = 'warn';
   process.env.OTEL_LOG_LEVEL = 'error';
   process.env.DEBUG = '';
+
+  installSdkLogStreamFilter();
+}
+
+/**
+ * The Cursor SDK runs its own structured logger inside this process and writes
+ * directly to stdout/stderr (`HH:MM:SS.mmm <LEVEL> ...meta={...}`). Those lines
+ * cannot be silenced via env vars, so we filter them at the stream level. App
+ * output (`console.*`, `[cursorcats] ...`) never matches and is preserved.
+ */
+function installSdkLogStreamFilter() {
+  const lineRe = /^\d{1,2}:\d{2}:\d{2}\.\d{3}\s+(DEBUG|TRACE|INFO|WARN|ERROR)\s+/;
+  const shouldDrop = (line) => {
+    if (!line) return false;
+    if (lineRe.test(line)) return true;
+    return (
+      line.includes('cursorMcp:') ||
+      line.includes('mcp_http_exchange') ||
+      line.includes('mcp_oauth_')
+    );
+  };
+  for (const stream of [process.stdout, process.stderr]) {
+    if (!stream || stream.__cursorcatsFiltered) continue;
+    const original = stream.write.bind(stream);
+    let pending = '';
+    stream.write = (chunk, encoding, cb) => {
+      try {
+        const text =
+          typeof chunk === 'string' ? chunk : Buffer.isBuffer(chunk) ? chunk.toString() : String(chunk);
+        pending += text;
+        let out = '';
+        let idx;
+        while ((idx = pending.indexOf('\n')) !== -1) {
+          const line = pending.slice(0, idx);
+          pending = pending.slice(idx + 1);
+          if (!shouldDrop(line)) out += `${line}\n`;
+        }
+        if (out) original(out, encoding, cb);
+        else if (typeof cb === 'function') cb();
+        return true;
+      } catch {
+        return original(chunk, encoding, cb);
+      }
+    };
+    stream.__cursorcatsFiltered = true;
+  }
 }
 
 quietSdkLogsByDefault();
