@@ -230,37 +230,40 @@ func keyStroke(for scalar: UnicodeScalar) -> (String, [String])? {
   }
 }
 
+func postUnicodeScalar(_ scalar: UnicodeScalar, pid: Int32? = nil) {
+  var value = UniChar(scalar.value)
+  let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true)
+  down?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &value)
+  let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
+  up?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &value)
+  if let pid {
+    postToPid(down, pid: pid)
+    postToPid(up, pid: pid)
+  } else {
+    post(down)
+    post(up)
+  }
+}
+
 func typeText(_ text: String) {
   for scalar in text.unicodeScalars {
-    if let (key, modifiers) = keyStroke(for: scalar) {
-      keyTap(key, modifiers: modifiers)
-      continue
+    if scalar == "\n" {
+      keyTap("enter")
+    } else {
+      postUnicodeScalar(scalar)
+      Thread.sleep(forTimeInterval: 0.001)
     }
-    var value = UniChar(scalar.value)
-    let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true)
-    down?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &value)
-    post(down)
-    let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
-    up?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &value)
-    post(up)
-    Thread.sleep(forTimeInterval: 0.004)
   }
 }
 
 func typeTextToPid(_ text: String, pid: Int32) {
   for scalar in text.unicodeScalars {
-    if let (key, modifiers) = keyStroke(for: scalar) {
-      keyTapToPid(key, modifiers: modifiers, pid: pid)
-      continue
+    if scalar == "\n" {
+      keyTapToPid("enter", pid: pid)
+    } else {
+      postUnicodeScalar(scalar, pid: pid)
+      Thread.sleep(forTimeInterval: 0.001)
     }
-    var value = UniChar(scalar.value)
-    let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true)
-    down?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &value)
-    postToPid(down, pid: pid)
-    let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
-    up?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &value)
-    postToPid(up, pid: pid)
-    Thread.sleep(forTimeInterval: 0.004)
   }
 }
 

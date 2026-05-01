@@ -1270,6 +1270,9 @@ async function readDomEvalTargets(win, selectors) {
         out.promptValuePreview = prompt && typeof prompt.value === 'string' ? prompt.value.slice(0, 120) : '';
         const selected = document.querySelector('.recent-folder-item.selected');
         out.selectedFolderPath = (document.body && document.body.dataset ? document.body.dataset.selectedFolder : '') || (selected && selected.dataset ? selected.dataset.folder : '') || '';
+        const visibleText = document.body && typeof document.body.innerText === 'string' ? document.body.innerText.replace(/\s+/g, ' ').trim() : '';
+        out.visibleTextLength = visibleText.length;
+        out.visibleTextPreview = visibleText.slice(0, 500);
         return out;
       })()`,
       true

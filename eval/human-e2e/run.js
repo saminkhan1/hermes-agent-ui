@@ -1014,6 +1014,10 @@ async function startScenario(port, scenario, index, appPid) {
     modalFocus: 0,
     shortcutToModalMs: null,
     submitToCatVisibleMs: null,
+    promptInputMs: null,
+    promptVisibleMatch: 0,
+    visibleTextStatePass: 0,
+    visibleStates: [],
   };
   try {
     await prepareScenarioStart(port, scenario, context, result);
@@ -1031,12 +1035,20 @@ async function startScenario(port, scenario, index, appPid) {
     }
     const promptPoint = center(targets.modal.promptRect);
     await input('click', String(promptPoint.x), String(promptPoint.y));
+    const inputStartedAt = Date.now();
     if (scenario.mode === 'voice') {
       const mic = center(targets.modal.micButtonRect);
       await input('click', String(mic.x), String(mic.y));
       await waitForPromptLength(port, result.promptText.length);
     } else {
       await typePromptText(port, appPid, modalPid, promptPoint, result.promptText);
+    }
+    result.promptInputMs = Date.now() - inputStartedAt;
+    const afterInputTargets = await request(port, 'GET', '/ui-targets').catch(() => null);
+    if (afterInputTargets) {
+      result.visibleStates.push(captureVisibleState('after_input', afterInputTargets));
+      const promptPreview = afterInputTargets.modal && afterInputTargets.modal.promptValuePreview ? String(afterInputTargets.modal.promptValuePreview) : '';
+      result.promptVisibleMatch = promptPreview === String(result.promptText || '').slice(0, 120) ? 1 : 0;
     }
     const submitAt = Date.now();
     result.submitAt = submitAt;
@@ -1050,6 +1062,9 @@ async function startScenario(port, scenario, index, appPid) {
     result.catId = catId;
     const catVisibleMs = await waitForCatVisible(port, catId);
     result.submitToCatVisibleMs = Date.now() - submitAt || catVisibleMs;
+    const afterSubmitTargets = await request(port, 'GET', '/ui-targets').catch(() => null);
+    if (afterSubmitTargets) result.visibleStates.push(captureVisibleState('after_submit', afterSubmitTargets));
+    result.visibleTextStatePass = visibleStatePass(result);
     result.startedOk = true;
   } catch (e) {
     result.error = (e && e.message) || String(e);
@@ -1090,6 +1105,9 @@ async function finishScenario(port, scenario, result) {
       });
     }
     result.workflowSuccess = waited.ok && waited.status === 'completed' && result.oraclePass ? 1 : 0;
+    const afterFinishTargets = await request(port, 'GET', '/ui-targets').catch(() => null);
+    if (afterFinishTargets) result.visibleStates.push(captureVisibleState('after_finish', afterFinishTargets));
+    result.visibleTextStatePass = visibleStatePass(result);
     await request(port, 'POST', '/dismiss', { catId: result.catId }).catch(() => {});
   } catch (e) {
     result.error = (e && e.message) || String(e);
@@ -1244,6 +1262,31 @@ function metricLine(name, value) {
   return `METRIC ${name}=${n}`;
 }
 
+function captureVisibleState(label, targets = {}) {
+  return {
+    label,
+    at: Date.now(),
+    modalVisible: !!(targets.modal && targets.modal.visible),
+    modalText: targets.modal && targets.modal.visibleTextPreview ? String(targets.modal.visibleTextPreview) : '',
+    promptLength: targets.modal && Number.isFinite(Number(targets.modal.promptValueLength)) ? Number(targets.modal.promptValueLength) : 0,
+    promptPreview: targets.modal && targets.modal.promptValuePreview ? String(targets.modal.promptValuePreview) : '',
+    conversationVisible: !!(targets.conversation && targets.conversation.visible),
+    conversationText: targets.conversation && targets.conversation.visibleTextPreview ? String(targets.conversation.visibleTextPreview) : '',
+    catCount: Array.isArray(targets.cats) ? targets.cats.length : 0,
+  };
+}
+
+function visibleStatePass(result) {
+  const states = Array.isArray(result.visibleStates) ? result.visibleStates : [];
+  const afterInput = states.find((s) => s.label === 'after_input');
+  const afterSubmit = states.find((s) => s.label === 'after_submit');
+  const afterFinish = states.find((s) => s.label === 'after_finish');
+  const promptOk = !!afterInput && afterInput.promptLength >= String(result.promptText || '').length && String(afterInput.promptPreview || '') === String(result.promptText || '').slice(0, 120);
+  const submitOk = !!afterSubmit && afterSubmit.catCount > 0;
+  const finishOk = !afterFinish || afterFinish.catCount >= 0;
+  return promptOk && submitOk && finishOk ? 1 : 0;
+}
+
 async function cancelUnfinishedScenarios(port, results) {
   for (const result of results || []) {
     if (!result || !result.catId) continue;
@@ -1329,6 +1372,10 @@ async function main() {
     const modalFocusSuccessRate = results.reduce((s, r) => s + r.modalFocus, 0) / count;
     const oraclePassRate = results.reduce((s, r) => s + r.oraclePass, 0) / count;
     const cleanupSuccessRate = results.reduce((s, r) => s + r.cleanupSuccess, 0) / count;
+    const promptVisibleMatchRate = results.reduce((s, r) => s + (r.promptVisibleMatch || 0), 0) / count;
+    const visibleTextStatePassRate = results.reduce((s, r) => s + (r.visibleTextStatePass || 0), 0) / count;
+    const promptInputP95 = percentile(results.map((r) => r.promptInputMs), 95);
+    const promptCharsPerSec = results.reduce((s, r) => s + (String(r.promptText || '').length || 0), 0) / Math.max(0.001, results.reduce((s, r) => s + (Number(r.promptInputMs || 0) / 1000), 0));
     const shortcutP95 = percentile(results.map((r) => r.shortcutToModalMs), 95);
     const submitP95 = percentile(results.map((r) => r.submitToCatVisibleMs), 95);
     const firstOutputToBubbleP95 = percentile(traceLatency(events, 'first_cli_output', 'stream_bubble_rendered'), 95);
@@ -1355,6 +1402,10 @@ async function main() {
     console.log(metricLine('shortcut_to_modal_p95_ms', shortcutP95));
     console.log(metricLine('modal_focus_success_rate', modalFocusSuccessRate));
     console.log(metricLine('submit_to_cat_visible_p95_ms', submitP95));
+    console.log(metricLine('prompt_input_p95_ms', promptInputP95));
+    console.log(metricLine('prompt_chars_per_sec', promptCharsPerSec));
+    console.log(metricLine('prompt_visible_match_rate', promptVisibleMatchRate));
+    console.log(metricLine('visible_text_state_pass_rate', visibleTextStatePassRate));
     console.log(metricLine('first_output_to_bubble_p95_ms', firstOutputToBubbleP95));
     console.log(metricLine('terminal_to_visual_p95_ms', terminalToVisualP95));
     console.log(metricLine('oracle_pass_rate', oraclePassRate));
