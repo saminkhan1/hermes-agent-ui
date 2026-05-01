@@ -161,8 +161,21 @@ async function applicationIsRunning(appName) {
   return String(out).trim().toLowerCase() === 'true';
 }
 
+let inputBinPromise = null;
+
+async function getInputBin() {
+  if (process.env.AGENT_UI_E2E_USE_SWIFTC === '0') return { command: '/usr/bin/swift', prefix: [INPUT] };
+  const bin = path.join(RUN_DIR, 'HumanInput');
+  if (fs.existsSync(bin)) return { command: bin, prefix: [] };
+  if (!inputBinPromise) {
+    inputBinPromise = execFileP('/usr/bin/swiftc', ['-O', INPUT, '-o', bin], { timeout: 60000 }).then(() => ({ command: bin, prefix: [] }));
+  }
+  return inputBinPromise;
+}
+
 async function input(...args) {
-  await execFileP('/usr/bin/swift', [INPUT, ...args], { timeout: 60000 });
+  const bin = await getInputBin();
+  await execFileP(bin.command, [...bin.prefix, ...args], { timeout: 60000 });
 }
 
 function request(port, method, pathname, body) {
