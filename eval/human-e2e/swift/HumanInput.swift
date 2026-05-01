@@ -277,7 +277,7 @@ func activatePid(_ pid: Int32) {
 
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
-  fail("usage: HumanInput.swift <check-permissions|move|click|hotkey|hotkey-pid|key|key-pid|type|type-pid|activate-pid> ...")
+  fail("usage: HumanInput.swift <check-permissions|move|click|hotkey|hotkey-pid|key|key-pid|type|type-pid|replace-text|activate-pid> ...")
 }
 
 switch command {
@@ -313,6 +313,13 @@ case "type":
 case "type-pid":
   guard args.count >= 3, let pid = Int32(args[1]) else { fail("type-pid requires pid text") }
   typeTextToPid(args.dropFirst(2).joined(separator: " "), pid: pid)
+case "replace-text":
+  guard args.count >= 5, let pid = Int32(args[1]), let x = Double(args[2]), let y = Double(args[3]) else { fail("replace-text requires pid x y text") }
+  activatePid(pid)
+  click(x: x, y: y)
+  keyTapToPid("a", modifiers: ["cmd"], pid: pid)
+  keyTapToPid("delete", pid: pid)
+  typeText(args.dropFirst(4).joined(separator: " "))
 case "activate-pid":
   guard args.count == 2, let pid = Int32(args[1]) else { fail("activate-pid requires pid") }
   activatePid(pid)

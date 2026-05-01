@@ -335,6 +335,12 @@ async function typePromptText(port, appPid, modalPid, promptPoint, text) {
   const pid = Number(modalPid || appPid);
   const attempts = [
     {
+      name: 'combined-replace-global-hid',
+      run: async () => {
+        await input('replace-text', String(appPid), String(promptPoint.x), String(promptPoint.y), text);
+      },
+    },
+    {
       name: 'global-hid',
       run: async () => {
         await input('activate-pid', String(appPid)).catch(() => {});
