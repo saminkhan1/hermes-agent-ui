@@ -334,40 +334,56 @@ async function typePromptText(port, appPid, modalPid, promptPoint, text) {
   const expected = String(text || '').length;
   const pid = Number(modalPid || appPid);
   const attempts = [
-    async () => {
-      await clearPromptField(pid, promptPoint);
-      await input('type-pid', String(pid), text);
+    {
+      name: 'global-hid',
+      run: async () => {
+        await input('activate-pid', String(appPid)).catch(() => {});
+        await clearPromptField(pid, promptPoint);
+        await input('type', text);
+      },
     },
-    async () => {
-      await input('activate-pid', String(appPid)).catch(() => {});
-      await clearPromptField(pid, promptPoint);
-      await input('type-pid', String(pid), text);
+    {
+      name: 'pid-targeted',
+      run: async () => {
+        await clearPromptField(pid, promptPoint);
+        await input('type-pid', String(pid), text);
+      },
     },
-    async () => {
-      await input('activate-pid', String(appPid)).catch(() => {});
-      await input('click', String(promptPoint.x), String(promptPoint.y)).catch(() => {});
-      await input('hotkey-pid', String(pid), 'cmd+a').catch(() => {});
-      await input('key-pid', String(pid), 'delete').catch(() => {});
-      await input('type', text);
+    {
+      name: 'activated-pid-targeted',
+      run: async () => {
+        await input('activate-pid', String(appPid)).catch(() => {});
+        await clearPromptField(pid, promptPoint);
+        await input('type-pid', String(pid), text);
+      },
     },
-    async () => {
-      await input('activate-pid', String(appPid)).catch(() => {});
-      await input('click', String(promptPoint.x), String(promptPoint.y)).catch(() => {});
-      await osascript(`tell application "System Events" to keystroke ${appleScriptString(text)}`);
+    {
+      name: 'osascript-keystroke',
+      run: async () => {
+        await input('activate-pid', String(appPid)).catch(() => {});
+        await input('click', String(promptPoint.x), String(promptPoint.y)).catch(() => {});
+        await osascript(`tell application "System Events" to keystroke ${appleScriptString(text)}`);
+      },
     },
   ];
 
   let lastError = null;
+  const diagnostics = [];
   for (let i = 0; i < attempts.length; i++) {
+    const attempt = attempts[i];
+    const started = Date.now();
     try {
-      await attempts[i]();
-      await waitForPromptLength(port, expected, i === attempts.length - 1 ? 10000 : 4000);
-      return;
+      await attempt.run();
+      await waitForPromptLength(port, expected, i === attempts.length - 1 ? 10000 : 1500);
+      return { attempt: attempt.name, attempts: [...diagnostics, { name: attempt.name, ok: true, ms: Date.now() - started }] };
     } catch (e) {
       lastError = e;
+      diagnostics.push({ name: attempt.name, ok: false, ms: Date.now() - started, error: (e && e.message) || String(e) });
     }
   }
-  throw lastError || new Error('Prompt field did not receive typed text');
+  const err = lastError || new Error('Prompt field did not receive typed text');
+  err.typeAttempts = diagnostics;
+  throw err;
 }
 
 async function waitForTraceEvent(port, type, timeoutMs = 15000) {
@@ -1041,7 +1057,9 @@ async function startScenario(port, scenario, index, appPid) {
       await input('click', String(mic.x), String(mic.y));
       await waitForPromptLength(port, result.promptText.length);
     } else {
-      await typePromptText(port, appPid, modalPid, promptPoint, result.promptText);
+      const typed = await typePromptText(port, appPid, modalPid, promptPoint, result.promptText);
+      result.promptInputAttempt = typed && typed.attempt ? typed.attempt : null;
+      result.promptInputAttempts = typed && typed.attempts ? typed.attempts : [];
     }
     result.promptInputMs = Date.now() - inputStartedAt;
     const afterInputTargets = await request(port, 'GET', '/ui-targets').catch(() => null);
