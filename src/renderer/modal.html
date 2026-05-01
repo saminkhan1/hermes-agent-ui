@@ -7,7 +7,7 @@
       content="default-src 'self' 'unsafe-inline' ws: http://localhost:*; script-src 'self' 'unsafe-inline' http://localhost:*; style-src 'self' 'unsafe-inline'; img-src 'self' file: data: blob:; connect-src 'self' ws: http://localhost:*;"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>New Cursor Cat</title>
+    <title>New agent-UI</title>
     <link rel="stylesheet" href="/src/modal.css" />
   </head>
   <body>
@@ -17,7 +17,7 @@
           id="header-app-icon"
           class="header-app-icon"
           role="img"
-          aria-label="Cursor Cat"
+          aria-label="agent-UI"
         ></div>
         <div class="header-input-col">
           <textarea
@@ -30,51 +30,32 @@
           ></textarea>
           <div class="prompt-meta-wrap">
             <div class="prompt-meta">
-              <button
-                id="model-picker"
-                class="model-chip"
-                type="button"
-                aria-haspopup="listbox"
-                aria-expanded="false"
-                aria-controls="model-menu"
-              >
+              <span class="model-chip" aria-label="Hermes CLI">
                 <svg class="model-chip-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
                 </svg>
-                <span id="model-chip-label">Local CLI</span>
-                <svg class="model-chip-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <polyline points="6 9 12 15 18 9"></polyline>
+                <span id="model-chip-label">Hermes</span>
+              </span>
+              <div id="prompt-send-hint" class="prompt-send-hint" aria-live="polite"></div>
+              <button
+                id="btn-dictate"
+                class="icon-action"
+                type="button"
+                aria-label="Dictate prompt"
+                title="Dictate prompt"
+              >
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                  <path d="M12 19v3"></path>
                 </svg>
               </button>
-              <div id="prompt-send-hint" class="prompt-send-hint" aria-live="polite"></div>
             </div>
-            <div id="model-menu" class="model-menu" role="listbox" aria-labelledby="model-picker" hidden></div>
           </div>
         </div>
       </div>
 
-      <div class="runtime-row" role="radiogroup" aria-label="Agent runtime">
-        <button
-          id="runtime-local"
-          class="runtime-option selected"
-          type="button"
-          role="radio"
-          aria-checked="true"
-        >
-          Local
-        </button>
-        <button
-          id="runtime-cloud"
-          class="runtime-option"
-          type="button"
-          role="radio"
-          aria-checked="false"
-        >
-          Cloud
-        </button>
-      </div>
-
-      <div class="section-title" id="project-section-title">Projects</div>
+      <div class="section-title" id="project-section-title">Project</div>
       
       <div class="list" id="local-project-section">
         <div class="list-item" id="btn-choose-folder">
@@ -96,32 +77,6 @@
 
         <div id="recent-folders-container" hidden>
           <div id="recent-folders-list"></div>
-        </div>
-      </div>
-
-      <div class="list" id="cloud-project-section" hidden>
-        <div class="cloud-ref-row">
-          <label class="cloud-ref-label" for="cloud-starting-ref">Starting ref</label>
-          <input
-            id="cloud-starting-ref"
-            class="cloud-ref-input"
-            type="text"
-            autocomplete="off"
-            placeholder="Default branch"
-          />
-        </div>
-        <div class="cloud-search-row">
-          <label class="cloud-search-label" for="cloud-repo-search">Search repos</label>
-          <input
-            id="cloud-repo-search"
-            class="cloud-search-input"
-            type="search"
-            autocomplete="off"
-            placeholder="owner/name or URL"
-          />
-        </div>
-        <div id="cloud-repos-container">
-          <div id="cloud-repos-list"></div>
         </div>
       </div>
 

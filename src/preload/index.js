@@ -1,6 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('cursorcats', {
+contextBridge.exposeInMainWorld('agentUI', {
   getAppPath: () => ipcRenderer.invoke('get-app-path'),
   getFrontmostWindowBounds: () => ipcRenderer.invoke('get-frontmost-window-bounds'),
   getFrontmostWindowInfo: () => ipcRenderer.invoke('get-frontmost-window-info'),
@@ -9,14 +9,8 @@ contextBridge.exposeInMainWorld('cursorcats', {
   chooseFolder: () => ipcRenderer.invoke('choose-folder'),
   getRecentFolders: () => ipcRenderer.invoke('get-recent-folders'),
   addRecentFolder: (folder) => ipcRenderer.invoke('add-recent-folder', folder),
-  listModels: () => ipcRenderer.invoke('list-models'),
-  getSelectedModel: () => ipcRenderer.invoke('get-selected-model'),
-  setSelectedModel: (modelId) => ipcRenderer.invoke('set-selected-model', modelId),
-  listCloudRepositories: () => ipcRenderer.invoke('list-cloud-repositories'),
-  getSelectedRuntime: () => ipcRenderer.invoke('get-selected-runtime'),
-  setSelectedRuntime: (runtime) => ipcRenderer.invoke('set-selected-runtime', runtime),
-  getSelectedCloudRepository: () => ipcRenderer.invoke('get-selected-cloud-repository'),
-  setSelectedCloudRepository: (repo) => ipcRenderer.invoke('set-selected-cloud-repository', repo),
+  startVoiceDictation: () => ipcRenderer.invoke('start-voice-dictation'),
+  traceEvalEvent: (payload) => ipcRenderer.send('eval-trace-event', payload),
   submitNewCat: (payload) => ipcRenderer.send('new-cat-submit', payload),
   cancelNewCat: () => ipcRenderer.send('new-cat-cancel'),
   resizeModal: (height) => ipcRenderer.send('resize-modal', { height }),

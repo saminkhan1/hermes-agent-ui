@@ -24,6 +24,8 @@ Thumbs.db
 # Test & coverage
 coverage/
 .nyc_output/
+.agent-ui-eval/
+runs/
 
 # Caches
 .vite/

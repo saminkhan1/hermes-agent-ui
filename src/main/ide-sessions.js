@@ -14,13 +14,13 @@ function handleIdeSessionStart(payload, { getMainWindow, log = console } = {}) {
   const wr = Array.isArray(payload && payload.workspace_roots)
     ? payload.workspace_roots.map((x) => String(x))
     : [];
-  log.log('[cursorcats] handleIdeSessionStart session=', sessionId, 'roots=', wr);
+  log.log('[agent-ui] handleIdeSessionStart session=', sessionId, 'roots=', wr);
   if (!sessionId) {
-    log.log('[cursorcats] ide-session-start dropped: no session_id');
+    log.log('[agent-ui] ide-session-start dropped: no session_id');
     return;
   }
   if (bySession.has(sessionId)) {
-    log.log('[cursorcats] ide-session-start dropped: duplicate sessionId=', sessionId);
+    log.log('[agent-ui] ide-session-start dropped: duplicate sessionId=', sessionId);
     return;
   }
   const catId = `ide:${sessionId}`;
@@ -36,12 +36,12 @@ function handleIdeSessionStart(payload, { getMainWindow, log = console } = {}) {
         workspace: wr[0] || '',
         prompt: '',
       });
-      log.log('[cursorcats] spawn-cat sent catId=', catId);
+      log.log('[agent-ui] spawn-cat sent catId=', catId);
     } catch (e) {
-      log.warn('[cursorcats] spawn-cat (ide) failed', e);
+      log.warn('[agent-ui] spawn-cat (ide) failed', e);
     }
   } else {
-    log.log('[cursorcats] ide-session-start dropped: no main window');
+    log.log('[agent-ui] ide-session-start dropped: no main window');
   }
 }
 
@@ -51,14 +51,14 @@ function handleIdeSessionStart(payload, { getMainWindow, log = console } = {}) {
  */
 function handleIdeSessionEnd(payload, { getMainWindow, log = console } = {}) {
   const sessionId = payload && (payload.session_id != null ? String(payload.session_id) : null);
-  log.log('[cursorcats] handleIdeSessionEnd session=', sessionId);
+  log.log('[agent-ui] handleIdeSessionEnd session=', sessionId);
   if (!sessionId) {
-    log.log('[cursorcats] ide-session-end dropped: no session_id');
+    log.log('[agent-ui] ide-session-end dropped: no session_id');
     return;
   }
   const rec = bySession.get(sessionId);
   if (!rec) {
-    log.log('[cursorcats] ide-session-end dropped: unknown sessionId=', sessionId);
+    log.log('[agent-ui] ide-session-end dropped: unknown sessionId=', sessionId);
     return;
   }
   // Keep `bySession` until the renderer calls `dismissCat` (auto after finish delay or user).
@@ -86,12 +86,12 @@ function handleIdeSessionEnd(payload, { getMainWindow, log = console } = {}) {
         result,
         ...(durationMs !== undefined ? { durationMs } : {}),
       });
-      log.log('[cursorcats] agent-finished (ide session end) catId=', rec.catId);
+      log.log('[agent-ui] agent-finished (ide session end) catId=', rec.catId);
     } catch (e) {
-      log.warn('[cursorcats] agent-finished (ide) failed', e);
+      log.warn('[agent-ui] agent-finished (ide) failed', e);
     }
   } else {
-    log.log('[cursorcats] ide-session-end dropped: no main window');
+    log.log('[agent-ui] ide-session-end dropped: no main window');
   }
 }
 
@@ -141,7 +141,7 @@ function removeIdeCatIfPresent(catId, { getMainWindow, log = console } = {}) {
     try {
       win.webContents.send('remove-cat', { catId: String(catId) });
     } catch (e) {
-      log.warn('[cursorcats] remove-cat (ide manual) failed', e);
+      log.warn('[agent-ui] remove-cat (ide manual) failed', e);
     }
   }
   return true;

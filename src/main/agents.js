@@ -3,35 +3,125 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { promisify } = require('util');
 const { execFile, spawn } = require('child_process');
+const {
+  recordTrace,
+  enabled: evalTraceEnabled,
+  getCatArtifactDir,
+  writeArtifactText,
+  appendArtifactText,
+  writeArtifactJson,
+  appendArtifactJsonl,
+} = require('./eval-trace');
 
 const execFileAsync = promisify(execFile);
 
-/**
- * One local CLI process per on-screen cat run. Output streams into a per-cat
- * conversation log for the UI.
- */
-
 /** @typedef {'local'} AgentRuntime */
-/** @typedef {{ url?: string, startingRef?: string }} CloudRepoConfig */
-/** @typedef {{ runtime: AgentRuntime, folder?: string, cloudRepo?: CloudRepoConfig | null }} AgentTarget */
-/** @typedef {{ process: import('child_process').ChildProcess | null, folder: string, modelId: string, runtime: AgentRuntime, busy: boolean, runPromise?: Promise<void>, stdout: string, stderr: string, startedAt?: number, terminating?: boolean, hermesSessionId?: string }} ActiveEntry */
+/** @typedef {{ runtime: AgentRuntime, folder?: string }} AgentTarget */
 
-/** @type {Map<string, { runtime?: AgentRuntime, folder: string, prompt: string, items: Array<{ kind: string, text: string, at: number, streamId?: string }>, runStatus: string, endResult?: string, durationMs?: number, activeAssistantBubble?: boolean, hermesSessionId?: string, snapshotTree?: string, headShaAtSnapshot?: string, snapshotCapturedAt?: number, reverted?: boolean, revertError?: string, cloudRepoUrl?: string, cloudStartingRef?: string, gitBranches?: Array<{ repoUrl: string, branch?: string, prUrl?: string }> }>} */
-const conversations = new Map();
-
-/** @type {Map<string, ActiveEntry>} */
+/** @type {Map<string, import('child_process').ChildProcess & Record<string, unknown>>} */
 const active = new Map();
+
+/** @type {Map<string, Record<string, any>>} */
+const conversations = new Map();
 
 /** @type {(info: { catId: string, streamBubble?: string | null }) => void} */
 let onConversationPushed = () => {};
+
+const DEFAULT_AGENT_MODEL_ID = 'hermes-cli';
+const CLI_BIN_ENV = 'AGENT_UI_HERMES_BIN';
+const HERMES_SOURCE = 'agent-ui';
+const DEFAULT_MAX_TURNS = 90;
+const JARVIS_HERMES_DIR = path.join(os.homedir(), 'Documents', 'jarvis');
+const JARVIS_HERMES_HOME = path.join(JARVIS_HERMES_DIR, '.aura', 'hermes-home');
+const SEARCH_EXECUTABLE_DIRS = [
+  '/opt/homebrew/bin',
+  '/usr/local/bin',
+  '/opt/local/bin',
+  '/usr/bin',
+  '/bin',
+];
 
 function setOnConversationPushed(fn) {
   onConversationPushed = typeof fn === 'function' ? fn : () => {};
 }
 
-/** First line before a paragraph break, used only for the small overlay bubble. */
+function now() {
+  return Date.now();
+}
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(String(value || '')).digest('hex');
+}
+
+function preview(value, max = 180) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > max ? `${text.slice(0, max - 1)}...` : text;
+}
+
+function textMeta(value, max = 180) {
+  const text = String(value || '');
+  return {
+    bytes: Buffer.byteLength(text),
+    chars: text.length,
+    sha256: sha256(text),
+    preview: preview(text, max),
+  };
+}
+
+function appendJsonlSafe(catId, relPath, value) {
+  try {
+    return appendArtifactJsonl(catId, relPath, value);
+  } catch {
+    return null;
+  }
+}
+
+function writeJsonSafe(catId, relPath, value) {
+  try {
+    return writeArtifactJson(catId, relPath, value);
+  } catch {
+    return null;
+  }
+}
+
+function writeTextSafe(catId, relPath, text) {
+  try {
+    return writeArtifactText(catId, relPath, text);
+  } catch {
+    return null;
+  }
+}
+
+function appendTextSafe(catId, relPath, text) {
+  try {
+    return appendArtifactText(catId, relPath, text);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeRuntime() {
+  return 'local';
+}
+
+function normalizeAgentTarget({ folder } = {}) {
+  return {
+    runtime: 'local',
+    folder: String(folder || ''),
+  };
+}
+
+function sameAgentTarget(entry, target, modelId) {
+  return !!entry && entry.modelId === modelId && entry.folder === target.folder;
+}
+
+function getConversationLocationLabel(rec) {
+  return rec && rec.folder ? rec.folder : '';
+}
+
 function leadAssistantBubbleText(fullText) {
   const raw = String(fullText || '').trim();
   if (!raw) return null;
@@ -39,10 +129,9 @@ function leadAssistantBubbleText(fullText) {
   const head = para >= 0 ? raw.slice(0, para) : raw;
   const firstLine = head.split('\n')[0].trim();
   if (!firstLine) return null;
-  return firstLine.length > 120 ? `${firstLine.slice(0, 117)}…` : firstLine;
+  return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
 }
 
-/** Same line as live stream bubbles: last assistant turn’s short first line. */
 function finishBubbleLineFromConversation(rec) {
   if (!rec || !Array.isArray(rec.items)) return undefined;
   for (let i = rec.items.length - 1; i >= 0; i--) {
@@ -71,50 +160,6 @@ function notifyRestarted(getMainWindow, catId) {
   }
 }
 
-function now() {
-  return Date.now();
-}
-
-function normalizeRuntime() {
-  return 'local';
-}
-
-function normalizeCloudRepoConfig(value) {
-  if (!value || typeof value !== 'object') return null;
-  const url = typeof value.url === 'string' ? value.url.trim() : '';
-  if (!url) return null;
-  const startingRef = typeof value.startingRef === 'string' ? value.startingRef.trim() : '';
-  return { url, startingRef };
-}
-
-function normalizeAgentTarget({ runtime, folder } = {}) {
-  const rt = normalizeRuntime(runtime);
-  return {
-    runtime: rt,
-    folder: String(folder || ''),
-    cloudRepo: null,
-  };
-}
-
-function sameAgentTarget(entry, target, modelId) {
-  if (!entry) return false;
-  if (entry.modelId !== modelId || entry.runtime !== target.runtime) return false;
-  return entry.folder === target.folder;
-}
-
-function getConversationLocationLabel(rec) {
-  if (!rec) return '';
-  return rec.folder || '';
-}
-
-/**
- * Captures a git tree object for the current working tree (tracked + untracked, .gitignore respected)
- * using a temp index, without touching the user's real index. Returns null if not a git worktree
- * or on failure.
- * @param {string} folder
- * @param {Console} [log]
- * @returns {Promise<{ tree: string, headSha: string | null, capturedAt: number } | null>}
- */
 async function captureGitSnapshotForFolder(folder, log = console) {
   const f = String(folder || '').trim();
   if (!f) return null;
@@ -129,18 +174,17 @@ async function captureGitSnapshotForFolder(folder, log = console) {
   let headSha = null;
   try {
     const { stdout } = await execFileAsync('git', ['-C', f, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
-    const h = String(stdout).trim();
-    headSha = h || null;
+    headSha = String(stdout || '').trim() || null;
   } catch {
     headSha = null;
   }
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cursorcats-git-'));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-git-'));
   const indexFile = path.join(tmp, 'index');
   const env = { ...process.env, GIT_INDEX_FILE: indexFile };
   try {
     await execFileAsync('git', ['add', '-A'], { cwd: f, env, encoding: 'utf8' });
     const { stdout: treeOut } = await execFileAsync('git', ['write-tree'], { cwd: f, env, encoding: 'utf8' });
-    const tree = String(treeOut).trim();
+    const tree = String(treeOut || '').trim();
     if (!/^[0-9a-f]{40}$/i.test(tree)) {
       log.warn('captureGitSnapshot: unexpected write-tree output', treeOut);
       return null;
@@ -158,51 +202,34 @@ async function captureGitSnapshotForFolder(folder, log = console) {
   }
 }
 
-/**
- * Restores the cat's folder to the git tree captured at spawn. Git-only; requires a prior snapshot.
- * Refuses if the cat is still running, already reverted, or missing snapshot.
- * @param {string} catId
- * @param {{ log?: Console }} [opts]
- * @returns {Promise<{ ok: true } | { ok: false, error: string, cancelled?: boolean }>}
- */
 async function revertAgentChanges(catId, opts = {}) {
   const { log = console } = opts;
   const id = String(catId);
   const rec = conversations.get(id);
-  if (!rec || !rec.snapshotTree) {
-    return { ok: false, error: 'No git snapshot to revert to.' };
-  }
-  if (rec.reverted) {
-    return { ok: false, error: 'Already reverted.' };
-  }
+  if (!rec || !rec.snapshotTree) return { ok: false, error: 'No git snapshot to revert to.' };
+  if (rec.reverted) return { ok: false, error: 'Already reverted.' };
   if (String(rec.runStatus || '').toLowerCase() === 'running') {
     return { ok: false, error: 'Agent is still running. Wait for it to finish, then try again.' };
   }
-  const folder = rec.folder;
-  if (!String(folder || '').trim()) {
-    return { ok: false, error: 'Missing folder for this cat.' };
-  }
-  const tree = rec.snapshotTree;
+  const folder = String(rec.folder || '').trim();
+  if (!folder) return { ok: false, error: 'Missing folder for this cat.' };
+
   try {
-    await execFileAsync('git', ['read-tree', '--reset', '-u', tree], {
-      cwd: folder,
-      encoding: 'utf8',
-    });
+    await execFileAsync('git', ['read-tree', '--reset', '-u', rec.snapshotTree], { cwd: folder, encoding: 'utf8' });
     await execFileAsync('git', ['clean', '-fd'], { cwd: folder, encoding: 'utf8' });
   } catch (e) {
     const msg = (e && e.message) || String(e);
     log.warn('revertAgentChanges failed', e);
     rec.revertError = msg;
+    persistConversation(id);
     onConversationPushed({ catId: id });
     return { ok: false, error: msg };
   }
+
   rec.reverted = true;
   rec.revertError = undefined;
-  rec.items.push({
-    kind: 'system',
-    text: 'Changes reverted to the folder state at spawn.',
-    at: now(),
-  });
+  rec.items.push({ kind: 'system', text: 'Changes reverted to the folder state at spawn.', at: now() });
+  persistConversation(id);
   onConversationPushed({ catId: id });
   return { ok: true };
 }
@@ -222,20 +249,14 @@ function terminateHermesProcess(entry) {
     } catch {
       /* ignore */
     }
-  }, 1000);
+  }, 1500);
 }
 
-/**
- * Dispose Hermes process + clear active entry (does not touch conversation map).
- * @param {string} catId
- * @param {{ log?: Console }} [opts]
- */
 async function disposeAgentResources(catId, opts = {}) {
   const { log = console } = opts;
   const id = String(catId);
   const entry = active.get(id);
   if (!entry) return;
-
   terminateHermesProcess(entry);
   if (entry.runPromise) {
     try {
@@ -247,28 +268,56 @@ async function disposeAgentResources(catId, opts = {}) {
   active.delete(id);
 }
 
+function conversationHasAssistantText(rec) {
+  return !!(rec && Array.isArray(rec.items) && rec.items.some((it) => it && it.kind === 'assistant' && String(it.text || '').length > 0));
+}
+
+function persistConversation(catId) {
+  const id = String(catId);
+  const rec = conversations.get(id);
+  if (!rec) return null;
+  return writeJsonSafe(id, 'conversation.json', getAgentConversation(id));
+}
+
 function appendAssistantChunk(catId, chunk) {
+  const id = String(catId);
   const text = String(chunk || '');
   if (!text) return;
-  const rec = conversations.get(String(catId));
+  const rec = conversations.get(id);
   if (!rec) return;
+  const pushedAt = now();
+
+  const flushStreamUpdate = (bubbleText, force = false) => {
+    const lastPushed = Number(rec.lastStreamPushedAt || 0);
+    const shouldPush = force || !lastPushed || pushedAt - lastPushed >= 75;
+    const lastPersisted = Number(rec.lastStreamPersistedAt || 0);
+    const shouldPersist = force || !lastPersisted || pushedAt - lastPersisted >= 150;
+    if (shouldPersist) {
+      rec.lastStreamPersistedAt = pushedAt;
+      persistConversation(id);
+    }
+    if (shouldPush) {
+      rec.lastStreamPushedAt = pushedAt;
+      onConversationPushed({ catId: id, streamBubble: bubbleText });
+    }
+  };
 
   const last = rec.items.length ? rec.items[rec.items.length - 1] : null;
   if (last && last.kind === 'assistant' && rec.activeAssistantBubble) {
     last.text = (last.text || '') + text;
-    last.at = now();
-    onConversationPushed({ catId: String(catId), streamBubble: leadAssistantBubbleText(last.text) });
+    last.at = pushedAt;
+    flushStreamUpdate(leadAssistantBubbleText(last.text));
     return;
   }
 
-  const line = { kind: 'assistant', text, at: now() };
-  rec.items.push(line);
+  rec.items.push({ kind: 'assistant', text, at: pushedAt });
   rec.activeAssistantBubble = true;
-  onConversationPushed({ catId: String(catId), streamBubble: leadAssistantBubbleText(text) });
+  flushStreamUpdate(leadAssistantBubbleText(text), true);
 }
 
 function replaceLastAssistantText(catId, text) {
-  const rec = conversations.get(String(catId));
+  const id = String(catId);
+  const rec = conversations.get(id);
   if (!rec) return;
   const value = String(text || '');
   for (let i = rec.items.length - 1; i >= 0; i--) {
@@ -276,33 +325,24 @@ function replaceLastAssistantText(catId, text) {
       rec.items[i].text = value;
       rec.items[i].at = now();
       rec.activeAssistantBubble = false;
-      onConversationPushed({ catId: String(catId), streamBubble: leadAssistantBubbleText(value) });
+      persistConversation(id);
+      onConversationPushed({ catId: id, streamBubble: leadAssistantBubbleText(value) });
       return;
     }
   }
-  if (value) {
-    rec.items.push({ kind: 'assistant', text: value, at: now() });
-  }
+  if (value) rec.items.push({ kind: 'assistant', text: value, at: now() });
   rec.activeAssistantBubble = false;
-  onConversationPushed({ catId: String(catId), streamBubble: leadAssistantBubbleText(value) });
+  persistConversation(id);
+  onConversationPushed({ catId: id, streamBubble: leadAssistantBubbleText(value) });
 }
 
-function conversationHasAssistantText(rec) {
-  if (!rec || !Array.isArray(rec.items)) return false;
-  return rec.items.some((it) => it && it.kind === 'assistant' && String(it.text || '').length > 0);
-}
-
-/**
- * @param {string} catId
- * @param {{ runtime?: AgentRuntime, folder: string, prompt: string, cloudRepo?: CloudRepoConfig | null, snapshotTree?: string, headShaAtSnapshot?: string | null, snapshotCapturedAt?: number }} params
- */
-function initConversationState(catId, { runtime, folder, prompt, cloudRepo, snapshotTree, headShaAtSnapshot, snapshotCapturedAt }) {
-  const rt = normalizeRuntime(runtime);
-  const repo = normalizeCloudRepoConfig(cloudRepo);
-  conversations.set(catId, {
-    runtime: rt,
+function initConversationState(catId, { runtime, folder, prompt, snapshotTree, headShaAtSnapshot, snapshotCapturedAt, pointerContext }) {
+  const id = String(catId);
+  conversations.set(id, {
+    runtime: normalizeRuntime(runtime),
     folder: String(folder || ''),
     prompt: String(prompt || ''),
+    pointerContext: pointerContext || null,
     items: prompt ? [{ kind: 'user', text: String(prompt), at: now() }] : [],
     runStatus: 'running',
     activeAssistantBubble: false,
@@ -311,11 +351,11 @@ function initConversationState(catId, { runtime, folder, prompt, cloudRepo, snap
     snapshotCapturedAt: snapshotCapturedAt != null ? snapshotCapturedAt : undefined,
     reverted: false,
     revertError: undefined,
-    cloudRepoUrl: repo?.url,
-    cloudStartingRef: repo?.startingRef,
-    gitBranches: undefined,
+    artifactDir: evalTraceEnabled ? getCatArtifactDir(id) : null,
+    hermesSessionId: undefined,
   });
-  onConversationPushed({ catId });
+  persistConversation(id);
+  onConversationPushed({ catId: id });
 }
 
 function getAgentConversation(catId) {
@@ -335,15 +375,9 @@ function getAgentConversation(catId) {
     canRevert: hasSnapshot,
     reverted: !!c.reverted,
     revertError: c.revertError != null ? String(c.revertError) : null,
-    cloudRepoUrl: c.cloudRepoUrl || null,
-    cloudStartingRef: c.cloudStartingRef || null,
-    gitBranches: Array.isArray(c.gitBranches)
-      ? c.gitBranches.map((b) => ({
-          repoUrl: b && b.repoUrl != null ? String(b.repoUrl) : '',
-          branch: b && b.branch != null ? String(b.branch) : undefined,
-          prUrl: b && b.prUrl != null ? String(b.prUrl) : undefined,
-        }))
-      : [],
+    hermesSessionId: c.hermesSessionId || null,
+    artifacts: getAgentArtifacts(String(catId)),
+    gitBranches: [],
   };
 }
 
@@ -357,6 +391,8 @@ function listAgentConversations() {
     runStatus: c.runStatus,
     durationMs: c.durationMs,
     startedAt: c.items && c.items.length ? c.items[0].at : c.snapshotCapturedAt || 0,
+    hermesSessionId: c.hermesSessionId || null,
+    artifacts: getAgentArtifacts(catId),
     canRevert: !!c.snapshotTree,
     reverted: !!c.reverted,
   }));
@@ -366,10 +402,6 @@ function deleteConversationState(catId) {
   conversations.delete(String(catId));
 }
 
-/**
- * @param {string} catId
- * @param {{ getMainWindow?: () => import('electron').BrowserWindow | null, log?: Console }} opts
- */
 async function dismissAgent(catId, opts = {}) {
   const { getMainWindow, log = console } = opts;
   const id = String(catId);
@@ -381,17 +413,41 @@ async function dismissAgent(catId, opts = {}) {
   }
 }
 
-const DEFAULT_AGENT_MODEL_ID = 'hermes-cli';
-const CLI_BIN_ENV = 'CURSORCATS_HERMES_BIN';
-const FALLBACK_EXECUTABLE_DIRS = [
-  '/opt/homebrew/bin',
-  '/usr/local/bin',
-  '/opt/local/bin',
-  '/usr/bin',
-  '/bin',
-];
-const JARVIS_HERMES_DIR = path.join(os.homedir(), 'Documents', 'jarvis');
-const JARVIS_HERMES_HOME = path.join(JARVIS_HERMES_DIR, '.aura', 'hermes-home');
+async function cancelAgent(catId, opts = {}) {
+  const { getMainWindow, log = console } = opts;
+  const id = String(catId);
+  const entry = active.get(id);
+  const rec = conversations.get(id);
+  if (!entry && !rec) return { ok: false, error: 'missing cat id' };
+  if (entry) terminateHermesProcess(entry);
+  if (rec && String(rec.runStatus || '').toLowerCase() === 'running') {
+    rec.runStatus = 'cancelled';
+    rec.endResult = 'cancelled by user';
+    rec.durationMs = rec.startedAt ? now() - rec.startedAt : undefined;
+    rec.activeAssistantBubble = false;
+    rec.items.push({ kind: 'system', text: 'Run cancelled.', at: now() });
+    persistConversation(id);
+    onConversationPushed({ catId: id });
+  }
+  const win = getMainWindow && getMainWindow();
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('agent-finished', {
+      catId: id,
+      status: 'cancelled',
+      result: 'cancelled by user',
+      durationMs: rec && rec.durationMs,
+      finishBubbleLine: finishBubbleLineFromConversation(rec),
+    });
+  }
+  recordTrace('cancel_completed', { catId: id, ok: true });
+  // Let the child close handler finish artifact export if it is still running;
+  // dispose after a short grace period to avoid orphaned processes.
+  setTimeout(() => {
+    const still = active.get(id);
+    if (still && still.process) terminateHermesProcess(still);
+  }, 1500);
+  return { ok: true };
+}
 
 function hermesCandidatesFromDir(dir) {
   const root = String(dir || '').trim();
@@ -406,41 +462,6 @@ function hermesCandidatesFromDir(dir) {
   ];
 }
 
-function defaultHermesCandidates() {
-  return hermesCandidatesFromDir(JARVIS_HERMES_DIR);
-}
-
-function isPathInside(childPath, parentPath) {
-  const child = path.resolve(String(childPath || ''));
-  const parent = path.resolve(String(parentPath || ''));
-  const rel = path.relative(parent, child);
-  return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
-}
-
-function directoryExists(dir) {
-  try {
-    return fs.statSync(dir).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-function getHermesHomeForCommand(command) {
-  if (process.env.HERMES_HOME) return null;
-  if (!directoryExists(JARVIS_HERMES_HOME)) return null;
-  if (isPathInside(command, JARVIS_HERMES_DIR)) return JARVIS_HERMES_HOME;
-  return null;
-}
-
-function getHermesEnvForCommand(command) {
-  const hermesHome = getHermesHomeForCommand(command);
-  return hermesHome ? { HERMES_HOME: hermesHome } : undefined;
-}
-
-function commandHasPathSeparator(command) {
-  return String(command || '').includes('/') || String(command || '').includes('\\');
-}
-
 function executableExists(filePath) {
   try {
     const st = fs.statSync(filePath);
@@ -450,6 +471,14 @@ function executableExists(filePath) {
   } catch {
     return false;
   }
+}
+
+function commandHasPathSeparator(command) {
+  return String(command || '').includes('/') || String(command || '').includes('\\');
+}
+
+function commandBaseName(command) {
+  return path.basename(String(command || '').trim()).replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
 }
 
 function findExecutable(command) {
@@ -464,151 +493,128 @@ function findExecutable(command) {
     } catch {
       /* ignore */
     }
-    if (path.basename(abs) === 'hermes') {
-      const venvHermes = hermesCandidatesFromDir(path.dirname(abs)).find(executableExists);
-      if (venvHermes) return venvHermes;
-    }
     return executableExists(abs) ? abs : null;
   }
 
-  const extensions = process.platform === 'win32' ? ['', '.exe', '.cmd', '.bat'] : [''];
   const dirs = String(process.env.PATH || '')
     .split(path.delimiter)
     .filter(Boolean)
-    .concat(FALLBACK_EXECUTABLE_DIRS);
+    .concat(SEARCH_EXECUTABLE_DIRS);
   const seen = new Set();
   for (const dir of dirs) {
     const resolvedDir = path.resolve(dir);
     if (seen.has(resolvedDir)) continue;
     seen.add(resolvedDir);
-    for (const ext of extensions) {
-      const candidate = path.join(resolvedDir, `${cmd}${ext}`);
-      if (executableExists(candidate)) return candidate;
-    }
+    const candidate = path.join(resolvedDir, cmd);
+    if (executableExists(candidate)) return candidate;
   }
   if (cmd === 'hermes') {
-    return defaultHermesCandidates().find(executableExists) || null;
+    return hermesCandidatesFromDir(JARVIS_HERMES_DIR).find(executableExists) || null;
   }
   return null;
 }
 
-function commandBaseName(command) {
-  return path
-    .basename(String(command || '').trim())
-    .replace(/\.(exe|cmd|bat)$/i, '')
-    .toLowerCase();
-}
-
-function extractHermesSessionId(text) {
-  const match = String(text || '').match(/\bsession_id:\s*([A-Za-z0-9_-]+)/);
-  return match ? match[1] : null;
-}
-
-function buildHermesArgs(prompt, sessionId) {
-  const args = ['chat', '-Q', '--yolo', '--source', 'cursorcats'];
-  const sid = String(sessionId || '').trim();
-  if (sid) args.push('--resume', sid);
-  args.push('-q', String(prompt || ''));
-  return args;
-}
-
-function buildLocalRunPrompt(prompt, entry) {
-  const userPrompt = String(prompt || '');
-  const folder = String(entry && entry.folder ? entry.folder : '').trim();
-  if (!folder) return userPrompt;
-  return [
-    'Cursor Cats run context:',
-    `- The selected current folder/worktree is: ${folder}`,
-    '- Interpret "this", "here", and "current folder" as that selected folder plus the live app state visible to the user.',
-    '- Do not inspect, edit, patch, test, or optimize files outside that selected folder unless the user explicitly asks for another path.',
-    '- Do not work on Jarvis, AURA, Hermes, or Cursor Cats internals unless that selected folder is one of those repositories.',
-    '- Keep changes minimal and directly tied to the user prompt.',
-    '',
-    'User prompt:',
-    userPrompt,
-  ].join('\n');
-}
-
-function buildCodexArgs(prompt) {
-  return [
-    'exec',
-    '--dangerously-bypass-approvals-and-sandbox',
-    '--skip-git-repo-check',
-    '--color',
-    'never',
-    String(prompt || ''),
-  ];
-}
-
-function buildNoCliFoundMessage() {
-  return [
-    'No local agent CLI was found.',
-    `Cursor Cats tried \`hermes\`, the Jarvis Hermes install at ${JARVIS_HERMES_DIR}, then \`codex\` as a fallback.`,
-    `Install Hermes so \`hermes\` is on PATH, or launch Cursor Cats with ${CLI_BIN_ENV}=/path/to/hermes.`,
-    `If Hermes lives in a Jarvis checkout, you can launch with ${CLI_BIN_ENV}=/path/to/jarvis.`,
-    `To use Codex instead, install the Codex CLI or launch with ${CLI_BIN_ENV}=codex.`,
-  ].join('\n');
-}
-
-function getCliRunner() {
-  const configured = String(process.env[CLI_BIN_ENV] || '').trim();
-  if (configured) {
-    const resolved = findExecutable(configured) || configured;
-    const isCodex = commandBaseName(resolved) === 'codex';
-    return {
-      displayName: isCodex ? 'Codex' : 'Hermes',
-      command: resolved,
-      argsForPrompt: isCodex ? buildCodexArgs : buildHermesArgs,
-      env: isCodex ? undefined : getHermesEnvForCommand(resolved),
-      configured: true,
-    };
+function directoryExists(dir) {
+  try {
+    return fs.statSync(dir).isDirectory();
+  } catch {
+    return false;
   }
+}
 
-  const hermes = findExecutable('hermes');
-  if (hermes) {
-    return {
-      displayName: 'Hermes',
-      command: hermes,
-      argsForPrompt: buildHermesArgs,
-      env: getHermesEnvForCommand(hermes),
-      configured: false,
-    };
-  }
+function isPathInside(childPath, parentPath) {
+  const child = path.resolve(String(childPath || ''));
+  const parent = path.resolve(String(parentPath || ''));
+  const rel = path.relative(parent, child);
+  return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+}
 
-  const codex = findExecutable('codex');
-  if (codex) {
-    return {
-      displayName: 'Codex',
-      command: codex,
-      argsForPrompt: buildCodexArgs,
-      configured: false,
-      fallback: true,
-    };
-  }
+function getHermesHomeForCommand(command) {
+  if (process.env.HERMES_HOME) return process.env.HERMES_HOME;
+  if (!directoryExists(JARVIS_HERMES_HOME)) return null;
+  if (isPathInside(command, JARVIS_HERMES_DIR)) return JARVIS_HERMES_HOME;
+  return null;
+}
 
+function buildHermesEnv(command) {
+  const hermesHome = getHermesHomeForCommand(command);
   return {
-    displayName: 'Local CLI',
-    errorMessage: buildNoCliFoundMessage(),
+    ...(hermesHome ? { HERMES_HOME: hermesHome } : {}),
+    HERMES_SESSION_SOURCE: HERMES_SOURCE,
   };
 }
 
-function formatLaunchError(error, runner) {
-  const msg = (error && error.message) || String(error);
-  if (error && error.code === 'ENOENT') {
-    const configured = runner && runner.configured ? `${CLI_BIN_ENV} is set to ${runner.command}.` : '';
-    const fallback =
-      runner && runner.fallback
-        ? '`hermes` was not found, so Cursor Cats tried the Codex CLI fallback.'
-        : 'Cursor Cats could not find the configured CLI executable.';
-    return [
-      `${runner.displayName} executable was not found: ${runner.command}`,
-      [configured, fallback].filter(Boolean).join(' '),
-      `Install Hermes so \`hermes\` is on PATH, or launch with ${CLI_BIN_ENV}=/path/to/hermes.`,
-      `If Hermes lives in a Jarvis checkout, launch with ${CLI_BIN_ENV}=/path/to/jarvis.`,
-      `If you want to use Codex, launch with ${CLI_BIN_ENV}=codex.`,
-    ].join('\n');
+function buildHermesRunEnv(baseEnv, cwd) {
+  const env = { ...(baseEnv || {}) };
+  const ankiRoot = process.env.AGENT_UI_EVAL_ANKI_ROOT || process.env.ANKI_BASE || '';
+  if (process.env.AGENT_UI_EVAL === '1' && ankiRoot) {
+    const root = path.resolve(String(ankiRoot));
+    const folderName = path.basename(path.resolve(String(cwd || process.cwd()))) || 'cat';
+    env.ANKI_BASE = path.join(root, folderName);
+    try {
+      fs.mkdirSync(env.ANKI_BASE, { recursive: true });
+    } catch {
+      /* best effort; Hermes/Anki will report a real failure if it cannot use it */
+    }
   }
-  return msg;
+  return env;
+}
+
+function artifactEnvSummary(env) {
+  const out = {};
+  for (const key of ['HERMES_HOME', 'HERMES_SESSION_SOURCE', 'ANKI_BASE']) {
+    if (env && env[key]) out[key] = env[key];
+  }
+  return out;
+}
+
+function buildHermesArgs(prompt, sessionId) {
+  const maxTurns = String(process.env.AGENT_UI_HERMES_MAX_TURNS || DEFAULT_MAX_TURNS);
+  const args = ['chat', '-q', String(prompt || ''), '--quiet', '--source', HERMES_SOURCE, '--pass-session-id', '--yolo', '--max-turns', maxTurns];
+  const sid = String(sessionId || '').trim();
+  if (sid) args.push('--resume', sid);
+  return args;
+}
+
+function buildNoHermesMessage(configured) {
+  const configuredMsg = configured ? `${CLI_BIN_ENV} is set to ${configured}. ` : '';
+  return `${configuredMsg}agent-UI requires Hermes. Set ${CLI_BIN_ENV} to a Hermes binary or Hermes checkout.`;
+}
+
+function getHermesRunner() {
+  const configured = String(process.env[CLI_BIN_ENV] || '').trim();
+  const requested = configured || 'hermes';
+  const resolved = findExecutable(requested);
+  if (!resolved) {
+    return { displayName: 'Hermes', errorMessage: buildNoHermesMessage(configured) };
+  }
+  if (commandBaseName(resolved) !== 'hermes') {
+    return {
+      displayName: 'Hermes',
+      errorMessage: `${CLI_BIN_ENV} must point to Hermes, not ${path.basename(resolved)}.`,
+      command: resolved,
+    };
+  }
+  return {
+    displayName: 'Hermes',
+    command: resolved,
+    env: buildHermesEnv(resolved),
+    configured: !!configured,
+  };
+}
+
+function extractHermesSessionId(text) {
+  const raw = String(text || '');
+  const patterns = [
+    /\bsession_id:\s*([A-Za-z0-9_-]+)/i,
+    /\bsession id:\s*([A-Za-z0-9_-]+)/i,
+    /\bSession:\s*([A-Za-z0-9_-]+)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
 }
 
 function getHermesCwd(folder) {
@@ -623,13 +629,21 @@ function getHermesCwd(folder) {
   return process.cwd();
 }
 
-function ensureHermesEntry(catId, target, modelId) {
+function buildLocalRunPrompt(prompt) {
+  // Keep Hermes input exactly what the user typed or dictated. agent-UI may
+  // collect folder, pointer, screenshot, and artifact metadata for UI/eval
+  // verification, but must not inject hidden context that helps the agent solve
+  // the task or changes the user's requested semantics.
+  return String(prompt || '');
+}
+
+function ensureHermesEntry(catId, target, modelId, pointerContext) {
   const id = String(catId);
   const normalizedTarget = normalizeAgentTarget(target);
   const modelIdStr = String(modelId || '').trim() || DEFAULT_AGENT_MODEL_ID;
   const existing = active.get(id);
-
   if (existing && sameAgentTarget(existing, normalizedTarget, modelIdStr)) {
+    existing.pointerContext = pointerContext || null;
     return existing;
   }
 
@@ -641,18 +655,275 @@ function ensureHermesEntry(catId, target, modelId) {
     busy: false,
     stdout: '',
     stderr: '',
+    stdoutBytes: 0,
+    stderrBytes: 0,
+    stdoutSeq: 0,
+    stderrSeq: 0,
     startedAt: undefined,
+    pointerContext: pointerContext || null,
+    firstOutputSeen: false,
+    artifactDir: evalTraceEnabled ? getCatArtifactDir(id) : null,
+    stdoutPath: evalTraceEnabled ? path.join(getCatArtifactDir(id), 'stdout.log') : null,
+    stderrPath: evalTraceEnabled ? path.join(getCatArtifactDir(id), 'stderr.log') : null,
   };
   active.set(id, entry);
   return entry;
 }
 
-/**
- * @param {string} catId
- * @param {(payload: { catId: string, status: string, result?: string, durationMs?: number, finishBubbleLine?: string }) => void} notify
- * @param {Console} log
- * @param {string} prompt
- */
+function getAgentArtifacts(catId) {
+  const id = String(catId);
+  const dir = evalTraceEnabled ? getCatArtifactDir(id) : null;
+  if (!dir) return null;
+  return {
+    dir,
+    input: path.join(dir, 'input.json'),
+    prompt: path.join(dir, 'prompt.txt'),
+    stdout: path.join(dir, 'stdout.log'),
+    stderr: path.join(dir, 'stderr.log'),
+    conversation: path.join(dir, 'conversation.json'),
+    hermesSession: path.join(dir, 'hermes-session.json'),
+    hermesSessionExport: path.join(dir, 'hermes-session-export.jsonl'),
+    toolEvents: path.join(dir, 'tool-events.jsonl'),
+    contextScreenshot: path.join(dir, 'screenshot-context.png'),
+    oracle: path.join(dir, 'oracle.json'),
+  };
+}
+
+function prepareArtifacts(catId, entry, fullPrompt, command, args, cwd, runEnv) {
+  const id = String(catId);
+  if (!evalTraceEnabled) return;
+  const rec = conversations.get(id);
+  const artifacts = getAgentArtifacts(id);
+  let contextScreenshot = null;
+  const sourceScreenshot = entry.pointerContext && entry.pointerContext.screenshotPath;
+  if (sourceScreenshot && fs.existsSync(sourceScreenshot)) {
+    try {
+      fs.copyFileSync(sourceScreenshot, artifacts.contextScreenshot);
+      contextScreenshot = artifacts.contextScreenshot;
+    } catch {
+      contextScreenshot = sourceScreenshot;
+    }
+  }
+  writeJsonSafe(id, 'input.json', {
+    catId: id,
+    folder: entry.folder,
+    runtime: entry.runtime,
+    modelId: entry.modelId,
+    command,
+    argsPreview: args.map((arg) => (arg === fullPrompt ? '<prompt>' : arg)),
+    cwd,
+    startedAt: new Date(entry.startedAt || now()).toISOString(),
+    prompt: textMeta(fullPrompt),
+    userPrompt: textMeta(rec ? rec.prompt : ''),
+    pointerContext: entry.pointerContext || null,
+    contextScreenshot,
+    environment: artifactEnvSummary(runEnv),
+  });
+  writeTextSafe(id, 'prompt.txt', fullPrompt);
+  writeTextSafe(id, 'stdout.log', '');
+  writeTextSafe(id, 'stderr.log', '');
+  writeTextSafe(id, 'tool-events.jsonl', '');
+  persistConversation(id);
+  recordTrace('cat_artifacts_ready', {
+    catId: id,
+    artifactDir: artifacts.dir,
+    promptPath: artifacts.prompt,
+    stdoutPath: artifacts.stdout,
+    stderrPath: artifacts.stderr,
+    contextScreenshot,
+  });
+}
+
+function traceStreamChunk(catId, stream, seq, chunk, totalBytes, pathName) {
+  const meta = textMeta(chunk);
+  recordTrace(`cli_${stream}_chunk`, {
+    catId: String(catId),
+    seq,
+    bytes: meta.bytes,
+    totalBytes,
+    sha256: meta.sha256,
+    preview: meta.preview,
+    artifactPath: pathName || null,
+  });
+}
+
+function sessionFilesDir(hermesHome) {
+  return hermesHome ? path.join(hermesHome, 'sessions') : null;
+}
+
+function readSessionJson(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function findHermesSessionFileById(hermesHome, sessionId) {
+  const dir = sessionFilesDir(hermesHome);
+  if (!dir || !sessionId || !fs.existsSync(dir)) return null;
+  const direct = path.join(dir, `session_${sessionId}.json`);
+  if (fs.existsSync(direct)) return direct;
+  const matches = fs.readdirSync(dir).filter((name) => name.includes(String(sessionId)) && name.endsWith('.json'));
+  return matches.length ? path.join(dir, matches[0]) : null;
+}
+
+function findHermesSessionFileByCatId(hermesHome, catId, startedAt) {
+  const dir = sessionFilesDir(hermesHome);
+  if (!dir || !fs.existsSync(dir)) return null;
+  const minMtime = Number(startedAt || 0) - 30000;
+  const files = fs.readdirSync(dir)
+    .filter((name) => name.endsWith('.json'))
+    .map((name) => path.join(dir, name))
+    .filter((file) => {
+      try {
+        return fs.statSync(file).mtimeMs >= minMtime;
+      } catch {
+        return false;
+      }
+    })
+    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+
+  const needle = `agent-UI cat id: ${catId}`;
+  for (const file of files) {
+    try {
+      const text = fs.readFileSync(file, 'utf8');
+      if (text.includes(needle) || text.includes(String(catId))) return file;
+    } catch {
+      /* ignore */
+    }
+  }
+  return null;
+}
+
+function toolCallName(toolCall) {
+  return String(
+    (toolCall && toolCall.function && toolCall.function.name) ||
+    (toolCall && toolCall.name) ||
+    ''
+  );
+}
+
+function toolCallArgs(toolCall) {
+  const args = (toolCall && toolCall.function && toolCall.function.arguments) || (toolCall && toolCall.arguments) || '';
+  return typeof args === 'string' ? args : JSON.stringify(args || {});
+}
+
+function writeToolEvents(catId, sessionJson, sessionId) {
+  const id = String(catId);
+  const messages = Array.isArray(sessionJson && sessionJson.messages) ? sessionJson.messages : [];
+  const callsById = new Map();
+  let callCount = 0;
+  let resultCount = 0;
+  writeTextSafe(id, 'tool-events.jsonl', '');
+
+  messages.forEach((msg, messageIndex) => {
+    const calls = Array.isArray(msg && msg.tool_calls) ? msg.tool_calls : [];
+    for (const call of calls) {
+      const toolCallId = String(call && call.id ? call.id : '');
+      const toolName = toolCallName(call);
+      const args = toolCallArgs(call);
+      callsById.set(toolCallId, { toolName, args });
+      callCount += 1;
+      appendJsonlSafe(id, 'tool-events.jsonl', {
+        type: 'tool_call',
+        catId: id,
+        hermesSessionId: sessionId || null,
+        messageIndex,
+        toolCallId,
+        toolName,
+        args,
+        argsMeta: textMeta(args),
+      });
+    }
+    if (msg && msg.role === 'tool') {
+      const toolCallId = String(msg.tool_call_id || '');
+      const prior = callsById.get(toolCallId) || {};
+      const result = String(msg.content || '');
+      resultCount += 1;
+      appendJsonlSafe(id, 'tool-events.jsonl', {
+        type: 'tool_result',
+        catId: id,
+        hermesSessionId: sessionId || null,
+        messageIndex,
+        toolCallId,
+        toolName: prior.toolName || String(msg.tool_name || ''),
+        result,
+        resultMeta: textMeta(result),
+      });
+    }
+  });
+
+  recordTrace('hermes_tool_events_exported', {
+    catId: id,
+    hermesSessionId: sessionId || null,
+    toolCallCount: callCount,
+    toolResultCount: resultCount,
+    artifactPath: getAgentArtifacts(id)?.toolEvents || null,
+  });
+}
+
+async function exportHermesSession({ catId, command, env, hermesHome, sessionId, startedAt }) {
+  const id = String(catId);
+  let resolvedSessionId = sessionId || null;
+  let sessionFile = resolvedSessionId ? findHermesSessionFileById(hermesHome, resolvedSessionId) : null;
+  if (!sessionFile) sessionFile = findHermesSessionFileByCatId(hermesHome, id, startedAt);
+  const sessionJson = sessionFile ? readSessionJson(sessionFile) : null;
+  if (sessionJson && sessionJson.session_id && !resolvedSessionId) {
+    resolvedSessionId = String(sessionJson.session_id);
+  }
+
+  const rec = conversations.get(id);
+  const entry = active.get(id);
+  if (resolvedSessionId) {
+    if (rec) rec.hermesSessionId = resolvedSessionId;
+    if (entry) entry.hermesSessionId = resolvedSessionId;
+  }
+
+  if (sessionJson) {
+    writeJsonSafe(id, 'hermes-session.json', sessionJson);
+    writeToolEvents(id, sessionJson, resolvedSessionId);
+  }
+
+  if (resolvedSessionId && command) {
+    const exportPath = getAgentArtifacts(id)?.hermesSessionExport;
+    if (exportPath) {
+      try {
+        await execFileAsync(command, ['sessions', 'export', exportPath, '--session-id', resolvedSessionId], {
+          env: { ...process.env, ...(env || {}) },
+          encoding: 'utf8',
+          timeout: 30000,
+        });
+      } catch (e) {
+        appendJsonlSafe(id, 'tool-events.jsonl', {
+          type: 'hermes_export_error',
+          catId: id,
+          hermesSessionId: resolvedSessionId,
+          error: (e && (e.stderr || e.message)) || String(e),
+        });
+      }
+    }
+  }
+
+  persistConversation(id);
+  recordTrace('hermes_session_exported', {
+    catId: id,
+    hermesSessionId: resolvedSessionId,
+    sessionFile: sessionFile || null,
+    artifactPath: getAgentArtifacts(id)?.hermesSession || null,
+    found: !!sessionJson,
+  });
+  return resolvedSessionId;
+}
+
+function formatLaunchError(error, runner) {
+  const msg = (error && error.message) || String(error);
+  if (error && error.code === 'ENOENT') {
+    return `Hermes executable was not found: ${runner.command}`;
+  }
+  return msg;
+}
+
 function runOnHermes(catId, notify, log, prompt) {
   const id = String(catId);
   const entry = active.get(id);
@@ -668,11 +939,24 @@ function runOnHermes(catId, notify, log, prompt) {
   entry.busy = true;
   entry.stdout = '';
   entry.stderr = '';
+  entry.stdoutBytes = 0;
+  entry.stderrBytes = 0;
+  entry.stdoutSeq = 0;
+  entry.stderrSeq = 0;
   entry.startedAt = now();
   entry.terminating = false;
+  entry.firstOutputSeen = false;
 
-  const runner = getCliRunner();
+  const runner = getHermesRunner();
   const cwd = getHermesCwd(entry.folder);
+  recordTrace('cli_runner_resolved', {
+    catId: id,
+    runner: runner.displayName,
+    command: runner.command || null,
+    cwd,
+    configured: !!runner.configured,
+    error: runner.errorMessage || null,
+  });
 
   if (runner.errorMessage) {
     const rec = conversations.get(id);
@@ -682,24 +966,25 @@ function runOnHermes(catId, notify, log, prompt) {
       rec.endResult = runner.errorMessage;
       rec.durationMs = 0;
       rec.activeAssistantBubble = false;
+      persistConversation(id);
       onConversationPushed({ catId: id });
     }
     entry.busy = false;
     entry.runPromise = undefined;
-    notify({
-      catId: id,
-      status: 'error',
-      result: runner.errorMessage,
-      durationMs: 0,
-      finishBubbleLine: finishBubbleLineFromConversation(rec),
-    });
+    recordTrace('terminal_state_rendered', { catId: id, status: 'error', reason: 'missing_hermes' });
+    notify({ catId: id, status: 'error', result: runner.errorMessage, durationMs: 0, finishBubbleLine: finishBubbleLineFromConversation(rec) });
     return Promise.resolve();
   }
 
   const command = runner.command;
   const recForSession = conversations.get(id);
   const sessionId = entry.hermesSessionId || recForSession?.hermesSessionId;
-  const args = runner.argsForPrompt(buildLocalRunPrompt(prompt, entry), sessionId);
+  const fullPrompt = buildLocalRunPrompt(prompt);
+  const args = buildHermesArgs(fullPrompt, sessionId);
+  const runEnv = buildHermesRunEnv(runner.env, cwd);
+  const artifactPrepStartedAt = now();
+  prepareArtifacts(id, entry, fullPrompt, command, args, cwd, runEnv);
+  recordTrace('cat_artifact_prepare_completed', { catId: id, durationMs: now() - artifactPrepStartedAt });
 
   const work = new Promise((resolve) => {
     let settled = false;
@@ -708,79 +993,135 @@ function runOnHermes(catId, notify, log, prompt) {
       cwd,
       env: {
         ...process.env,
-        ...(runner.env || {}),
+        ...runEnv,
       },
       windowsHide: true,
     });
     entry.process = child;
+    recordTrace('cli_process_started', {
+      catId: id,
+      runner: runner.displayName,
+      command,
+      pid: child.pid || null,
+      cwd,
+    });
 
     const finish = (code, signal) => {
       if (settled) return;
       settled = true;
-      const endedAt = now();
-      const durationMs = entry.startedAt ? endedAt - entry.startedAt : undefined;
-      const rec = conversations.get(id);
-      const stdoutText = String(entry.stdout || '').trim();
-      const stderrText = String(entry.stderr || '').trim();
-      const launchErrorText = launchError ? formatLaunchError(launchError, runner) : '';
-      const hermesSessionId = extractHermesSessionId(`${stderrText}\n${stdoutText}`);
+      void (async () => {
+        const endedAt = now();
+        const durationMs = entry.startedAt ? endedAt - entry.startedAt : undefined;
+        const rec = conversations.get(id);
+        const stdoutText = String(entry.stdout || '').trim();
+        const stderrText = String(entry.stderr || '').trim();
+        const launchErrorText = launchError ? formatLaunchError(launchError, runner) : '';
+        let hermesSessionId = extractHermesSessionId(`${stderrText}\n${stdoutText}`);
 
-      const status = launchError
-        ? 'error'
-        : entry.terminating
-          ? 'cancelled'
-          : Number(code) === 0
-            ? 'completed'
-            : 'error';
-      const errorText = [stderrText, launchErrorText]
-        .filter(Boolean)
-        .join('\n') || (status === 'error' && !stdoutText ? `${runner.displayName} exited with no output.` : '');
+        const status = launchError
+          ? 'error'
+          : entry.terminating
+            ? 'cancelled'
+            : Number(code) === 0
+              ? 'completed'
+              : 'error';
+        const errorText = [stderrText, launchErrorText].filter(Boolean).join('\n') ||
+          (status === 'error' && !stdoutText ? 'Hermes exited with no output.' : '');
 
-      if (rec) {
-        if (hermesSessionId) {
-          rec.hermesSessionId = hermesSessionId;
-          entry.hermesSessionId = hermesSessionId;
+        if (rec) {
+          if (hermesSessionId) {
+            rec.hermesSessionId = hermesSessionId;
+            entry.hermesSessionId = hermesSessionId;
+          }
+          if (stdoutText && !conversationHasAssistantText(rec)) {
+            replaceLastAssistantText(id, stdoutText);
+          }
+          if (status === 'error' && errorText) {
+            rec.items.push({ kind: 'error', text: errorText, at: now() });
+          }
+          if (status !== 'error' && !conversationHasAssistantText(rec)) {
+            replaceLastAssistantText(id, 'Hermes returned no visible output.');
+          }
+          rec.runStatus = status;
+          rec.endResult = launchErrorText || `exit ${code ?? 'unknown'}`;
+          if (signal) rec.endResult += ` (${signal})`;
+          rec.durationMs = durationMs;
+          rec.activeAssistantBubble = false;
         }
-        if (stdoutText && !conversationHasAssistantText(rec)) {
-          replaceLastAssistantText(id, stdoutText);
-        }
-        if (status === 'error' && errorText) {
-          rec.items.push({ kind: 'error', text: errorText, at: now() });
-        }
-        if (status !== 'error' && !conversationHasAssistantText(rec)) {
-          replaceLastAssistantText(id, `${runner.displayName} returned no output.`);
-        }
-        rec.runStatus = status;
-        rec.endResult = launchErrorText || `exit ${code ?? 'unknown'}`;
-        if (signal) rec.endResult += ` (${signal})`;
-        rec.durationMs = durationMs;
-        rec.activeAssistantBubble = false;
+
+        hermesSessionId = await exportHermesSession({
+          catId: id,
+          command,
+          env: runEnv,
+          hermesHome: runEnv && runEnv.HERMES_HOME ? runEnv.HERMES_HOME : getHermesHomeForCommand(command),
+          sessionId: hermesSessionId,
+          startedAt: entry.startedAt,
+        });
+
+        if (rec && hermesSessionId) rec.hermesSessionId = hermesSessionId;
+        persistConversation(id);
         onConversationPushed({ catId: id });
-      }
 
-      entry.process = null;
-      entry.busy = false;
-      entry.runPromise = undefined;
+        entry.process = null;
+        entry.busy = false;
+        entry.runPromise = undefined;
 
-      notify({
-        catId: id,
-        status,
-        result: undefined,
-        durationMs,
-        finishBubbleLine: finishBubbleLineFromConversation(rec),
+        recordTrace('terminal_state_rendered', {
+          catId: id,
+          status,
+          durationMs,
+          endResult: rec && rec.endResult ? rec.endResult : null,
+          hermesSessionId: hermesSessionId || null,
+          artifacts: getAgentArtifacts(id),
+        });
+        notify({
+          catId: id,
+          status,
+          result: undefined,
+          durationMs,
+          finishBubbleLine: finishBubbleLineFromConversation(rec),
+        });
+        resolve();
+      })().catch((e) => {
+        log.warn('Hermes finish handling failed', e);
+        resolve();
       });
-      resolve();
     };
 
     child.stdout.on('data', (data) => {
       const chunk = data.toString('utf8');
       entry.stdout += chunk;
+      entry.stdoutSeq += 1;
+      const bytes = Buffer.byteLength(chunk);
+      entry.stdoutBytes += bytes;
+      const artifactPath = appendTextSafe(id, 'stdout.log', chunk);
+      traceStreamChunk(id, 'stdout', entry.stdoutSeq, chunk, entry.stdoutBytes, artifactPath);
+      if (!entry.firstOutputSeen && chunk.trim()) {
+        entry.firstOutputSeen = true;
+        recordTrace('first_cli_output', { catId: id, bytes, artifactPath });
+      }
       appendAssistantChunk(id, chunk);
     });
+
     child.stderr.on('data', (data) => {
       const chunk = data.toString('utf8');
       entry.stderr += chunk;
+      entry.stderrSeq += 1;
+      const bytes = Buffer.byteLength(chunk);
+      entry.stderrBytes += bytes;
+      const artifactPath = appendTextSafe(id, 'stderr.log', chunk);
+      traceStreamChunk(id, 'stderr', entry.stderrSeq, chunk, entry.stderrBytes, artifactPath);
+      const sid = extractHermesSessionId(chunk);
+      if (sid) {
+        entry.hermesSessionId = sid;
+        const rec = conversations.get(id);
+        if (rec) {
+          rec.hermesSessionId = sid;
+          persistConversation(id);
+        }
+      }
     });
+
     child.once('error', (e) => {
       launchError = e;
       finish(127, null);
@@ -792,29 +1133,25 @@ function runOnHermes(catId, notify, log, prompt) {
   return work;
 }
 
-async function runAgentLifecycle({ catId, folder, prompt, model, runtime, cloudRepo, notify, log }) {
+async function runAgentLifecycle({ catId, folder, prompt, model, runtime, pointerContext, notify, log }) {
   const id = String(catId);
-  const target = normalizeAgentTarget({ runtime, folder, cloudRepo });
+  const target = normalizeAgentTarget({ runtime, folder });
   const snap = await captureGitSnapshotForFolder(String(target.folder), log);
   initConversationState(id, {
     runtime: target.runtime,
     folder: target.folder,
     prompt,
-    cloudRepo: null,
+    pointerContext,
     snapshotTree: snap?.tree,
     headShaAtSnapshot: snap?.headSha != null ? snap.headSha : undefined,
     snapshotCapturedAt: snap?.capturedAt,
   });
 
-  ensureHermesEntry(id, target, model);
+  ensureHermesEntry(id, target, model, pointerContext);
   void runOnHermes(id, notify, log, String(prompt));
 }
 
-/**
- * Starts an async Hermes CLI run for this cat. Does not block. Completion is
- * reported via `agent-finished` on the main window.
- */
-function startAgentForCat({ catId, folder, prompt, model, runtime, cloudRepo }, { getMainWindow, log = console } = {}) {
+function startAgentForCat({ catId, folder, prompt, model, runtime, pointerContext }, { getMainWindow, log = console } = {}) {
   const notify = getNotify(getMainWindow);
   void runAgentLifecycle({
     catId: String(catId),
@@ -822,17 +1159,12 @@ function startAgentForCat({ catId, folder, prompt, model, runtime, cloudRepo }, 
     prompt,
     model,
     runtime,
-    cloudRepo,
+    pointerContext,
     notify,
     log,
   });
 }
 
-/**
- * @param {string} catId
- * @param {string} text
- * @param {{ getMainWindow?: () => import('electron').BrowserWindow | null, log?: Console }} opts
- */
 function sendFollowup(catId, text, opts = {}) {
   const { getMainWindow, log = console } = opts;
   const id = String(catId);
@@ -850,21 +1182,19 @@ function sendFollowup(catId, text, opts = {}) {
   }
 
   const rec = conversations.get(id);
-  if (rec) {
-    rec.items.push({ kind: 'user', text: t, at: now() });
-    rec.runStatus = 'running';
-    rec.endResult = undefined;
-    rec.durationMs = undefined;
-    rec.activeAssistantBubble = false;
-    onConversationPushed({ catId: id });
-  }
+  rec.items.push({ kind: 'user', text: t, at: now() });
+  rec.runStatus = 'running';
+  rec.endResult = undefined;
+  rec.durationMs = undefined;
+  rec.activeAssistantBubble = false;
+  persistConversation(id);
+  onConversationPushed({ catId: id });
 
   notifyRestarted(getMainWindow, id);
   const notify = getNotify(getMainWindow);
   void runOnHermes(id, notify, log, t);
 }
 
-/** Best-effort cancel in-flight runs (e.g. app quit). */
 function cancelAllAgents() {
   for (const [, entry] of active) {
     terminateHermesProcess(entry);
@@ -880,6 +1210,8 @@ module.exports = {
   setOnConversationPushed,
   deleteConversationState,
   dismissAgent,
+  cancelAgent,
   sendFollowup,
   revertAgentChanges,
+  getAgentArtifacts,
 };

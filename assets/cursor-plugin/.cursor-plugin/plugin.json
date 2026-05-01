@@ -1,5 +1,5 @@
 {
-  "name": "cursorcats",
-  "description": "Sends agent session events to the Cursor Cats desktop pet so cats appear for IDE Agent runs.",
+  "name": "agent-ui",
+  "description": "Sends agent session events to the agent-UI desktop pet so cats appear for IDE Agent runs.",
   "version": "1.0.0"
 }

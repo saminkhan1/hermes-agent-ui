@@ -7,7 +7,7 @@ const os = require('os');
 const { randomBytes } = require('crypto');
 
 function getIpcFilePath() {
-  const dir = path.join(os.homedir(), '.cursorcats');
+  const dir = path.join(os.homedir(), '.agent-ui');
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
@@ -38,15 +38,15 @@ function startHookServer(options = {}) {
           const body = Buffer.concat(chunks).toString('utf8') || '{}';
           json = JSON.parse(body);
         } catch (e) {
-          log.warn('[cursorcats] hook server: bad JSON', e);
+          log.warn('[agent-ui] hook server: bad JSON', e);
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end('{}');
           return;
         }
         const eventName = json && typeof json === 'object' ? json.event : undefined;
-        log.log('[cursorcats] hook event received:', eventName);
+        log.log('[agent-ui] hook event received:', eventName);
         if (json == null || typeof json !== 'object' || json.token !== serverToken) {
-          log.log('[cursorcats] hook event rejected: bad token');
+          log.log('[agent-ui] hook event rejected: bad token');
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end('{}');
           return;
@@ -56,15 +56,15 @@ function startHookServer(options = {}) {
         try {
           if (event === 'ide-session-start' && typeof onIdeSessionStart === 'function') {
             const sid = payload && payload.session_id != null ? String(payload.session_id) : '';
-            log.log('[cursorcats] dispatching ide-session-start session=', sid);
+            log.log('[agent-ui] dispatching ide-session-start session=', sid);
             onIdeSessionStart(payload);
           } else if (event === 'ide-session-end' && typeof onIdeSessionEnd === 'function') {
             const sid = payload && payload.session_id != null ? String(payload.session_id) : '';
-            log.log('[cursorcats] dispatching ide-session-end session=', sid);
+            log.log('[agent-ui] dispatching ide-session-end session=', sid);
             onIdeSessionEnd(payload);
           }
         } catch (e) {
-          log.warn('[cursorcats] hook handler error', e);
+          log.warn('[agent-ui] hook handler error', e);
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end('{}');
@@ -72,7 +72,7 @@ function startHookServer(options = {}) {
     });
 
     server.on('error', (e) => {
-      log.warn('[cursorcats] hook server error', e);
+      log.warn('[agent-ui] hook server error', e);
     });
 
     server.listen(0, '127.0.0.1', () => {
@@ -87,7 +87,7 @@ function startHookServer(options = {}) {
           // ignore
         }
       } catch (e) {
-        log.warn('[cursorcats] could not write ipc.json', e);
+        log.warn('[agent-ui] could not write ipc.json', e);
         server.close();
         reject(e);
         return;
@@ -96,14 +96,14 @@ function startHookServer(options = {}) {
         try {
           server.close();
         } catch (e) {
-          log.warn('[cursorcats] hook server close', e);
+          log.warn('[agent-ui] hook server close', e);
         }
         try {
           if (fs.existsSync(ipcFilePath)) {
             fs.unlinkSync(ipcFilePath);
           }
         } catch (e) {
-          log.warn('[cursorcats] could not remove ipc.json', e);
+          log.warn('[agent-ui] could not remove ipc.json', e);
         }
       };
       resolve({ port, closeSync });

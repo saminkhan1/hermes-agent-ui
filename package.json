@@ -1,10 +1,10 @@
 {
-  "name": "cursorcats",
+  "name": "agent-ui",
   "version": "1.0.0",
   "description": "Frameless transparent desktop cat pet with sprite animation",
   "main": "out/main/index.js",
   "bin": {
-    "cursorcats": "bin/cursorcats.js"
+    "agent-ui": "bin/agent-ui.js"
   },
   "files": [
     "bin",
@@ -19,7 +19,10 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
-    "prepare": "electron-vite build"
+    "prepare": "electron-vite build",
+    "eval:human": "./autoresearch.sh",
+    "eval:checks": "./autoresearch.checks.sh",
+    "eval:voice-smoke": "node eval/human-e2e/run.js --preflight-only && swift eval/human-e2e/swift/AgentUISpeech.swift"
   },
   "keywords": [
     "electron",

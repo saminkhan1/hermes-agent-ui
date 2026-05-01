@@ -1,5 +1,5 @@
 /**
- * POSTs to the cursorcats hook server and resolves when the request finishes
+ * POSTs to the agent-ui hook server and resolves when the request finishes
  * (response body drained, network error, or timeout). Callers must await before
  * process.exit so the TCP write is not torn down mid-flight.
  */
@@ -9,7 +9,7 @@ const path = require('path');
 const os = require('os');
 
 function getHookDebugLogPath() {
-  return path.join(os.homedir(), '.cursorcats', 'hook-debug.log');
+  return path.join(os.homedir(), '.agent-ui', 'hook-debug.log');
 }
 
 /**
@@ -17,7 +17,7 @@ function getHookDebugLogPath() {
  */
 function appendHookDebug(line) {
   try {
-    const dir = path.join(os.homedir(), '.cursorcats');
+    const dir = path.join(os.homedir(), '.agent-ui');
     fs.mkdirSync(dir, { recursive: true });
     fs.appendFileSync(getHookDebugLogPath(), `[${new Date().toISOString()}] ${line}\n`);
   } catch {
@@ -26,7 +26,7 @@ function appendHookDebug(line) {
 }
 
 function getIpcPath() {
-  return path.join(os.homedir(), '.cursorcats', 'ipc.json');
+  return path.join(os.homedir(), '.agent-ui', 'ipc.json');
 }
 
 /**

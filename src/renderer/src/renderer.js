@@ -1,4 +1,4 @@
-/* global cursorcats */
+/* global agentUI */
 (function () {
   const MARGIN = 8;
   /** Matches `.cat-stream-bubble` / `.cat-finish-bubble` translateY `calc(-100% + Npx)`. */
@@ -77,6 +77,11 @@
   const ctx = canvas.getContext('2d', { alpha: true });
   const bubbleLayer = document.getElementById('bubble-layer');
 
+  function traceEvalEvent(type, payload = {}) {
+    if (!window.agentUI || typeof window.agentUI.traceEvalEvent !== 'function') return;
+    window.agentUI.traceEvalEvent({ type, ...payload });
+  }
+
   /** Finish bubbles: keep short; they only stay on screen for `FINISH_BUBBLE_MS`. */
   const FINISH_BUBBLE_MS = 30 * 1000;
   /** Live assistant “cat line” bubble while the agent is streaming. */
@@ -133,12 +138,12 @@
   }
 
   function reportCatCountsIfChanged() {
-    if (!window.cursorcats || typeof window.cursorcats.reportCatCounts !== 'function') return;
+    if (!window.agentUI || typeof window.agentUI.reportCatCounts !== 'function') return;
     const snap = snapshotCatCounts();
     const key = `${snap.active},${snap.inReview}`;
     if (key === lastSentCatCountsKey) return;
     lastSentCatCountsKey = key;
-    window.cursorcats.reportCatCounts(snap);
+    window.agentUI.reportCatCounts(snap);
   }
 
   /** Last frontmost window id from main; used to detect focus changes and drop perched cats. */
@@ -177,7 +182,7 @@
   async function readCatManifestPaths() {
     const fallback = ['sprite.json'];
     try {
-      const text = await window.cursorcats.readTextFile('assets/cats/cats.json');
+      const text = await window.agentUI.readTextFile('assets/cats/cats.json');
       const data = JSON.parse(text);
       const arr = data && data.manifests;
       if (!Array.isArray(arr)) return fallback;
@@ -724,10 +729,10 @@
     if (cat.finishedAt == null) return;
     if (ts - cat.finishedAt < FINISH_RESHOW_INTERVAL_MS) return;
     if (ts < (cat.nextFinishReshowAttemptAt || 0)) return;
-    if (!window.cursorcats || typeof window.cursorcats.getFrontmostWindowBounds !== 'function') return;
+    if (!window.agentUI || typeof window.agentUI.getFrontmostWindowBounds !== 'function') return;
     cat.finishReshowPending = true;
     cat.nextFinishReshowAttemptAt = ts + FINISH_RESHOW_RETRY_MS;
-    window.cursorcats
+    window.agentUI
       .getFrontmostWindowInfo()
       .then((info) => {
         cat.finishReshowPending = false;
@@ -750,10 +755,10 @@
     if (!PERCH_ON_OTHER_WINDOWS) return;
     if (cat.finished) return;
     if (Math.random() >= PERCH_CHANCE_PER_IDLE) return;
-    if (!window.cursorcats || typeof window.cursorcats.getFrontmostWindowInfo !== 'function') return;
+    if (!window.agentUI || typeof window.agentUI.getFrontmostWindowInfo !== 'function') return;
     try {
       if (cat.state !== 'idle') return;
-      const info = await window.cursorcats.getFrontmostWindowInfo();
+      const info = await window.agentUI.getFrontmostWindowInfo();
       if (cat.state !== 'idle') return;
       const b = info && info.bounds;
       if (!b) return;
@@ -799,9 +804,9 @@
 
   async function pollStableFrontWindow() {
     if (!PERCH_ON_OTHER_WINDOWS) return;
-    if (!window.cursorcats || typeof window.cursorcats.getFrontmostWindowInfo !== 'function') return;
+    if (!window.agentUI || typeof window.agentUI.getFrontmostWindowInfo !== 'function') return;
     try {
-      const info = await window.cursorcats.getFrontmostWindowInfo();
+      const info = await window.agentUI.getFrontmostWindowInfo();
       const id = info && info.id != null ? info.id : null;
       const bounds = info && info.bounds;
       const ts = performance.now();
@@ -1054,8 +1059,8 @@
         cat.lastPerchQueryAt = ts;
         cat.perchCheckPending = true;
         const p0 = { left: cat.perch.left, right: cat.perch.right, top: cat.perch.top };
-        if (window.cursorcats && typeof window.cursorcats.getFrontmostWindowBounds === 'function') {
-          window.cursorcats
+        if (window.agentUI && typeof window.agentUI.getFrontmostWindowBounds === 'function') {
+          window.agentUI
             .getFrontmostWindowBounds()
             .then((b) => {
               cat.perchCheckPending = false;
@@ -1279,7 +1284,7 @@
   }
 
   function postCatScreenRects() {
-    if (!window.cursorcats || typeof window.cursorcats.postCatScreenRects !== 'function') return;
+    if (!window.agentUI || typeof window.agentUI.postCatScreenRects !== 'function') return;
     const wx = window.screenX ?? window.screenLeft ?? 0;
     const wy = window.screenY ?? window.screenTop ?? 0;
     const rects = [];
@@ -1287,13 +1292,14 @@
       if (!cat.catId) continue;
       const r = getHitboxRect(cat);
       rects.push({
+        catId: String(cat.catId),
         left: wx + r.x,
         top: wy + r.y,
         right: wx + r.x + r.w,
         bottom: wy + r.y + r.h,
       });
     }
-    window.cursorcats.postCatScreenRects(rects);
+    window.agentUI.postCatScreenRects(rects);
   }
 
   function gameLoop(ts) {
@@ -1321,13 +1327,13 @@
   /** Load and cache the sprite manifest + image for a given `assets/cats/`-relative path. */
   async function loadCatAssets(manifestRel) {
     if (assetCache.has(manifestRel)) return assetCache.get(manifestRel);
-    const text = await window.cursorcats.readTextFile(`assets/cats/${manifestRel}`);
+    const text = await window.agentUI.readTextFile(`assets/cats/${manifestRel}`);
     const manifest = JSON.parse(text);
     if (!manifest || !manifest.image) {
       throw new Error(`Manifest missing image: ${manifestRel}`);
     }
     const imageRel = resolveCatImagePath(manifestRel, manifest.image);
-    const url = await window.cursorcats.getAssetFileUrl(imageRel);
+    const url = await window.agentUI.getAssetFileUrl(imageRel);
     const img = await new Promise((resolve, reject) => {
       const im = new Image();
       im.onload = () => resolve(im);
@@ -1506,10 +1512,10 @@
     cat.ideRemovalTimer = setTimeout(() => {
       cat.ideRemovalTimer = null;
       const id = cat.catId != null ? String(cat.catId) : '';
-      if (!id || !window.cursorcats || typeof window.cursorcats.dismissCat !== 'function') return;
+      if (!id || !window.agentUI || typeof window.agentUI.dismissCat !== 'function') return;
       const still = cats.find((c) => c.catId != null && String(c.catId) === id);
       if (!still) return;
-      window.cursorcats.dismissCat(id);
+      window.agentUI.dismissCat(id);
     }, IDE_FINISH_REMOVE_MS);
   }
 
@@ -1603,6 +1609,13 @@
       cat.streamBubbleEl = el;
     }
     cat.streamBubbleEl.textContent = cat.streamBubbleText;
+    if (!cat.streamBubbleTraceSent) {
+      cat.streamBubbleTraceSent = true;
+      traceEvalEvent('stream_bubble_rendered', {
+        catId: cat.catId != null ? String(cat.catId) : null,
+        textLength: String(cat.streamBubbleText || '').length,
+      });
+    }
     scheduleStreamBubbleAutoHide(cat);
   }
 
@@ -1791,6 +1804,11 @@
     cat.savedFinishBubbleLine = line;
     cat.finishBubbleText = line;
     ensureFinishBubbleDom(cat);
+    traceEvalEvent('terminal_visual_rendered', {
+      catId: cat.catId != null ? String(cat.catId) : null,
+      status,
+      textLength: String(line || '').length,
+    });
     if (cat.kind === 'ide') {
       scheduleIdeCatRemoval(cat);
     }
@@ -1812,6 +1830,7 @@
     cat.endStatus = null;
     cat.endResult = null;
     cat.savedFinishBubbleLine = null;
+    cat.streamBubbleTraceSent = false;
     cat.sprinting = false;
     cat.perch = null;
     cat.perchLeaving = false;
@@ -1848,13 +1867,24 @@
     reportCatCountsIfChanged();
   }
 
+  let catAssetPrewarmPromise = null;
+
+  function prewarmCatAssets() {
+    if (catAssetPrewarmPromise) return catAssetPrewarmPromise;
+    catAssetPrewarmPromise = (async () => {
+      if (!manifestPaths) manifestPaths = await readCatManifestPaths();
+      await Promise.allSettled(manifestPaths.map((manifestRel) => loadCatAssets(manifestRel)));
+    })();
+    return catAssetPrewarmPromise;
+  }
+
   async function spawnCat(payload) {
     // eslint-disable-next-line no-console
-    console.log('[cursorcats] spawnCat received', {
+    console.log('[agent-ui] spawnCat received', {
       catId: payload && payload.catId,
       kind: payload && payload.kind,
     });
-    if (!window.cursorcats) return;
+    if (!window.agentUI) return;
     try {
       if (!manifestPaths) manifestPaths = await readCatManifestPaths();
       const manifestRel = pickRandomManifest(manifestPaths);
@@ -1862,6 +1892,10 @@
       const spriteSource = buildHueSprite(img);
       const cat = makeCat(manifest, spriteSource, payload, hitbox);
       cats.push(cat);
+      traceEvalEvent('cat_spawn_rendered', {
+        catId: cat.catId != null ? String(cat.catId) : null,
+        kind: cat.kind || null,
+      });
       if (cat.catId && pendingFinishes.has(String(cat.catId))) {
         const p = pendingFinishes.get(String(cat.catId));
         pendingFinishes.delete(String(cat.catId));
@@ -1871,46 +1905,46 @@
       }
     } catch (e) {
       // eslint-disable-next-line no-console
-      console.error('[cursorcats] Failed to spawn cat', { payload, err: e });
+      console.error('[agent-ui] Failed to spawn cat', { payload, err: e });
     }
     reportCatCountsIfChanged();
   }
 
   async function boot() {
     setupCanvasSize();
-    if (!window.cursorcats) {
+    if (!window.agentUI) {
       // eslint-disable-next-line no-console
-      console.warn('cursorcats API missing (preload not loaded?)');
+      console.warn('agent-ui API missing (preload not loaded?)');
       const fallback = document.createElement('div');
       fallback.className = 'browser-fallback';
       fallback.innerHTML = [
-        '<strong>Cursor-Cats is running as an Electron overlay.</strong>',
+        '<strong>agent-UI is running as an Electron overlay.</strong>',
         '<span>This localhost page is only the renderer bundle. Use the Electron app and press <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> to launch a cat.</span>',
       ].join('');
       document.body.appendChild(fallback);
     } else {
-      if (typeof window.cursorcats.onSpawnCat === 'function') {
-        window.cursorcats.onSpawnCat((p) => {
+      if (typeof window.agentUI.onSpawnCat === 'function') {
+        window.agentUI.onSpawnCat((p) => {
           spawnCat(p);
         });
       }
-      if (typeof window.cursorcats.onAgentFinished === 'function') {
-        window.cursorcats.onAgentFinished((ev) => {
+      if (typeof window.agentUI.onAgentFinished === 'function') {
+        window.agentUI.onAgentFinished((ev) => {
           markAgentFinished(ev);
         });
       }
-      if (typeof window.cursorcats.onAgentStreamBubble === 'function') {
-        window.cursorcats.onAgentStreamBubble((ev) => {
+      if (typeof window.agentUI.onAgentStreamBubble === 'function') {
+        window.agentUI.onAgentStreamBubble((ev) => {
           applyAgentStreamBubble(ev);
         });
       }
-      if (typeof window.cursorcats.onAgentRestarted === 'function') {
-        window.cursorcats.onAgentRestarted((ev) => {
+      if (typeof window.agentUI.onAgentRestarted === 'function') {
+        window.agentUI.onAgentRestarted((ev) => {
           if (ev && ev.catId != null) reactivateCat(ev.catId);
         });
       }
-      if (typeof window.cursorcats.onRemoveCat === 'function') {
-        window.cursorcats.onRemoveCat((payload) => {
+      if (typeof window.agentUI.onRemoveCat === 'function') {
+        window.agentUI.onRemoveCat((payload) => {
           if (!payload || payload.catId == null) return;
           const rid = String(payload.catId);
           pendingFinishes.delete(rid);
@@ -1924,29 +1958,31 @@
           }
         });
       }
-      if (typeof window.cursorcats.onClearFinishedCats === 'function') {
-        window.cursorcats.onClearFinishedCats(() => {
+      if (typeof window.agentUI.onClearFinishedCats === 'function') {
+        window.agentUI.onClearFinishedCats(() => {
           const ids = cats
             .filter((c) => c.finished || c.finishReshowing)
             .map((c) => c.catId)
             .filter((id) => id != null)
             .map((id) => String(id));
-          if (!window.cursorcats || typeof window.cursorcats.dismissCat !== 'function') return;
+          if (!window.agentUI || typeof window.agentUI.dismissCat !== 'function') return;
           for (const id of ids) {
-            window.cursorcats.dismissCat(id);
+            window.agentUI.dismissCat(id);
           }
         });
       }
-      if (PERCH_ON_OTHER_WINDOWS && typeof window.cursorcats.getFrontmostWindowInfo === 'function') {
+      if (PERCH_ON_OTHER_WINDOWS && typeof window.agentUI.getFrontmostWindowInfo === 'function') {
         startStabilityNudgeLoop();
       }
-      if (typeof window.cursorcats.overlayReady === 'function') {
-        window.cursorcats.overlayReady();
+      void prewarmCatAssets();
+      if (typeof window.agentUI.overlayReady === 'function') {
+        window.agentUI.overlayReady();
+        traceEvalEvent('overlay_ready', {});
       }
       canvas.addEventListener('click', (e) => {
         const cat = pickCatAt(e.clientX, e.clientY);
-        if (cat && cat.catId && typeof window.cursorcats.openCatConversation === 'function') {
-          window.cursorcats.openCatConversation(cat.catId);
+        if (cat && cat.catId && typeof window.agentUI.openCatConversation === 'function') {
+          window.agentUI.openCatConversation(cat.catId);
         }
       });
       canvas.addEventListener('mousemove', (e) => {

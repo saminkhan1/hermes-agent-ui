@@ -13,9 +13,16 @@ const {
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { randomUUID } = require('crypto');
-const { spawn } = require('child_process');
+const { randomUUID, createHash } = require('crypto');
+const { spawn, execFile } = require('child_process');
 const http = require('http');
+const {
+  recordTrace,
+  getTrace,
+  runDir: evalRunDir,
+  runId: evalRunId,
+  enabled: evalTraceEnabled,
+} = require('./eval-trace');
 const {
   startAgentForCat,
   cancelAllAgents,
@@ -23,8 +30,10 @@ const {
   listAgentConversations,
   setOnConversationPushed,
   dismissAgent,
+  cancelAgent,
   sendFollowup,
   revertAgentChanges,
+  getAgentArtifacts,
 } = require('./agents');
 const { startHookServer } = require('./hook-server');
 const {
@@ -87,24 +96,34 @@ function sendEvalJson(res, statusCode, payload) {
   res.end(text);
 }
 
+function execFileText(command, args, opts = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { encoding: 'utf8', timeout: 5000, ...opts }, (err, stdout, stderr) => {
+      if (err) {
+        err.stdout = stdout;
+        err.stderr = stderr;
+        reject(err);
+        return;
+      }
+      resolve(String(stdout || ''));
+    });
+  });
+}
+
 function writeEvalPortFile(port) {
-  const file = String(process.env.CURSORCATS_EVAL_PORT_FILE || '').trim();
+  const file = String(process.env.AGENT_UI_EVAL_PORT_FILE || '').trim();
   if (!file) return;
   fs.writeFileSync(file, `${port}\n`, 'utf8');
 }
 
-function startCursorCatsEvalServer(handlers, log = console) {
-  if (process.env.CURSORCATS_EVAL !== '1') return null;
+function startAgentUIEvalServer(handlers, log = console) {
+  if (process.env.AGENT_UI_EVAL !== '1') return null;
 
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url || '/', 'http://127.0.0.1');
       if (req.method === 'GET' && url.pathname === '/health') {
-        sendEvalJson(res, 200, { ok: true, app: 'Cursor Cats', eval: true });
-        return;
-      }
-      if (req.method === 'POST' && url.pathname === '/spawn') {
-        sendEvalJson(res, 200, await handlers.spawnEvalCat(await readEvalJson(req)));
+        sendEvalJson(res, 200, { ok: true, app: 'agent-UI', eval: true });
         return;
       }
       if (req.method === 'GET' && url.pathname === '/conversation') {
@@ -115,12 +134,32 @@ function startCursorCatsEvalServer(handlers, log = console) {
         sendEvalJson(res, 200, await handlers.listConversations());
         return;
       }
+      if (req.method === 'GET' && url.pathname === '/ui-targets') {
+        sendEvalJson(res, 200, await handlers.getUiTargets());
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/wait') {
+        sendEvalJson(res, 200, await handlers.wait(await readEvalJson(req)));
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/trace') {
+        sendEvalJson(res, 200, await handlers.getTrace());
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/close-modal') {
+        sendEvalJson(res, 200, await handlers.closeModal());
+        return;
+      }
       if (req.method === 'POST' && url.pathname === '/revert') {
         sendEvalJson(res, 200, await handlers.revert(await readEvalJson(req)));
         return;
       }
       if (req.method === 'POST' && url.pathname === '/dismiss') {
         sendEvalJson(res, 200, await handlers.dismiss(await readEvalJson(req)));
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/cancel') {
+        sendEvalJson(res, 200, await handlers.cancel(await readEvalJson(req)));
         return;
       }
       if (req.method === 'POST' && url.pathname === '/shutdown') {
@@ -134,12 +173,12 @@ function startCursorCatsEvalServer(handlers, log = console) {
     }
   });
 
-  const port = Number(process.env.CURSORCATS_EVAL_PORT || 0);
+  const port = Number(process.env.AGENT_UI_EVAL_PORT || 0);
   server.listen(port, '127.0.0.1', () => {
     const address = server.address();
     const actualPort = address && typeof address === 'object' ? address.port : port;
     writeEvalPortFile(actualPort);
-    log.log(`[cursorcats] eval server listening on http://127.0.0.1:${actualPort}`);
+    log.log(`[agent-ui] eval server listening on http://127.0.0.1:${actualPort}`);
   });
 
   return {
@@ -174,6 +213,10 @@ const pendingSpawnCats = [];
 
 /** Tracked for frontmost window stability (used by get-frontmost-window-info). */
 let activeWindowState = { id: null, firstSeenAt: 0, screenBounds: null };
+let lastExternalWindowSnapshot = null;
+/** Captured at the moment the user invokes Cmd+Shift+C, then attached to the submitted cat. */
+let activeModalContextId = null;
+const modalContexts = new Map();
 function windowKey(win) {
   if (!win || !win.owner) return null;
   return `${win.owner.processId}:${win.id}`;
@@ -225,6 +268,13 @@ async function tickActiveWindowTracker() {
         height: win.bounds.height,
       };
     }
+    lastExternalWindowSnapshot = {
+      capturedAt: Date.now(),
+      title: win.title || '',
+      id: win.id || null,
+      bounds: { x: win.bounds.x, y: win.bounds.y, width: win.bounds.width, height: win.bounds.height },
+      owner: win.owner ? { ...win.owner } : {},
+    };
   } catch {
     // ignore get-windows errors
   }
@@ -336,19 +386,22 @@ function closeWindowOnEscape(win, closeFn) {
   });
 }
 
-function openNewCatModal() {
+function openNewCatModal(modalContextId) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
+  const requestedAt = Date.now();
+  const ctx = modalContextId ? modalContexts.get(modalContextId) : null;
+  recordTrace('modal_show_requested', {
+    modalContextId: modalContextId || null,
+    hasPointerContext: !!(ctx && ctx.context),
+    msSinceShortcut: ctx && ctx.createdAt ? requestedAt - ctx.createdAt : null,
+  });
 
   if (conversationWindow && !conversationWindow.isDestroyed()) {
     conversationWindow.close();
   }
 
   if (modalWindow && !modalWindow.isDestroyed()) {
-    modalWindow.focus();
-    if (process.platform === 'darwin') {
-      app.focus({ steal: true });
-    }
-    return;
+    modalWindow.close();
   }
 
   if (process.platform === 'darwin' && mainWindow && !mainWindow.isDestroyed()) {
@@ -367,7 +420,6 @@ function openNewCatModal() {
     resizable: false,
     minimizable: false,
     maximizable: false,
-    parent: mainWindow,
     modal: false,
     alwaysOnTop: true,
     skipTaskbar: true,
@@ -379,30 +431,57 @@ function openNewCatModal() {
     },
   });
 
+  recordTrace('modal_window_created', {
+    modalContextId: modalContextId || null,
+    msSinceModalShowRequested: Date.now() - requestedAt,
+    msSinceShortcut: ctx && ctx.createdAt ? Date.now() - ctx.createdAt : null,
+  });
+
   closeWindowOnEscape(modalWindow, () => {
     if (modalWindow && !modalWindow.isDestroyed()) {
       modalWindow.close();
     }
   });
 
+  modalWindow.webContents.once('did-finish-load', () => {
+    recordTrace('modal_dom_loaded', {
+      modalContextId: modalContextId || null,
+      msSinceModalShowRequested: Date.now() - requestedAt,
+      msSinceShortcut: ctx && ctx.createdAt ? Date.now() - ctx.createdAt : null,
+    });
+  });
+
   modalWindow.once('ready-to-show', () => {
     modalWindow.show();
-    modalWindow.focus();
     if (process.platform === 'darwin') {
       app.focus({ steal: true });
     }
+    modalWindow.moveTop();
+    modalWindow.focus();
+    modalWindow.webContents.focus();
+    recordTrace('modal_shown_and_focused', {
+      modalContextId: modalContextId || null,
+      bounds: modalWindow && !modalWindow.isDestroyed() ? modalWindow.getBounds() : null,
+      msSinceModalShowRequested: Date.now() - requestedAt,
+      msSinceShortcut: ctx && ctx.createdAt ? Date.now() - ctx.createdAt : null,
+    });
   });
 
   modalWindow.on('closed', () => {
     modalWindow = null;
+    if (activeModalContextId === modalContextId) {
+      activeModalContextId = null;
+    }
     restoreMainWindowAllWorkspaces();
   });
 
   if (process.env.ELECTRON_RENDERER_URL) {
     const base = process.env.ELECTRON_RENDERER_URL.replace(/\/?$/, '');
-    modalWindow.loadURL(`${base}/modal.html`);
+    modalWindow.loadURL(`${base}/modal.html?${new URLSearchParams({ modalContextId: modalContextId || '' }).toString()}`);
   } else {
-    modalWindow.loadFile(path.join(__dirname, '../renderer/modal.html'));
+    modalWindow.loadFile(path.join(__dirname, '../renderer/modal.html'), {
+      query: { modalContextId: modalContextId || '' },
+    });
   }
 }
 
@@ -449,7 +528,6 @@ function openConversationWindow(catId) {
     resizable: false,
     minimizable: false,
     maximizable: false,
-    parent: mainWindow,
     modal: false,
     alwaysOnTop: true,
     skipTaskbar: true,
@@ -470,10 +548,12 @@ function openConversationWindow(catId) {
 
   conversationWindow.once('ready-to-show', () => {
     conversationWindow.show();
-    conversationWindow.focus();
     if (process.platform === 'darwin') {
       app.focus({ steal: true });
     }
+    conversationWindow.moveTop();
+    conversationWindow.focus();
+    conversationWindow.webContents.focus();
   });
 
   conversationWindow.on('closed', () => {
@@ -512,7 +592,7 @@ function buildAppMenu() {
       label: 'New Cat',
       accelerator: process.platform === 'darwin' ? 'Command+Shift+C' : 'Control+Shift+C',
       click: () => {
-        openNewCatModal();
+        void handleNewCatShortcut('menu');
       },
     },
     {
@@ -550,11 +630,35 @@ function buildAppMenu() {
   ]);
 }
 
+function buildApplicationMenu() {
+  return Menu.buildFromTemplate([
+    {
+      label: 'agent-UI',
+      submenu: [
+        {
+          label: 'New Cat',
+          accelerator: process.platform === 'darwin' ? 'Command+Shift+C' : 'Control+Shift+C',
+          click: () => {
+            void handleNewCatShortcut('shortcut');
+          },
+        },
+        { type: 'separator' },
+        {
+          label: 'Quit',
+          accelerator: process.platform === 'darwin' ? 'Command+Q' : 'Control+Q',
+          click: () => app.quit(),
+        },
+      ],
+    },
+  ]);
+}
+
 function rebuildAppMenus() {
   const menu = buildAppMenu();
   if (tray && !tray.isDestroyed()) {
     tray.setContextMenu(menu);
   }
+  Menu.setApplicationMenu(buildApplicationMenu());
 }
 
 function createTray() {
@@ -589,7 +693,7 @@ function createTray() {
   if (process.platform === 'darwin') {
     updateTrayTitle({ forceFallback: imageIsEmpty });
   }
-  tray.setToolTip('CursorCats');
+  tray.setToolTip('agent-UI');
   rebuildAppMenus();
 }
 
@@ -611,6 +715,27 @@ function updateTrayTitle({ forceFallback = false } = {}) {
     title = forceFallback ? '🐱' : '';
   }
   tray.setTitle(title);
+}
+
+function handleNewCatShortcut(source = 'shortcut') {
+  const modalContextId = randomUUID();
+  activeModalContextId = modalContextId;
+  const ctx = {
+    id: modalContextId,
+    source,
+    context: null,
+    promise: null,
+    createdAt: Date.now(),
+  };
+  ctx.promise = capturePointerContext(source, modalContextId)
+    .then((context) => {
+      ctx.context = context;
+      return context;
+    })
+    .catch(() => null);
+  modalContexts.set(modalContextId, ctx);
+  recordTrace('shortcut_received', { source, modalContextId });
+  openNewCatModal(modalContextId);
 }
 
 /** Translate active window to overlay-local coords; exclude our own app window. */
@@ -640,6 +765,154 @@ function getFrontmostWindowInfo() {
   }
   const stableMs = Math.max(0, Date.now() - activeWindowState.firstSeenAt);
   return { id: activeWindowState.id, bounds, stableMs };
+}
+
+async function osascriptLines(script) {
+  if (process.platform !== 'darwin') return [];
+  try {
+    const text = await execFileText('osascript', ['-e', script], { timeout: 2500 });
+    return text.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+async function getAppSpecificPointerContext(bundleId, appName) {
+  const bid = String(bundleId || '').toLowerCase();
+  const name = String(appName || '').toLowerCase();
+  if (bid === 'com.google.chrome' || name.includes('chrome')) {
+    const lines = await osascriptLines(
+      'tell application "Google Chrome" to if (count of windows) > 0 then return (title of active tab of front window) & "\\n" & (URL of active tab of front window)'
+    );
+    return { chromeTitle: lines[0] || '', chromeUrl: lines[1] || '' };
+  }
+  if (bid === 'com.apple.preview' || name.includes('preview')) {
+    const lines = await osascriptLines(
+      'tell application "Preview" to if (count of documents) > 0 then return (name of front document) & "\\n" & (path of front document)'
+    );
+    return { previewDocumentName: lines[0] || '', previewDocumentPath: lines[1] || '' };
+  }
+  if (bid === 'com.apple.mail' || name === 'mail') {
+    const lines = await osascriptLines(
+      'tell application "Mail" to if (count of outgoing messages) > 0 then return (subject of item 1 of outgoing messages)'
+    );
+    return { mailFrontDraftSubject: lines[0] || '' };
+  }
+  if (bid === 'md.obsidian' || name.includes('obsidian')) {
+    return { obsidianHint: 'Obsidian is frontmost; inspect the selected agent-UI eval folder for the disposable vault.' };
+  }
+  if (bid === 'net.ankiweb.launcher' || name.includes('anki')) {
+    return { ankiHint: 'Anki is frontmost; benchmark runs with an isolated ANKI_BASE.' };
+  }
+  if (bid === 'com.apple.garageband10' || name.includes('garageband')) {
+    return { garageBandHint: 'GarageBand is frontmost; benchmark project files live in the selected agent-UI eval folder.' };
+  }
+  return {};
+}
+
+function screenshotRectFromBounds(bounds) {
+  if (!bounds) return null;
+  const x = Math.max(0, Math.floor(Number(bounds.x) || 0));
+  const y = Math.max(0, Math.floor(Number(bounds.y) || 0));
+  const width = Math.max(1, Math.floor(Number(bounds.width) || 0));
+  const height = Math.max(1, Math.floor(Number(bounds.height) || 0));
+  return { x, y, width, height };
+}
+
+async function captureContextScreenshot(bounds) {
+  if (process.platform !== 'darwin') return null;
+  if (process.env.AGENT_UI_CONTEXT_CAPTURE !== '1' && process.env.AGENT_UI_EVAL !== '1') return null;
+  const rect = screenshotRectFromBounds(bounds);
+  if (!rect) return null;
+  try {
+    const dir = path.join(evalRunDir, 'context');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `shortcut-${Date.now()}.png`);
+    await execFileText('screencapture', [
+      '-x',
+      '-R',
+      `${rect.x},${rect.y},${rect.width},${rect.height}`,
+      file,
+    ], { timeout: 5000 });
+    return file;
+  } catch {
+    return null;
+  }
+}
+
+async function capturePointerContext(reason = 'shortcut', modalContextId = null) {
+  const captureStartedAt = Date.now();
+  recordTrace('pointer_context_capture_started', { modalContextId: modalContextId || null, reason });
+  const cursor = screen.getCursorScreenPoint();
+  let active = null;
+  let usedExternalSnapshot = false;
+  try {
+    const { activeWindow } = await import('get-windows');
+    active = await activeWindow({
+      accessibilityPermission: false,
+      screenRecordingPermission: false,
+    });
+  } catch {
+    active = null;
+  }
+  if (active && active.owner && active.owner.processId === process.pid && lastExternalWindowSnapshot) {
+    active = lastExternalWindowSnapshot;
+    usedExternalSnapshot = true;
+  }
+  const owner = active && active.owner ? active.owner : {};
+  const bounds = active && active.bounds ? {
+    x: active.bounds.x,
+    y: active.bounds.y,
+    width: active.bounds.width,
+    height: active.bounds.height,
+  } : null;
+  const bundleId = owner.bundleId || owner.bundleIdentifier || '';
+  const appName = owner.name || owner.path || '';
+  const appContextStartedAt = Date.now();
+  const appContext = await getAppSpecificPointerContext(bundleId, appName);
+  recordTrace('pointer_app_context_captured', {
+    modalContextId: modalContextId || null,
+    activeApp: { name: appName, bundleId, processId: owner.processId || null },
+    durationMs: Date.now() - appContextStartedAt,
+  });
+  const screenshotStartedAt = Date.now();
+  const screenshotPath = await captureContextScreenshot(bounds);
+  recordTrace('pointer_screenshot_captured', {
+    modalContextId: modalContextId || null,
+    hasScreenshot: !!screenshotPath,
+    durationMs: Date.now() - screenshotStartedAt,
+  });
+  const context = {
+    modalContextId: modalContextId || null,
+    reason,
+    capturedAt: new Date().toISOString(),
+    cursor,
+    activeApp: {
+      name: appName,
+      bundleId,
+      processId: owner.processId || null,
+    },
+    activeWindow: active
+      ? {
+          title: active.title || '',
+          id: active.id || null,
+          bounds,
+        }
+      : null,
+    screenshotPath,
+    evalRunId: evalTraceEnabled ? evalRunId : null,
+    usedExternalSnapshot,
+    ...appContext,
+  };
+  recordTrace('pointer_context_captured', {
+    modalContextId: modalContextId || null,
+    reason,
+    activeApp: context.activeApp,
+    activeWindow: context.activeWindow,
+    screenshotPath,
+    durationMs: Date.now() - captureStartedAt,
+  });
+  return context;
 }
 
 ipcMain.handle('get-app-path', () => getPackageRoot());
@@ -686,11 +959,36 @@ ipcMain.handle('choose-folder', async () => {
   return result.filePaths[0];
 });
 
-function getRecentFoldersPath() {
-  const dir = path.join(os.homedir(), '.cursorcats');
+function getAgentUIConfigDir() {
+  const configured = String(process.env.AGENT_UI_CONFIG_DIR || '').trim();
+  const dir = configured ? path.resolve(configured) : path.join(os.homedir(), '.agent-ui');
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
+  return dir;
+}
+
+function getEvalWorkspaceRoot() {
+  if (process.env.AGENT_UI_EVAL !== '1') return null;
+  return path.join(evalRunDir, 'workspace');
+}
+
+function isPathInside(childPath, parentPath) {
+  const child = path.resolve(String(childPath || ''));
+  const parent = path.resolve(String(parentPath || ''));
+  const rel = path.relative(parent, child);
+  return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function isEvalAllowedFolder(folder) {
+  const root = getEvalWorkspaceRoot();
+  if (!root) return true;
+  const f = path.resolve(String(folder || ''));
+  return isPathInside(f, root);
+}
+
+function getRecentFoldersPath() {
+  const dir = getAgentUIConfigDir();
   return path.join(dir, 'recent_folders.json');
 }
 
@@ -728,178 +1026,88 @@ ipcMain.handle('add-recent-folder', (_event, folder) => {
   }
 });
 
-const FALLBACK_MODEL_LIST = [
-  { id: 'hermes-cli', displayName: 'Local CLI', description: 'Hermes first, Codex fallback' },
-];
-
-function getModelSelectionPath() {
-  const dir = path.join(os.homedir(), '.cursorcats');
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  return path.join(dir, 'model.json');
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function getRuntimeSelectionPath() {
-  const dir = path.join(os.homedir(), '.cursorcats');
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+async function waitForModalPointerContext(modalContextId) {
+  const key = modalContextId ? String(modalContextId) : '';
+  const ctx = key ? modalContexts.get(key) : null;
+  if (!ctx) return null;
+  if (ctx.context) return ctx.context;
+  try {
+    await Promise.race([ctx.promise, delay(2500)]);
+  } catch {
+    /* ignore context capture errors */
   }
-  return path.join(dir, 'runtime.json');
+  return ctx.context || null;
 }
 
-function getCloudRepositorySelectionPath() {
-  const dir = path.join(os.homedir(), '.cursorcats');
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  return path.join(dir, 'cloud_repository.json');
-}
-
-function normalizeRuntime() {
-  return 'local';
-}
-
-ipcMain.handle('list-models', async () => {
-  return FALLBACK_MODEL_LIST;
-});
-
-ipcMain.handle('get-selected-model', () => {
-  try {
-    const file = getModelSelectionPath();
-    if (fs.existsSync(file)) {
-      const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-      if (data && typeof data.id === 'string' && data.id.trim()) {
-        return { id: data.id.trim() };
-      }
-    }
-  } catch (e) {
-    // ignore
-  }
-  return null;
-});
-
-ipcMain.handle('set-selected-model', (_event, modelId) => {
-  const id = typeof modelId === 'string' ? modelId.trim() : '';
-  if (!id) return;
-  try {
-    const file = getModelSelectionPath();
-    fs.writeFileSync(file, JSON.stringify({ id }, null, 2), 'utf8');
-  } catch (e) {
-    // ignore
-  }
-});
-
-ipcMain.handle('list-cloud-repositories', async () => {
-  return [];
-});
-
-ipcMain.handle('get-selected-runtime', () => {
-  try {
-    const file = getRuntimeSelectionPath();
-    if (fs.existsSync(file)) {
-      const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-      return { runtime: normalizeRuntime(data && data.runtime) };
-    }
-  } catch (e) {
-    // ignore
-  }
-  return { runtime: 'local' };
-});
-
-ipcMain.handle('set-selected-runtime', (_event, runtime) => {
-  try {
-    const file = getRuntimeSelectionPath();
-    fs.writeFileSync(file, JSON.stringify({ runtime: normalizeRuntime(runtime) }, null, 2), 'utf8');
-  } catch (e) {
-    // ignore
-  }
-});
-
-ipcMain.handle('get-selected-cloud-repository', () => {
-  try {
-    const file = getCloudRepositorySelectionPath();
-    if (fs.existsSync(file)) {
-      const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-      const url = data && typeof data.url === 'string' ? data.url.trim() : '';
-      const startingRef = data && typeof data.startingRef === 'string' ? data.startingRef.trim() : '';
-      if (url) return { url, startingRef };
-    }
-  } catch (e) {
-    // ignore
-  }
-  return null;
-});
-
-ipcMain.handle('set-selected-cloud-repository', (_event, repo) => {
-  const url = repo && typeof repo.url === 'string' ? repo.url.trim() : '';
-  const startingRef = repo && typeof repo.startingRef === 'string' ? repo.startingRef.trim() : '';
-  if (!url) return;
-  try {
-    const file = getCloudRepositorySelectionPath();
-    fs.writeFileSync(file, JSON.stringify({ url, startingRef }, null, 2), 'utf8');
-  } catch (e) {
-    // ignore
-  }
-});
-
-function startCatRunFromPayload(payload = {}, opts = {}) {
+async function startCatRunFromPayload(payload = {}, opts = {}) {
   const catId = opts.catId ? String(opts.catId) : randomUUID();
-  const modelRaw = payload && payload.model;
-  const modelId =
-    typeof modelRaw === 'string' && modelRaw.trim() ? modelRaw.trim() : null;
-  if (modelId) {
-    try {
-      const file = getModelSelectionPath();
-      fs.writeFileSync(file, JSON.stringify({ id: modelId }, null, 2), 'utf8');
-    } catch (e) {
-      // ignore
-    }
+  const modalContextId =
+    (opts.modalContextId && String(opts.modalContextId)) ||
+    (payload && payload.modalContextId ? String(payload.modalContextId) : '') ||
+    activeModalContextId ||
+    '';
+  const submitStartedAt = Date.now();
+  const pointerWaitStartedAt = Date.now();
+  const pointerContext = opts.pointerContext || (await waitForModalPointerContext(modalContextId)) || null;
+  recordTrace('submit_pointer_context_ready', {
+    catId,
+    modalContextId: modalContextId || null,
+    hasPointerContext: !!pointerContext,
+    waitMs: Date.now() - pointerWaitStartedAt,
+  });
+  const runtime = 'local';
+  const modelId = 'hermes-cli';
+  if (!isEvalAllowedFolder(payload && payload.folder)) {
+    const folder = String((payload && payload.folder) || '');
+    const error = `Eval local folder is outside the disposable workspace: ${folder}`;
+    recordTrace('submit_rejected', {
+      catId,
+      modalContextId: modalContextId || null,
+      reason: 'folder_outside_eval_workspace',
+      folder,
+      evalWorkspaceRoot: getEvalWorkspaceRoot(),
+    });
+    return { ok: false, error };
   }
-  const runtime = normalizeRuntime(payload && payload.runtime);
-  try {
-    const file = getRuntimeSelectionPath();
-    fs.writeFileSync(file, JSON.stringify({ runtime }, null, 2), 'utf8');
-  } catch (e) {
-    // ignore
-  }
-  const cloudRepo =
-    payload && payload.cloudRepo && typeof payload.cloudRepo === 'object'
-      ? {
-          url: typeof payload.cloudRepo.url === 'string' ? payload.cloudRepo.url.trim() : '',
-          startingRef:
-            typeof payload.cloudRepo.startingRef === 'string' ? payload.cloudRepo.startingRef.trim() : '',
-        }
-      : null;
-  if (runtime === 'cloud' && cloudRepo && cloudRepo.url) {
-    try {
-      const file = getCloudRepositorySelectionPath();
-      fs.writeFileSync(file, JSON.stringify(cloudRepo, null, 2), 'utf8');
-    } catch (e) {
-      // ignore
-    }
-  }
-  const out = { ...payload, catId };
+  recordTrace('submit_requested', {
+    catId,
+    modalContextId: modalContextId || null,
+    promptLength: payload && payload.prompt ? String(payload.prompt).length : 0,
+    runtime,
+    hasPointerContext: !!pointerContext,
+    folder: payload && payload.folder ? String(payload.folder) : '',
+  });
+  const out = { ...payload, catId, model: modelId, runtime, modalContextId, pointerContext };
   if (opts.closeModal !== false && modalWindow && !modalWindow.isDestroyed()) {
     modalWindow.close();
   }
+  recordTrace('cat_spawn_sent', {
+    catId,
+    modalContextId: modalContextId || null,
+    runtime,
+    msSinceSubmitStart: Date.now() - submitStartedAt,
+  });
   sendSpawnCatToOverlay(out);
   startAgentForCat(
     {
       catId,
       folder: payload.folder,
       prompt: payload.prompt,
-      model: modelId || undefined,
+      model: modelId,
       runtime,
-      cloudRepo,
+      pointerContext,
     },
     { getMainWindow: () => mainWindow }
   );
-  return { catId, modelId: modelId || null, runtime };
+  return { ok: true, catId, modelId: modelId || null, runtime };
 }
 
 ipcMain.on('new-cat-submit', (_event, payload) => {
-  startCatRunFromPayload(payload, { closeModal: true });
+  void startCatRunFromPayload(payload, { closeModal: true });
 });
 
 ipcMain.on('new-cat-cancel', () => {
@@ -1022,41 +1230,229 @@ ipcMain.handle('open-external-url', async (_e, url) => {
   }
 });
 
+function offsetRect(rect, win) {
+  if (!rect || !win || win.isDestroyed()) return null;
+  const wb = win.getBounds();
+  return {
+    left: wb.x + rect.left,
+    top: wb.y + rect.top,
+    right: wb.x + rect.right,
+    bottom: wb.y + rect.bottom,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+async function readDomEvalTargets(win, selectors) {
+  if (!win || win.isDestroyed()) return {};
+  try {
+    const raw = await win.webContents.executeJavaScript(
+      `(() => {
+        const selectors = ${JSON.stringify(selectors)};
+        const out = {};
+        const rectFor = (el) => {
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          if (!r || r.width <= 0 || r.height <= 0) return null;
+          return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height };
+        };
+        for (const [key, selector] of Object.entries(selectors)) {
+          if (selector.endsWith('[]')) {
+            const base = selector.slice(0, -2);
+            out[key] = Array.from(document.querySelectorAll(base)).map(rectFor).filter(Boolean);
+          } else {
+            out[key] = rectFor(document.querySelector(selector));
+          }
+        }
+        out.activeElement = document.activeElement ? { id: document.activeElement.id || '', tag: document.activeElement.tagName || '' } : null;
+        const prompt = document.querySelector('#prompt');
+        out.promptValueLength = prompt && typeof prompt.value === 'string' ? prompt.value.length : 0;
+        out.promptValuePreview = prompt && typeof prompt.value === 'string' ? prompt.value.slice(0, 120) : '';
+        const selected = document.querySelector('.recent-folder-item.selected');
+        out.selectedFolderPath = (document.body && document.body.dataset ? document.body.dataset.selectedFolder : '') || (selected && selected.dataset ? selected.dataset.folder : '') || '';
+        return out;
+      })()`,
+      true
+    );
+    const out = {};
+    for (const [key, value] of Object.entries(raw || {})) {
+      if (Array.isArray(value)) {
+        out[key] = value.map((r) => offsetRect(r, win)).filter(Boolean);
+      } else if (value && typeof value === 'object' && 'left' in value) {
+        out[key] = offsetRect(value, win);
+      } else {
+        out[key] = value;
+      }
+    }
+    return out;
+  } catch (e) {
+    return { error: (e && e.message) || String(e) };
+  }
+}
+
+async function getEvalUiTargets() {
+  const modal = await readDomEvalTargets(modalWindow, {
+    promptRect: '#prompt',
+    micButtonRect: '#btn-dictate',
+    createButtonRect: '#btn-create-cat',
+    selectedFolderRowRects: '.recent-folder-item.selected[]',
+  });
+  const conversation = await readDomEvalTargets(conversationWindow, {
+    logRect: '#log',
+    followupRect: '#followup-input',
+    revertButtonRect: '#btn-revert',
+  });
+  return {
+    ok: true,
+    modal: {
+      modalContextId: activeModalContextId,
+      visible: !!(modalWindow && !modalWindow.isDestroyed() && modalWindow.isVisible()),
+      bounds: modalWindow && !modalWindow.isDestroyed() ? modalWindow.getBounds() : null,
+      osProcessId: modalWindow && !modalWindow.isDestroyed() ? modalWindow.webContents.getOSProcessId() : null,
+      ...modal,
+    },
+    conversation: {
+      visible: !!(conversationWindow && !conversationWindow.isDestroyed() && conversationWindow.isVisible()),
+      bounds: conversationWindow && !conversationWindow.isDestroyed() ? conversationWindow.getBounds() : null,
+      ...conversation,
+    },
+    cats: lastCatScreenRects.slice(),
+    configDir: getAgentUIConfigDir(),
+    trace: {
+      enabled: evalTraceEnabled,
+      runId: evalRunId,
+      runDir: evalRunDir,
+    },
+  };
+}
+
+async function closeEvalModal() {
+  if (modalWindow && !modalWindow.isDestroyed()) {
+    modalWindow.close();
+  }
+  recordTrace('cleanup_modal_closed', { ok: true });
+  return { ok: true };
+}
+
+async function waitForEvalCat({ catId, timeoutMs = 180000 } = {}) {
+  const started = Date.now();
+  const id = catId ? String(catId) : '';
+  while (Date.now() - started <= Number(timeoutMs || 180000)) {
+    const conversations = listAgentConversations();
+    const rec = id
+      ? conversations.find((c) => String(c.catId) === id)
+      : conversations.find((c) => ['completed', 'error', 'cancelled'].includes(String(c.runStatus || '').toLowerCase()));
+    if (rec) {
+      const status = String(rec.runStatus || '').toLowerCase();
+      if (['completed', 'error', 'cancelled'].includes(status)) {
+        return {
+          ok: true,
+          catId: rec.catId,
+          status,
+          conversation: getAgentConversation(rec.catId),
+          artifacts: getAgentArtifacts(rec.catId),
+        };
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return { ok: false, error: 'timeout', catId: id || null };
+}
+
+async function readDeterministicTranscript() {
+  const direct = String(process.env.AGENT_UI_EVAL_TRANSCRIPT || '').trim();
+  if (direct) return direct;
+  const file = String(process.env.AGENT_UI_EVAL_TRANSCRIPT_FILE || '').trim();
+  if (file && fs.existsSync(file)) {
+    return fs.readFileSync(file, 'utf8').trim();
+  }
+  return '';
+}
+
+function textTraceMeta(value, maxPreview = 80) {
+  const text = String(value || '');
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  return {
+    chars: text.length,
+    bytes: Buffer.byteLength(text),
+    sha256: createHash('sha256').update(text).digest('hex'),
+    preview: normalized.length > maxPreview ? `${normalized.slice(0, maxPreview - 1)}...` : normalized,
+  };
+}
+
+async function runSpeechHelper() {
+  const helper = path.join(getPackageRoot(), 'eval', 'human-e2e', 'swift', 'AgentUISpeech.swift');
+  if (!fs.existsSync(helper)) {
+    return { ok: false, error: 'speech helper is missing' };
+  }
+  try {
+    const transcript = (await execFileText('/usr/bin/swift', [helper], { timeout: 30000 })).trim();
+    return transcript ? { ok: true, transcript } : { ok: false, error: 'empty transcript' };
+  } catch (e) {
+    return { ok: false, error: (e && (e.stderr || e.message)) || String(e) };
+  }
+}
+
+ipcMain.handle('start-voice-dictation', async () => {
+  recordTrace('voice_started', {});
+  if (process.env.AGENT_UI_EVAL === '1') {
+    const transcript = await readDeterministicTranscript();
+    if (!transcript) {
+      recordTrace('voice_final_transcript', { deterministic: true, ...textTraceMeta('') });
+      return { ok: false, error: 'missing deterministic transcript' };
+    }
+    recordTrace('voice_partial_transcript', { deterministic: true, ...textTraceMeta(transcript.slice(0, 80)) });
+    recordTrace('voice_final_transcript', { deterministic: true, ...textTraceMeta(transcript) });
+    return { ok: true, deterministic: true, transcript };
+  }
+  const result = await runSpeechHelper();
+  if (result.ok) {
+    recordTrace('voice_final_transcript', { deterministic: false, ...textTraceMeta(result.transcript) });
+  }
+  return result;
+});
+
+ipcMain.on('eval-trace-event', (_event, payload = {}) => {
+  const type = payload && payload.type ? payload.type : 'renderer_event';
+  const { type: _type, ...rest } = payload && typeof payload === 'object' ? payload : {};
+  recordTrace(type, rest);
+});
+
 app.whenReady().then(() => {
-  if (process.platform === 'darwin' && app.dock) {
+  app.setName('agent-UI');
+  if (process.platform === 'darwin' && app.dock && process.env.AGENT_UI_EVAL !== '1') {
     app.dock.hide();
   }
   createWindow();
   createTray();
-  closeEvalServer = startCursorCatsEvalServer(
+  closeEvalServer = startAgentUIEvalServer(
     {
-      spawnEvalCat: async (payload = {}) => {
-        const catId =
-          payload && typeof payload.catId === 'string' && payload.catId.trim()
-            ? payload.catId.trim()
-            : randomUUID();
-        const result = startCatRunFromPayload(
-          {
-            ...payload,
-            runtime: 'local',
-          },
-          { catId, closeModal: false }
-        );
-        return { ok: true, catId: result.catId };
-      },
       getConversation: async (catId) => {
         if (!catId) return { found: false, items: [] };
         return getAgentConversation(String(catId));
       },
       listConversations: async () => ({ ok: true, conversations: listAgentConversations() }),
+      getUiTargets: async () => getEvalUiTargets(),
+      wait: async (payload = {}) => waitForEvalCat(payload),
+      getTrace: async () => getTrace(),
+      closeModal: async () => closeEvalModal(),
       revert: async ({ catId } = {}) => {
         if (!catId) return { ok: false, error: 'missing cat id' };
-        return revertAgentChanges(String(catId), { log: console });
+        const result = await revertAgentChanges(String(catId), { log: console });
+        recordTrace('cleanup_revert_completed', { catId: String(catId), ok: !!result.ok });
+        return result;
       },
       dismiss: async ({ catId } = {}) => {
         if (!catId) return { ok: false, error: 'missing cat id' };
         await dismissAgent(String(catId), { getMainWindow: () => mainWindow, log: console });
+        recordTrace('cleanup_dismiss_completed', { catId: String(catId), ok: true });
         return { ok: true };
+      },
+      cancel: async ({ catId } = {}) => {
+        if (!catId) return { ok: false, error: 'missing cat id' };
+        const result = await cancelAgent(String(catId), { getMainWindow: () => mainWindow, log: console });
+        recordTrace('cleanup_cancel_completed', { catId: String(catId), ok: !!result.ok });
+        return result;
       },
       shutdown: () => app.quit(),
     },
@@ -1073,7 +1469,7 @@ app.whenReady().then(() => {
     })
     .catch((e) => {
       // eslint-disable-next-line no-console
-      console.warn('[cursorcats] hook server failed to start', e);
+      console.warn('[agent-ui] hook server failed to start', e);
     });
 
   /** Throttle overlay speech bubbles so streaming tokens do not flood IPC. */
@@ -1150,10 +1546,11 @@ app.whenReady().then(() => {
   }
 
   const newCatAccelerator =
-    process.platform === 'darwin' ? 'Command+Shift+C' : 'Control+Shift+C';
-  globalShortcut.register(newCatAccelerator, () => {
-    openNewCatModal();
+    process.platform === 'darwin' ? 'CommandOrControl+Shift+C' : 'Control+Shift+C';
+  const registered = globalShortcut.register(newCatAccelerator, () => {
+    void handleNewCatShortcut(newCatAccelerator);
   });
+  recordTrace('shortcut_registered', { accelerator: newCatAccelerator, registered });
 });
 
 app.on('will-quit', () => {
@@ -1162,7 +1559,7 @@ app.on('will-quit', () => {
       closeHookServer();
     } catch (e) {
       // eslint-disable-next-line no-console
-      console.warn('[cursorcats] hook server cleanup', e);
+      console.warn('[agent-ui] hook server cleanup', e);
     }
     closeHookServer = null;
   }
@@ -1171,7 +1568,7 @@ app.on('will-quit', () => {
       closeEvalServer();
     } catch (e) {
       // eslint-disable-next-line no-console
-      console.warn('[cursorcats] eval server cleanup', e);
+      console.warn('[agent-ui] eval server cleanup', e);
     }
     closeEvalServer = null;
   } else if (closeEvalServer && typeof closeEvalServer.closeSync === 'function') {
@@ -1179,7 +1576,7 @@ app.on('will-quit', () => {
       closeEvalServer.closeSync();
     } catch (e) {
       // eslint-disable-next-line no-console
-      console.warn('[cursorcats] eval server cleanup', e);
+      console.warn('[agent-ui] eval server cleanup', e);
     }
     closeEvalServer = null;
   }

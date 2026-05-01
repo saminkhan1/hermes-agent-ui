@@ -137,36 +137,6 @@ body {
   word-break: break-word;
 }
 
-.cloud-result-row {
-  flex: 0 0 auto;
-  padding: 8px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(245, 78, 0, 0.08);
-  font-size: 11px;
-  color: rgba(237, 236, 236, 0.72);
-  word-break: break-word;
-}
-
-.cloud-result-row[hidden] {
-  display: none !important;
-}
-
-.cloud-result-link {
-  padding: 0;
-  border: none;
-  background: transparent;
-  font: inherit;
-  color: #f54e00;
-  font-weight: 600;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  cursor: pointer;
-}
-
-.cloud-result-meta {
-  margin-right: 8px;
-}
-
 .main-stage {
   flex: 1;
   min-height: 0;

@@ -5,8 +5,8 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const SESSION_START_CMD = 'node ./hooks/cursorcats/sessionStart.js';
-const SESSION_END_CMD = 'node ./hooks/cursorcats/sessionEnd.js';
+const SESSION_START_CMD = 'node ./hooks/agent-ui/sessionStart.js';
+const SESSION_END_CMD = 'node ./hooks/agent-ui/sessionEnd.js';
 
 /**
  * @param {unknown} val
@@ -25,12 +25,12 @@ function normalizeHookList(val) {
  */
 function stripCursorcatsEntries(entries, kind) {
   const needle =
-    kind === 'start' ? 'hooks/cursorcats/sessionStart.js' : 'hooks/cursorcats/sessionEnd.js';
+    kind === 'start' ? 'hooks/agent-ui/sessionStart.js' : 'hooks/agent-ui/sessionEnd.js';
   return entries.filter((e) => {
     const c = e.command;
     const norm = c.split(path.sep).join('/');
     if (c.includes(needle)) return false;
-    if (norm.includes('plugins/local/cursorcats')) return false;
+    if (norm.includes('plugins/local/agent-ui')) return false;
     return true;
   });
 }
@@ -49,7 +49,7 @@ function hasExactCommand(entries, cmd) {
  */
 function copyBundledHookScripts(root, log) {
   const srcDir = path.join(root, 'assets', 'cursor-plugin', 'hooks');
-  const destDir = path.join(os.homedir(), '.cursor', 'hooks', 'cursorcats');
+  const destDir = path.join(os.homedir(), '.cursor', 'hooks', 'agent-ui');
   const files = ['notify.js', 'sessionStart.js', 'sessionEnd.js'];
   for (const name of files) {
     const from = path.join(srcDir, name);
@@ -121,7 +121,7 @@ function addHooks(pkgRoot, opts = {}) {
 }
 
 /**
- * Removes cursorcats hook entries from ~/.cursor/hooks.json and deletes copied scripts.
+ * Removes agent-ui hook entries from ~/.cursor/hooks.json and deletes copied scripts.
  * @param {string} _pkgRoot unused (keeps parity with addHooks for programmatic callers)
  * @param {{ log?: (msg: string, ...rest: unknown[]) => void }} [opts]
  */
@@ -150,7 +150,7 @@ function removeHooks(_pkgRoot, opts = {}) {
     log(`No hooks.json at ${hooksJsonPath}; skipped editing hook list.`);
   }
 
-  const destDir = path.join(os.homedir(), '.cursor', 'hooks', 'cursorcats');
+  const destDir = path.join(os.homedir(), '.cursor', 'hooks', 'agent-ui');
   if (fs.existsSync(destDir)) {
     fs.rmSync(destDir, { recursive: true, force: true });
     log(`Removed ${destDir}`);
@@ -167,7 +167,7 @@ if (require.main === module) {
   try {
     addHooks(path.resolve(__dirname, '..'), { log: console.log.bind(console) });
   } catch (e) {
-    console.error('[cursorcats] add-hooks failed:', (e && e.message) || e);
+    console.error('[agent-ui] add-hooks failed:', (e && e.message) || e);
     process.exit(1);
   }
 }
