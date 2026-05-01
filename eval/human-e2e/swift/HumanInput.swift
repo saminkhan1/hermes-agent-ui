@@ -320,6 +320,10 @@ case "replace-text":
   keyTapToPid("a", modifiers: ["cmd"], pid: pid)
   keyTapToPid("delete", pid: pid)
   typeText(args.dropFirst(4).joined(separator: " "))
+case "click-type":
+  guard args.count >= 5, let x = Double(args[1]), let y = Double(args[2]) else { fail("click-type requires x y text") }
+  click(x: x, y: y)
+  typeText(args.dropFirst(3).joined(separator: " "))
 case "activate-pid":
   guard args.count == 2, let pid = Int32(args[1]) else { fail("activate-pid requires pid") }
   activatePid(pid)
