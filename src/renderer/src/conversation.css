@@ -123,50 +123,6 @@ body {
   background: rgba(255, 255, 255, 0.1);
 }
 
-.answer-page-panel {
-  flex: 0 0 auto;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-  padding: 8px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(245, 78, 0, 0.08);
-}
-
-.answer-page-btn {
-  padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  border-radius: 8px;
-  border: none;
-  cursor: pointer;
-  background: #f54e00;
-  color: #fff;
-  transition: filter 0.1s;
-}
-
-.answer-page-btn:hover {
-  filter: brightness(1.08);
-}
-
-.answer-page-error {
-  font-size: 11px;
-  color: #ff8a7a;
-  flex: 1 1 100%;
-}
-
-.answer-error-row {
-  flex: 0 0 auto;
-  padding: 8px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 60, 40, 0.08);
-}
-
-.answer-error-row .answer-page-error {
-  flex: none;
-}
-
 .revert-error-row {
   flex: 0 0 auto;
   padding: 8px 16px;
@@ -211,18 +167,6 @@ body {
   margin-right: 8px;
 }
 
-.answer-page-btn--secondary {
-  background: rgba(255, 255, 255, 0.1);
-  color: rgba(237, 236, 236, 0.95);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-}
-
-.answer-page-btn--secondary:hover {
-  filter: none;
-  background: rgba(255, 255, 255, 0.16);
-  border-color: rgba(255, 255, 255, 0.28);
-}
-
 .main-stage {
   flex: 1;
   min-height: 0;
@@ -230,10 +174,7 @@ body {
   flex-direction: column;
 }
 
-/* Author `display: flex` on these sections must not beat the HTML [hidden] attribute. */
-#answer-toggle-bar[hidden],
-#answer-preview-pane[hidden],
-#answer-working-pane[hidden],
+/* Author `display: flex` on this section must not beat the HTML [hidden] attribute. */
 #conversation-section[hidden] {
   display: none !important;
 }
@@ -243,36 +184,6 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-
-.answer-preview-pane {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  background: rgba(0, 0, 0, 0.25);
-  overflow: hidden;
-}
-
-.answer-preview-iframe {
-  flex: 1;
-  width: 100%;
-  min-height: 0;
-  border: 0;
-  background: #f7f7f4;
-}
-
-.answer-working-pane {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #f7f7f4;
-  color: #f54e00;
-  font-size: 14px;
-  font-weight: 500;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  text-align: center;
 }
 
 .log {
@@ -353,34 +264,6 @@ footer.composer {
   color: rgba(255, 255, 255, 0.45);
   margin: 0;
   flex: 0 1 auto;
-}
-
-/* Text-link style (not the solid answer-page pill buttons). */
-.composer-answer-link {
-  flex: 0 0 auto;
-  align-self: center;
-  margin: 0;
-  padding: 0;
-  border: none;
-  background: none;
-  font: inherit;
-  font-size: 11px;
-  font-weight: 500;
-  white-space: nowrap;
-  color: #f54e00;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  cursor: pointer;
-}
-
-.composer-answer-link:hover {
-  color: #ff6a33;
-}
-
-.composer-answer-link:focus-visible {
-  outline: 2px solid #f54e00;
-  outline-offset: 2px;
-  border-radius: 2px;
 }
 
 .composer-row {

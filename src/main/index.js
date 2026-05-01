@@ -1,61 +1,3 @@
-function quietSdkLogsByDefault() {
-  if (String(process.env.CURSORCATS_AGENT_LOG_VERBOSE || '').trim() === '1') {
-    return;
-  }
-  process.env.RUST_LOG = 'error';
-  process.env.LOG_LEVEL = 'warn';
-  process.env.OTEL_LOG_LEVEL = 'error';
-  process.env.DEBUG = '';
-
-  installSdkLogStreamFilter();
-}
-
-/**
- * The Cursor SDK runs its own structured logger inside this process and writes
- * directly to stdout/stderr (`HH:MM:SS.mmm <LEVEL> ...meta={...}`). Those lines
- * cannot be silenced via env vars, so we filter them at the stream level. App
- * output (`console.*`, `[cursorcats] ...`) never matches and is preserved.
- */
-function installSdkLogStreamFilter() {
-  const lineRe = /^\d{1,2}:\d{2}:\d{2}\.\d{3}\s+(DEBUG|TRACE|INFO|WARN|ERROR)\s+/;
-  const shouldDrop = (line) => {
-    if (!line) return false;
-    if (lineRe.test(line)) return true;
-    return (
-      line.includes('cursorMcp:') ||
-      line.includes('mcp_http_exchange') ||
-      line.includes('mcp_oauth_')
-    );
-  };
-  for (const stream of [process.stdout, process.stderr]) {
-    if (!stream || stream.__cursorcatsFiltered) continue;
-    const original = stream.write.bind(stream);
-    let pending = '';
-    stream.write = (chunk, encoding, cb) => {
-      try {
-        const text =
-          typeof chunk === 'string' ? chunk : Buffer.isBuffer(chunk) ? chunk.toString() : String(chunk);
-        pending += text;
-        let out = '';
-        let idx;
-        while ((idx = pending.indexOf('\n')) !== -1) {
-          const line = pending.slice(0, idx);
-          pending = pending.slice(idx + 1);
-          if (!shouldDrop(line)) out += `${line}\n`;
-        }
-        if (out) original(out, encoding, cb);
-        else if (typeof cb === 'function') cb();
-        return true;
-      } catch {
-        return original(chunk, encoding, cb);
-      }
-    };
-    stream.__cursorcatsFiltered = true;
-  }
-}
-
-quietSdkLogsByDefault();
-
 const {
   app,
   BrowserWindow,
@@ -71,13 +13,14 @@ const {
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { pathToFileURL } = require('url');
 const { randomUUID } = require('crypto');
 const { spawn } = require('child_process');
+const http = require('http');
 const {
   startAgentForCat,
   cancelAllAgents,
   getAgentConversation,
+  listAgentConversations,
   setOnConversationPushed,
   dismissAgent,
   sendFollowup,
@@ -109,6 +52,107 @@ function assertPathInsideApp(relPath) {
   return full;
 }
 
+function readEvalJson(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => {
+      body += chunk;
+      if (body.length > 1024 * 1024) {
+        reject(new Error('request body too large'));
+        req.destroy();
+      }
+    });
+    req.on('end', () => {
+      if (!body.trim()) {
+        resolve({});
+        return;
+      }
+      try {
+        resolve(JSON.parse(body));
+      } catch (e) {
+        reject(e);
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+function sendEvalJson(res, statusCode, payload) {
+  const text = JSON.stringify(payload);
+  res.writeHead(statusCode, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': Buffer.byteLength(text),
+  });
+  res.end(text);
+}
+
+function writeEvalPortFile(port) {
+  const file = String(process.env.CURSORCATS_EVAL_PORT_FILE || '').trim();
+  if (!file) return;
+  fs.writeFileSync(file, `${port}\n`, 'utf8');
+}
+
+function startCursorCatsEvalServer(handlers, log = console) {
+  if (process.env.CURSORCATS_EVAL !== '1') return null;
+
+  const server = http.createServer(async (req, res) => {
+    try {
+      const url = new URL(req.url || '/', 'http://127.0.0.1');
+      if (req.method === 'GET' && url.pathname === '/health') {
+        sendEvalJson(res, 200, { ok: true, app: 'Cursor Cats', eval: true });
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/spawn') {
+        sendEvalJson(res, 200, await handlers.spawnEvalCat(await readEvalJson(req)));
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/conversation') {
+        sendEvalJson(res, 200, await handlers.getConversation(url.searchParams.get('catId')));
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/conversations') {
+        sendEvalJson(res, 200, await handlers.listConversations());
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/revert') {
+        sendEvalJson(res, 200, await handlers.revert(await readEvalJson(req)));
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/dismiss') {
+        sendEvalJson(res, 200, await handlers.dismiss(await readEvalJson(req)));
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/shutdown') {
+        sendEvalJson(res, 200, { ok: true });
+        setTimeout(() => handlers.shutdown(), 25);
+        return;
+      }
+      sendEvalJson(res, 404, { ok: false, error: 'not found' });
+    } catch (e) {
+      sendEvalJson(res, 500, { ok: false, error: (e && e.message) || String(e) });
+    }
+  });
+
+  const port = Number(process.env.CURSORCATS_EVAL_PORT || 0);
+  server.listen(port, '127.0.0.1', () => {
+    const address = server.address();
+    const actualPort = address && typeof address === 'object' ? address.port : port;
+    writeEvalPortFile(actualPort);
+    log.log(`[cursorcats] eval server listening on http://127.0.0.1:${actualPort}`);
+  });
+
+  return {
+    closeSync() {
+      try {
+        server.close();
+      } catch {
+        // ignore cleanup errors
+      }
+    },
+  };
+}
+
 let mainWindow;
 let modalWindow;
 let conversationWindow;
@@ -120,6 +164,7 @@ let closeHookServer = null;
 let mainWindowMouseable = false;
 let lastCatScreenRects = [];
 let tray;
+let closeEvalServer = null;
 /** Opening a modal child temporarily clears `setVisibleOnAllWorkspaces` on the overlay (stacking/focus on macOS); restore when the modal closes. */
 let mainWindowWasVisibleOnAllWorkspaces = false;
 /** Latest overlay cat counts from renderer (dock / tray menu). */
@@ -283,6 +328,14 @@ function activateCursorApp() {
   }
 }
 
+function closeWindowOnEscape(win, closeFn) {
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || input.key !== 'Escape') return;
+    event.preventDefault();
+    closeFn();
+  });
+}
+
 function openNewCatModal() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
 
@@ -324,6 +377,12 @@ function openNewCatModal() {
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+
+  closeWindowOnEscape(modalWindow, () => {
+    if (modalWindow && !modalWindow.isDestroyed()) {
+      modalWindow.close();
+    }
   });
 
   modalWindow.once('ready-to-show', () => {
@@ -401,6 +460,12 @@ function openConversationWindow(catId) {
       nodeIntegration: false,
       webSecurity: false,
     },
+  });
+
+  closeWindowOnEscape(conversationWindow, () => {
+    if (conversationWindow && !conversationWindow.isDestroyed()) {
+      conversationWindow.close();
+    }
   });
 
   conversationWindow.once('ready-to-show', () => {
@@ -593,7 +658,18 @@ ipcMain.handle('read-text-file', (_event, relPath) => {
 
 ipcMain.handle('get-asset-file-url', (_event, relPath) => {
   const full = assertPathInsideApp(relPath);
-  return pathToFileURL(full).href;
+  const ext = path.extname(full).toLowerCase();
+  const mime =
+    ext === '.png'
+      ? 'image/png'
+      : ext === '.jpg' || ext === '.jpeg'
+        ? 'image/jpeg'
+        : ext === '.gif'
+          ? 'image/gif'
+          : ext === '.webp'
+            ? 'image/webp'
+            : 'application/octet-stream';
+  return `data:${mime};base64,${fs.readFileSync(full).toString('base64')}`;
 });
 
 ipcMain.handle('choose-folder', async () => {
@@ -652,7 +728,9 @@ ipcMain.handle('add-recent-folder', (_event, folder) => {
   }
 });
 
-const FALLBACK_MODEL_LIST = [{ id: 'composer-2', displayName: 'Composer 2', description: '' }];
+const FALLBACK_MODEL_LIST = [
+  { id: 'hermes-cli', displayName: 'Local CLI', description: 'Hermes first, Codex fallback' },
+];
 
 function getModelSelectionPath() {
   const dir = path.join(os.homedir(), '.cursorcats');
@@ -678,30 +756,12 @@ function getCloudRepositorySelectionPath() {
   return path.join(dir, 'cloud_repository.json');
 }
 
-function normalizeRuntime(value) {
-  return String(value || '').trim().toLowerCase() === 'cloud' ? 'cloud' : 'local';
+function normalizeRuntime() {
+  return 'local';
 }
 
 ipcMain.handle('list-models', async () => {
-  const apiKey = process.env.CURSOR_API_KEY;
-  if (!apiKey) {
-    return FALLBACK_MODEL_LIST;
-  }
-  try {
-    const { Cursor } = require('@cursor/sdk');
-    const models = await Cursor.models.list({ apiKey });
-    if (!Array.isArray(models) || models.length === 0) {
-      return FALLBACK_MODEL_LIST;
-    }
-    return models.map((m) => ({
-      id: String(m.id),
-      displayName: (m.displayName && String(m.displayName)) || String(m.id),
-      description: m.description != null ? String(m.description) : '',
-    }));
-  } catch (e) {
-    console.warn('list-models failed', e);
-    return FALLBACK_MODEL_LIST;
-  }
+  return FALLBACK_MODEL_LIST;
 });
 
 ipcMain.handle('get-selected-model', () => {
@@ -731,24 +791,7 @@ ipcMain.handle('set-selected-model', (_event, modelId) => {
 });
 
 ipcMain.handle('list-cloud-repositories', async () => {
-  const apiKey = process.env.CURSOR_API_KEY;
-  if (!apiKey) {
-    return [];
-  }
-  try {
-    const { Cursor } = require('@cursor/sdk');
-    const repos = await Cursor.repositories.list({ apiKey });
-    if (!Array.isArray(repos)) return [];
-    return repos
-      .map((r) => {
-        const url = r && r.url != null ? String(r.url).trim() : '';
-        return url ? { url } : null;
-      })
-      .filter(Boolean);
-  } catch (e) {
-    console.warn('list-cloud-repositories failed', e);
-    return [];
-  }
+  return [];
 });
 
 ipcMain.handle('get-selected-runtime', () => {
@@ -800,8 +843,8 @@ ipcMain.handle('set-selected-cloud-repository', (_event, repo) => {
   }
 });
 
-ipcMain.on('new-cat-submit', (_event, payload) => {
-  const catId = randomUUID();
+function startCatRunFromPayload(payload = {}, opts = {}) {
+  const catId = opts.catId ? String(opts.catId) : randomUUID();
   const modelRaw = payload && payload.model;
   const modelId =
     typeof modelRaw === 'string' && modelRaw.trim() ? modelRaw.trim() : null;
@@ -837,7 +880,7 @@ ipcMain.on('new-cat-submit', (_event, payload) => {
     }
   }
   const out = { ...payload, catId };
-  if (modalWindow && !modalWindow.isDestroyed()) {
+  if (opts.closeModal !== false && modalWindow && !modalWindow.isDestroyed()) {
     modalWindow.close();
   }
   sendSpawnCatToOverlay(out);
@@ -852,6 +895,11 @@ ipcMain.on('new-cat-submit', (_event, payload) => {
     },
     { getMainWindow: () => mainWindow }
   );
+  return { catId, modelId: modelId || null, runtime };
+}
+
+ipcMain.on('new-cat-submit', (_event, payload) => {
+  startCatRunFromPayload(payload, { closeModal: true });
 });
 
 ipcMain.on('new-cat-cancel', () => {
@@ -978,14 +1026,42 @@ app.whenReady().then(() => {
   if (process.platform === 'darwin' && app.dock) {
     app.dock.hide();
   }
-  if (!process.env.CURSOR_API_KEY) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      'CURSOR_API_KEY is not set. New cats will appear briefly and disappear; set the env var to run agents.'
-    );
-  }
   createWindow();
   createTray();
+  closeEvalServer = startCursorCatsEvalServer(
+    {
+      spawnEvalCat: async (payload = {}) => {
+        const catId =
+          payload && typeof payload.catId === 'string' && payload.catId.trim()
+            ? payload.catId.trim()
+            : randomUUID();
+        const result = startCatRunFromPayload(
+          {
+            ...payload,
+            runtime: 'local',
+          },
+          { catId, closeModal: false }
+        );
+        return { ok: true, catId: result.catId };
+      },
+      getConversation: async (catId) => {
+        if (!catId) return { found: false, items: [] };
+        return getAgentConversation(String(catId));
+      },
+      listConversations: async () => ({ ok: true, conversations: listAgentConversations() }),
+      revert: async ({ catId } = {}) => {
+        if (!catId) return { ok: false, error: 'missing cat id' };
+        return revertAgentChanges(String(catId), { log: console });
+      },
+      dismiss: async ({ catId } = {}) => {
+        if (!catId) return { ok: false, error: 'missing cat id' };
+        await dismissAgent(String(catId), { getMainWindow: () => mainWindow, log: console });
+        return { ok: true };
+      },
+      shutdown: () => app.quit(),
+    },
+    console
+  );
 
   void startHookServer({
     onIdeSessionStart: (p) => handleIdeSessionStart(p, { getMainWindow: () => mainWindow, log: console }),
@@ -1089,6 +1165,23 @@ app.on('will-quit', () => {
       console.warn('[cursorcats] hook server cleanup', e);
     }
     closeHookServer = null;
+  }
+  if (typeof closeEvalServer === 'function') {
+    try {
+      closeEvalServer();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[cursorcats] eval server cleanup', e);
+    }
+    closeEvalServer = null;
+  } else if (closeEvalServer && typeof closeEvalServer.closeSync === 'function') {
+    try {
+      closeEvalServer.closeSync();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[cursorcats] eval server cleanup', e);
+    }
+    closeEvalServer = null;
   }
   cancelAllAgents();
   globalShortcut.unregisterAll();

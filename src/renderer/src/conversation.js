@@ -11,23 +11,7 @@ const dismissBtn = document.getElementById('btn-dismiss');
 const revertBtn = document.getElementById('btn-revert');
 const revertErrorRow = document.getElementById('revert-error-row');
 const revertErrorEl = document.getElementById('revert-error');
-const answerToggleBar = document.getElementById('answer-toggle-bar');
-const btnViewConversation = document.getElementById('btn-view-conversation');
-const btnViewAnswer = document.getElementById('btn-view-answer');
-const answerErrorRow = document.getElementById('answer-error-row');
-const answerPageErr = document.getElementById('answer-page-error');
-const answerPreviewPane = document.getElementById('answer-preview-pane');
-const answerPreviewIframe = document.getElementById('answer-preview-iframe');
-const conversationSection = document.getElementById('conversation-section');
 const cloudResultRow = document.getElementById('cloud-result-row');
-/** @type {string | null} */
-let answerPageUrl = null;
-/** @type {string | null} */
-let lastBoundAnswerUrl = null;
-/** @type {string | null} */
-let lastIframeBoundUrl = null;
-/** @type {'answer' | 'conversation'} */
-let answerViewMode = 'answer';
 const followupInput = document.getElementById('followup-input');
 const sendBtn = document.getElementById('btn-send');
 
@@ -45,7 +29,7 @@ function kindToLabel(k) {
   return (
     {
       user: 'You',
-      assistant: 'Cat',
+      assistant: 'Agent',
       thinking: 'Thinking',
       tool: 'Tool',
       task: 'Task',
@@ -58,6 +42,27 @@ function kindToLabel(k) {
 function kindClass(k) {
   const safe = String(k).replace(/[^a-z0-9-]/gi, '') || 'item';
   return `line--${safe}`;
+}
+
+function renderLogItems(items) {
+  logEl.replaceChildren();
+  for (const item of items || []) {
+    if (!item || item.kind === 'status') continue;
+
+    const line = document.createElement('div');
+    line.className = `line ${kindClass(item.kind)}`;
+
+    const label = document.createElement('span');
+    label.className = 'line-label';
+    label.textContent = kindToLabel(item.kind);
+
+    const text = document.createElement('div');
+    text.className = 'line-text';
+    text.textContent = item.text == null ? '' : String(item.text);
+
+    line.append(label, text);
+    logEl.appendChild(line);
+  }
 }
 
 function updateComposerFromData(data) {
@@ -141,92 +146,10 @@ function updateCloudResultRow(data) {
   `;
 }
 
-function clearAnswerPreview() {
-  answerPageUrl = null;
-  lastIframeBoundUrl = null;
-  if (answerPreviewIframe) answerPreviewIframe.removeAttribute('src');
-}
-
-function updateAnswerPagePanel(data) {
-  const elsOk =
-    answerToggleBar &&
-    btnViewConversation &&
-    btnViewAnswer &&
-    answerErrorRow &&
-    answerPageErr &&
-    answerPreviewPane &&
-    answerPreviewIframe &&
-    conversationSection;
-  if (!elsOk) return;
-
-  answerPageUrl = null;
-  btnViewConversation.hidden = true;
-  btnViewAnswer.hidden = true;
-  answerPageErr.textContent = '';
-
-  if (!data || !data.found) {
-    answerToggleBar.hidden = true;
-    answerErrorRow.hidden = true;
-    answerPreviewPane.hidden = true;
-    conversationSection.hidden = false;
-    lastBoundAnswerUrl = null;
-    clearAnswerPreview();
-    return;
-  }
-
-  const url = data.answerHtmlFileUrl;
-  const writeErr = data.answerHtmlWriteError;
-
-  if (writeErr) {
-    answerToggleBar.hidden = true;
-    answerErrorRow.hidden = false;
-    answerPageErr.textContent = `Could not save answer page: ${writeErr}`;
-    answerPreviewPane.hidden = true;
-    conversationSection.hidden = false;
-    lastBoundAnswerUrl = null;
-    clearAnswerPreview();
-    return;
-  }
-
-  answerErrorRow.hidden = true;
-
-  answerPageUrl = url ? String(url) : null;
-  if (answerPageUrl !== lastBoundAnswerUrl && answerPageUrl) {
-    answerViewMode = 'answer';
-    lastBoundAnswerUrl = answerPageUrl;
-  }
-
-  answerToggleBar.hidden = answerViewMode === 'answer';
-  btnViewConversation.hidden = answerViewMode !== 'answer';
-  btnViewAnswer.hidden = answerViewMode !== 'conversation';
-
-  const answerWorkingPane = document.getElementById('answer-working-pane');
-  if (answerPageUrl) {
-    if (lastIframeBoundUrl !== answerPageUrl) {
-      answerPreviewIframe.src = answerPageUrl;
-      lastIframeBoundUrl = answerPageUrl;
-    }
-    answerPreviewIframe.hidden = false;
-    if (answerWorkingPane) answerWorkingPane.hidden = true;
-  } else {
-    answerPreviewIframe.hidden = true;
-    if (answerWorkingPane) answerWorkingPane.hidden = false;
-  }
-
-  if (answerViewMode === 'answer') {
-    answerPreviewPane.hidden = false;
-    conversationSection.hidden = true;
-  } else {
-    answerPreviewPane.hidden = true;
-    conversationSection.hidden = false;
-  }
-}
-
 async function render() {
   if (!window.cursorcats?.getAgentConversation || !catId) {
     logEl.textContent = 'No conversation to show.';
     updateComposerFromData(null);
-    updateAnswerPagePanel(null);
     updateRevertFromData(null);
     updateRevertErrorRow(null);
     updateCloudResultRow(null);
@@ -237,7 +160,6 @@ async function render() {
   if (!data || !data.found) {
     logEl.textContent = 'This conversation is not available yet, or the agent was not started.';
     updateComposerFromData(null);
-    updateAnswerPagePanel(null);
     updateRevertFromData(null);
     updateRevertErrorRow(null);
     updateCloudResultRow(null);
@@ -252,20 +174,9 @@ async function render() {
     metaEl.hidden = true;
   }
 
-  logEl.innerHTML = (data.items || [])
-    .filter((item) => item.kind !== 'status')
-    .map(
-      (item) => `
-  <div class="line ${kindClass(item.kind)}">
-    <span class="line-label">${escapeText(kindToLabel(item.kind))}</span>
-    <div class="line-text">${escapeText(item.text).replace(/\n/g, '<br>')}</div>
-  </div>
-`
-    )
-    .join('');
+  renderLogItems(data.items || []);
   logEl.scrollTop = logEl.scrollHeight;
   updateComposerFromData(data);
-  updateAnswerPagePanel(data);
   updateRevertFromData(data);
   updateRevertErrorRow(data);
   updateCloudResultRow(data);
@@ -273,8 +184,8 @@ async function render() {
 
 function sendFollowup() {
   if (!catId || !followupInput) return;
-  const text = followupInput.value.trim();
-  if (!text) return;
+  const text = followupInput.value;
+  if (!text.trim()) return;
   if (lastData && String(lastData.runStatus || '').toLowerCase() === 'running') return;
   if (typeof window.cursorcats.sendFollowup !== 'function') return;
   followupInput.value = '';
@@ -343,25 +254,6 @@ if (cloudResultRow) {
     if (url && typeof window.cursorcats?.openExternalUrl === 'function') {
       void window.cursorcats.openExternalUrl(url);
     }
-  });
-}
-
-function applyAnswerViewFromState() {
-  if (!lastData) return;
-  updateAnswerPagePanel(lastData);
-}
-
-if (btnViewConversation) {
-  btnViewConversation.addEventListener('click', () => {
-    answerViewMode = 'conversation';
-    applyAnswerViewFromState();
-  });
-}
-
-if (btnViewAnswer) {
-  btnViewAnswer.addEventListener('click', () => {
-    answerViewMode = 'answer';
-    applyAnswerViewFromState();
   });
 }
 

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self' 'unsafe-inline' ws: http://localhost:*; script-src 'self' 'unsafe-inline' http://localhost:*; style-src 'self' 'unsafe-inline'; img-src 'self' file: data: blob:; frame-src 'self' file: data: blob: http://localhost:*; connect-src 'self' ws: http://localhost:*;"
+      content="default-src 'self' 'unsafe-inline' ws: http://localhost:*; script-src 'self' 'unsafe-inline' http://localhost:*; style-src 'self' 'unsafe-inline'; img-src 'self' file: data: blob:; connect-src 'self' ws: http://localhost:*;"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Conversation</title>
@@ -22,29 +22,11 @@
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
       </div>
-      <div id="answer-toggle-bar" class="answer-page-panel" hidden>
-        <button type="button" id="btn-view-answer" class="answer-page-btn answer-page-btn--secondary" hidden>
-          View answer
-        </button>
-      </div>
-      <div id="answer-error-row" class="answer-error-row" hidden>
-        <span id="answer-page-error" class="answer-page-error"></span>
-      </div>
       <div id="revert-error-row" class="revert-error-row" hidden>
         <span id="revert-error" class="revert-error"></span>
       </div>
       <div id="cloud-result-row" class="cloud-result-row" hidden></div>
       <div class="main-stage" id="main-stage">
-        <div id="answer-preview-pane" class="answer-preview-pane" hidden>
-          <div id="answer-working-pane" class="answer-working-pane" hidden>
-            <div class="answer-working-text">Meow, working on it...</div>
-          </div>
-          <iframe
-            id="answer-preview-iframe"
-            class="answer-preview-iframe"
-            title="Assistant answer"
-          ></iframe>
-        </div>
         <div id="conversation-section" class="conversation-section">
           <div id="log" class="log" role="log" aria-live="polite" aria-relevant="additions"></div>
         </div>
@@ -52,16 +34,13 @@
       <footer class="composer">
         <div class="composer-label-row">
           <label class="composer-label" for="followup-input">Follow up</label>
-          <button type="button" id="btn-view-conversation" class="composer-answer-link" hidden>
-            View conversation
-          </button>
         </div>
         <div class="composer-row">
           <textarea
             id="followup-input"
             class="composer-input"
             rows="2"
-            placeholder="Message the agent… (Enter send · ⌘/Ctrl+Enter or Shift+Enter newline)"
+            placeholder="Message agent… (Enter send · ⌘/Ctrl+Enter or Shift+Enter newline)"
             autocomplete="off"
           ></textarea>
           <button type="button" id="btn-send" class="composer-send">Send</button>

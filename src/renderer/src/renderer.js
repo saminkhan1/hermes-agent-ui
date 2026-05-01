@@ -1880,7 +1880,14 @@
     setupCanvasSize();
     if (!window.cursorcats) {
       // eslint-disable-next-line no-console
-      console.error('cursorcats API missing (preload not loaded?)');
+      console.warn('cursorcats API missing (preload not loaded?)');
+      const fallback = document.createElement('div');
+      fallback.className = 'browser-fallback';
+      fallback.innerHTML = [
+        '<strong>Cursor-Cats is running as an Electron overlay.</strong>',
+        '<span>This localhost page is only the renderer bundle. Use the Electron app and press <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> to launch a cat.</span>',
+      ].join('');
+      document.body.appendChild(fallback);
     } else {
       if (typeof window.cursorcats.onSpawnCat === 'function') {
         window.cursorcats.onSpawnCat((p) => {

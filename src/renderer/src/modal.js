@@ -49,7 +49,7 @@ const cloudReposList = document.getElementById('cloud-repos-list');
 const cloudStartingRefInput = document.getElementById('cloud-starting-ref');
 const cloudRepoSearchInput = document.getElementById('cloud-repo-search');
 
-const DEFAULT_MODEL_ID = 'composer-2';
+const DEFAULT_MODEL_ID = 'hermes-cli';
 
 /** @type {Array<{ id: string, displayName: string, description: string }>} */
 let modelsList = [];
@@ -57,7 +57,7 @@ let selectedModelId = DEFAULT_MODEL_ID;
 let modelMenuOpen = false;
 
 let selectedFolder = '';
-/** @type {'local' | 'cloud'} */
+/** @type {'local'} */
 let selectedRuntime = 'local';
 /** @type {Array<{ url: string }>} */
 let cloudReposListData = [];
@@ -312,8 +312,8 @@ function ensureCloudRepositoriesLoaded() {
   return cloudReposLoadingPromise;
 }
 
-function normalizeRuntime(value) {
-  return String(value || '').trim().toLowerCase() === 'cloud' ? 'cloud' : 'local';
+function normalizeRuntime() {
+  return 'local';
 }
 
 function syncRuntimeDisplay() {
@@ -324,6 +324,7 @@ function syncRuntimeDisplay() {
     runtimeLocalBtn.setAttribute('aria-checked', cloud ? 'false' : 'true');
   }
   if (runtimeCloudBtn) {
+    runtimeCloudBtn.hidden = true;
     runtimeCloudBtn.classList.toggle('selected', cloud);
     runtimeCloudBtn.setAttribute('aria-checked', cloud ? 'true' : 'false');
   }
@@ -376,7 +377,7 @@ async function onChooseFolder() {
 
 function submit() {
   setError('');
-  const prompt = (promptEl.value || '').trim();
+  const prompt = promptEl.value || '';
   const runtime = normalizeRuntime(selectedRuntime);
   if (runtime === 'local') {
     if (!selectedFolder.trim()) {
@@ -389,7 +390,7 @@ function submit() {
       return;
     }
   }
-  if (!prompt) {
+  if (!prompt.trim()) {
     setError('Enter a prompt.');
     return;
   }
@@ -508,7 +509,7 @@ async function selectModel(id) {
 
 async function initModels() {
   if (!window.cursorcats?.listModels) {
-    modelsList = [{ id: DEFAULT_MODEL_ID, displayName: 'Composer 2', description: '' }];
+    modelsList = [{ id: DEFAULT_MODEL_ID, displayName: 'Local CLI', description: '' }];
     selectedModelId = DEFAULT_MODEL_ID;
     updateModelChipLabel();
     return;
@@ -518,10 +519,10 @@ async function initModels() {
     if (Array.isArray(list) && list.length > 0) {
       modelsList = list;
     } else {
-      modelsList = [{ id: DEFAULT_MODEL_ID, displayName: 'Composer 2', description: '' }];
+      modelsList = [{ id: DEFAULT_MODEL_ID, displayName: 'Local CLI', description: '' }];
     }
   } catch {
-    modelsList = [{ id: DEFAULT_MODEL_ID, displayName: 'Composer 2', description: '' }];
+    modelsList = [{ id: DEFAULT_MODEL_ID, displayName: 'Local CLI', description: '' }];
   }
   let saved = null;
   if (window.cursorcats?.getSelectedModel) {
@@ -560,7 +561,7 @@ if (runtimeLocalBtn) {
 
 if (runtimeCloudBtn) {
   runtimeCloudBtn.addEventListener('click', () => {
-    void selectRuntime('cloud');
+    void selectRuntime('local');
   });
 }
 
@@ -644,11 +645,6 @@ promptEl.addEventListener('keydown', (e) => {
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    if (modelMenuOpen) {
-      e.preventDefault();
-      closeModelMenu();
-      return;
-    }
     e.preventDefault();
     cancel();
   } else if (e.key === 'o' && (e.metaKey || e.ctrlKey)) {
