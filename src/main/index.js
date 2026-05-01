@@ -1272,14 +1272,24 @@ async function readDomEvalTargets(win, selectors) {
         out.selectedFolderPath = (document.body && document.body.dataset ? document.body.dataset.selectedFolder : '') || (selected && selected.dataset ? selected.dataset.folder : '') || '';
         const visibleText = document.body && typeof document.body.innerText === 'string' ? document.body.innerText.replace(/\s+/g, ' ').trim() : '';
         out.visibleTextLength = visibleText.length;
-        out.visibleTextPreview = visibleText.slice(0, 500);
+        out.visibleTextPreview = visibleText.slice(0, 4000);
+        out.lineEntries = Array.from(document.querySelectorAll('.line')).slice(0, 20).map((line) => {
+          const label = line.querySelector('.line-label');
+          const text = line.querySelector('.line-text');
+          return {
+            label: label && typeof label.textContent === 'string' ? label.textContent : '',
+            text: text && typeof text.textContent === 'string' ? text.textContent : '',
+          };
+        });
         return out;
       })()`,
       true
     );
     const out = {};
     for (const [key, value] of Object.entries(raw || {})) {
-      if (Array.isArray(value)) {
+      if (key === 'lineEntries') {
+        out[key] = value;
+      } else if (Array.isArray(value)) {
         out[key] = value.map((r) => offsetRect(r, win)).filter(Boolean);
       } else if (value && typeof value === 'object' && 'left' in value) {
         out[key] = offsetRect(value, win);

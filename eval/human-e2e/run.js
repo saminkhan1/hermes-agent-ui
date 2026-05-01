@@ -316,6 +316,23 @@ async function waitForCatVisible(port, catId) {
   return Date.now() - start;
 }
 
+async function openConversationFromVisibleCat(port, catId) {
+  const data = await waitFor(port, async () => {
+    const targets = await request(port, 'GET', '/ui-targets');
+    const cat = (targets.cats || []).find((c) => String(c.catId || '') === String(catId));
+    return cat ? { targets, cat } : null;
+  }, 30000, 75);
+  const point = center(data.cat);
+  await input('click', String(point.x), String(point.y));
+  return waitFor(port, async () => {
+    const targets = await request(port, 'GET', '/ui-targets');
+    const convo = targets.conversation || {};
+    const hasText = Number(convo.visibleTextLength || 0) > 0 || String(convo.visibleTextPreview || '').length > 0;
+    const hasLines = Array.isArray(convo.lineEntries) && convo.lineEntries.length > 0;
+    return convo.visible && hasText && hasLines ? targets : null;
+  }, 15000, 100);
+}
+
 async function closeModalIfOpen(port) {
   await request(port, 'POST', '/close-modal', {}).catch(() => {});
   await sleep(250);
@@ -1101,6 +1118,8 @@ async function startScenario(port, scenario, index, appPid) {
     result.submitToCatVisibleMs = Date.now() - submitAt || catVisibleMs;
     const afterSubmitTargets = await request(port, 'GET', '/ui-targets').catch(() => null);
     if (afterSubmitTargets) result.visibleStates.push(captureVisibleState('after_submit', afterSubmitTargets));
+    const conversationRunningTargets = await openConversationFromVisibleCat(port, catId).catch(() => null);
+    if (conversationRunningTargets) result.visibleStates.push(captureVisibleState('conversation_running', conversationRunningTargets));
     result.visibleTextStatePass = visibleStatePass(result);
     result.startedOk = true;
   } catch (e) {
@@ -1142,6 +1161,8 @@ async function finishScenario(port, scenario, result) {
       });
     }
     result.workflowSuccess = waited.ok && waited.status === 'completed' && result.oraclePass ? 1 : 0;
+    const conversationFinishedTargets = await openConversationFromVisibleCat(port, result.catId).catch(() => null);
+    if (conversationFinishedTargets) result.visibleStates.push(captureVisibleState('conversation_finished', conversationFinishedTargets));
     const afterFinishTargets = await request(port, 'GET', '/ui-targets').catch(() => null);
     if (afterFinishTargets) result.visibleStates.push(captureVisibleState('after_finish', afterFinishTargets));
     result.visibleTextStatePass = visibleStatePass(result);
@@ -1309,6 +1330,7 @@ function captureVisibleState(label, targets = {}) {
     promptPreview: targets.modal && targets.modal.promptValuePreview ? String(targets.modal.promptValuePreview) : '',
     conversationVisible: !!(targets.conversation && targets.conversation.visible),
     conversationText: targets.conversation && targets.conversation.visibleTextPreview ? String(targets.conversation.visibleTextPreview) : '',
+    conversationLineEntries: Array.isArray(targets.conversation && targets.conversation.lineEntries) ? targets.conversation.lineEntries.slice(0, 20) : [],
     catCount: Array.isArray(targets.cats) ? targets.cats.length : 0,
   };
 }
@@ -1317,11 +1339,16 @@ function visibleStatePass(result) {
   const states = Array.isArray(result.visibleStates) ? result.visibleStates : [];
   const afterInput = states.find((s) => s.label === 'after_input');
   const afterSubmit = states.find((s) => s.label === 'after_submit');
-  const afterFinish = states.find((s) => s.label === 'after_finish');
+  const conversationStates = states.filter((s) => String(s.label || '').startsWith('conversation_'));
   const promptOk = !!afterInput && afterInput.promptLength >= String(result.promptText || '').length && String(afterInput.promptPreview || '') === String(result.promptText || '').slice(0, 120);
   const submitOk = !!afterSubmit && afterSubmit.catCount > 0;
-  const finishOk = !afterFinish || afterFinish.catCount >= 0;
-  return promptOk && submitOk && finishOk ? 1 : 0;
+  const convoOk = conversationStates.some((state) => {
+    const items = Array.isArray(state.conversationLineEntries) ? state.conversationLineEntries : [];
+    const labels = items.map((it) => String(it.label || '').toLowerCase());
+    const text = items.map((it) => String(it.text || '')).join('\n');
+    return labels.includes('you') && labels.includes('agent') && text.length > 0;
+  });
+  return promptOk && submitOk && convoOk ? 1 : 0;
 }
 
 async function cancelUnfinishedScenarios(port, results) {
