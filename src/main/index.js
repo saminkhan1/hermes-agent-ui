@@ -7,14 +7,12 @@ const {
   nativeImage,
   ipcMain,
   screen,
-  dialog,
-  shell,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { randomUUID, createHash } = require('crypto');
-const { spawn, execFile } = require('child_process');
+const { execFile } = require('child_process');
 const http = require('http');
 const {
   recordTrace,
@@ -30,17 +28,21 @@ const {
   listAgentConversations,
   setOnConversationPushed,
   dismissAgent,
-  cancelAgent,
   sendFollowup,
-  revertAgentChanges,
   getAgentArtifacts,
 } = require('./agents');
-const { startHookServer } = require('./hook-server');
-const {
-  handleIdeSessionStart,
-  handleIdeSessionEnd,
-  removeIdeCatIfPresent,
-} = require('./ide-sessions');
+
+let getWindowsModulePromise = null;
+
+function loadGetWindowsModule() {
+  if (!getWindowsModulePromise) {
+    getWindowsModulePromise = import('get-windows').catch((err) => {
+      getWindowsModulePromise = null;
+      throw err;
+    });
+  }
+  return getWindowsModulePromise;
+}
 
 /**
  * Root of the installed package (`package.json`, `assets/`, `out/`).
@@ -50,15 +52,6 @@ const {
  */
 function getPackageRoot() {
   return path.resolve(__dirname, '..', '..');
-}
-
-function assertPathInsideApp(relPath) {
-  const root = path.resolve(getPackageRoot());
-  const full = path.resolve(path.join(root, relPath));
-  if (full !== root && !full.startsWith(root + path.sep)) {
-    throw new Error('Path escapes app root');
-  }
-  return full;
 }
 
 function readEvalJson(req) {
@@ -150,16 +143,8 @@ function startAgentUIEvalServer(handlers, log = console) {
         sendEvalJson(res, 200, await handlers.closeModal());
         return;
       }
-      if (req.method === 'POST' && url.pathname === '/revert') {
-        sendEvalJson(res, 200, await handlers.revert(await readEvalJson(req)));
-        return;
-      }
       if (req.method === 'POST' && url.pathname === '/dismiss') {
         sendEvalJson(res, 200, await handlers.dismiss(await readEvalJson(req)));
-        return;
-      }
-      if (req.method === 'POST' && url.pathname === '/cancel') {
-        sendEvalJson(res, 200, await handlers.cancel(await readEvalJson(req)));
         return;
       }
       if (req.method === 'POST' && url.pathname === '/shutdown') {
@@ -197,98 +182,477 @@ let modalWindow;
 let conversationWindow;
 /** Square conversation panel — content dimensions (px). */
 const CONVERSATION_WINDOW_SIDE = 800;
-/** @type {null | (() => void)} */
-let closeHookServer = null;
+const PET_WINDOW_WIDTH = 356;
+const PET_WINDOW_HEIGHT = 320;
+const PET_VIEWPORT_SIZE = { width: PET_WINDOW_WIDTH, height: PET_WINDOW_HEIGHT };
+const PET_DEFAULT_MARGIN = 24;
+const PET_LAYOUT_PADDING = { top: 8, right: 28, bottom: 8, left: 0 };
+const PET_TRAY_GAP = 4;
+const PET_PLACEMENT_STICKINESS = 96;
+const PET_DEFAULT_MASCOT_SIZE = { width: 112, height: 121 };
+const PET_DEFAULT_TRAY_SIZE = { width: 276, height: 131 };
+const PET_DISPLAY_SWITCH_SLOP = 24;
+const PET_MOMENTUM_FRAME_MS = 16;
+const PET_MOMENTUM_DECAY = 0.88;
+const PET_MOMENTUM_STOP_VELOCITY = 65;
+const PET_MOMENTUM_MAX_MS = 900;
 /** When true, the overlay is accepting mouse (cursor over a cat). */
 let mainWindowMouseable = false;
 let lastCatScreenRects = [];
 let tray;
 let closeEvalServer = null;
-/** Opening a modal child temporarily clears `setVisibleOnAllWorkspaces` on the overlay (stacking/focus on macOS); restore when the modal closes. */
+/** Opening a child window temporarily clears `setVisibleOnAllWorkspaces` on the overlay (stacking/focus on macOS); restore when the child closes. */
 let mainWindowWasVisibleOnAllWorkspaces = false;
-/** Latest overlay cat counts from renderer (dock / tray menu). */
+/** Latest overlay session counts from renderer (dock / tray menu). */
 let catCounts = { active: 0, inReview: 0 };
 let overlayReady = false;
 const pendingSpawnCats = [];
-
-/** Tracked for frontmost window stability (used by get-frontmost-window-info). */
-let activeWindowState = { id: null, firstSeenAt: 0, screenBounds: null };
-let lastExternalWindowSnapshot = null;
-/** Captured at the moment the user invokes Cmd+Shift+C, then attached to the submitted cat. */
 let activeModalContextId = null;
 const modalContexts = new Map();
-function windowKey(win) {
-  if (!win || !win.owner) return null;
-  return `${win.owner.processId}:${win.id}`;
+let lastExternalWindowSnapshot = null;
+let activeWindowPollTimer = null;
+let petOverlayOpenRequested = false;
+let petDragState = null;
+let petMomentumTimer = null;
+let petPointerInteractive = false;
+let petPointerInteractionSeen = false;
+let petKeyboardInteractive = false;
+let petAnchor = null;
+let petLayout = null;
+let petMascotSize = { ...PET_DEFAULT_MASCOT_SIZE };
+let petTraySize = null;
+let petPlacement = 'top-end';
+
+function getPetOverlayStatePath() {
+  return path.join(getAgentUIConfigDir(), 'pet-overlay.json');
 }
 
-function clipScreenBoundsToOverlayLocal(wb) {
-  if (!wb) return null;
-  const display = screen.getPrimaryDisplay();
-  const { x: dx, y: dy, width: dw, height: dh } = display.bounds;
-  const left0 = wb.x - dx;
-  const top0 = wb.y - dy;
-  const right0 = left0 + wb.width;
-  const bottom0 = top0 + wb.height;
-  const left = Math.max(0, left0);
-  const top = Math.max(0, top0);
-  const right = Math.min(dw, right0);
-  const bottom = Math.min(dh, bottom0);
-  if (right - left < 2 || bottom - top < 2) return null;
-  return { left, top, right, bottom };
-}
-
-async function tickActiveWindowTracker() {
+function readPetOverlayState() {
   try {
-    const { activeWindow } = await import('get-windows');
-    const win = await activeWindow({
-      accessibilityPermission: false,
-      screenRecordingPermission: false,
-    });
-    if (!win || !win.bounds || (win.owner && win.owner.processId === process.pid)) {
-      activeWindowState = { id: null, firstSeenAt: 0, screenBounds: null };
-      return;
-    }
-    const key = windowKey(win);
-    if (key == null) {
-      activeWindowState = { id: null, firstSeenAt: 0, screenBounds: null };
-      return;
-    }
-    if (key !== activeWindowState.id) {
-      activeWindowState = {
-        id: key,
-        firstSeenAt: Date.now(),
-        screenBounds: { x: win.bounds.x, y: win.bounds.y, width: win.bounds.width, height: win.bounds.height },
-      };
-    } else {
-      activeWindowState.screenBounds = {
-        x: win.bounds.x,
-        y: win.bounds.y,
-        width: win.bounds.width,
-        height: win.bounds.height,
-      };
-    }
-    lastExternalWindowSnapshot = {
-      capturedAt: Date.now(),
-      title: win.title || '',
-      id: win.id || null,
-      bounds: { x: win.bounds.x, y: win.bounds.y, width: win.bounds.width, height: win.bounds.height },
-      owner: win.owner ? { ...win.owner } : {},
-    };
+    const file = getPetOverlayStatePath();
+    if (!fs.existsSync(file)) return {};
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return data && typeof data === 'object' ? data : {};
   } catch {
-    // ignore get-windows errors
+    return {};
+  }
+}
+
+function writePetOverlayState(patch = {}) {
+  try {
+    const file = getPetOverlayStatePath();
+    const current = readPetOverlayState();
+    fs.writeFileSync(file, JSON.stringify({ ...current, ...patch }, null, 2), 'utf8');
+  } catch {
+    // ignore persistence errors
+  }
+}
+
+function rectCenterX(rect) {
+  return rect.x + rect.width / 2;
+}
+
+function rectCenterY(rect) {
+  return rect.y + rect.height / 2;
+}
+
+function pointForRectCenter(rect) {
+  return { x: rectCenterX(rect), y: rectCenterY(rect) };
+}
+
+function clampNumber(value, min, max) {
+  if (min > max) return Math.round((min + max) / 2);
+  return Math.min(Math.max(Math.round(value), min), max);
+}
+
+function safeInteger(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.trunc(n) : null;
+}
+
+function clampRectToDisplay(rect, displayBounds, { bottomPadding = 0 } = {}) {
+  return {
+    ...rect,
+    x: clampNumber(rect.x, displayBounds.x, displayBounds.x + displayBounds.width - rect.width),
+    y: clampNumber(rect.y, displayBounds.y, displayBounds.y + displayBounds.height - rect.height - bottomPadding),
+  };
+}
+
+function expandedMascotBounds(mascotBounds) {
+  return {
+    x: mascotBounds.x - PET_LAYOUT_PADDING.left,
+    y: mascotBounds.y - PET_LAYOUT_PADDING.top,
+    width: mascotBounds.width + PET_LAYOUT_PADDING.left + PET_LAYOUT_PADDING.right,
+    height: mascotBounds.height + PET_LAYOUT_PADDING.top + PET_LAYOUT_PADDING.bottom,
+  };
+}
+
+function trayBoundsForPlacement(anchor, traySize, placement) {
+  const isTop = placement.startsWith('top');
+  return {
+    x: placement.endsWith('end') ? anchor.x + anchor.width - traySize.width : anchor.x,
+    y: isTop ? anchor.y - traySize.height - PET_TRAY_GAP : anchor.y + anchor.height + PET_TRAY_GAP,
+    width: traySize.width,
+    height: traySize.height,
+  };
+}
+
+function overflowScore(rect, displayBounds) {
+  const left = Math.max(0, displayBounds.x - rect.x);
+  const top = Math.max(0, displayBounds.y - rect.y);
+  const right = Math.max(0, rect.x + rect.width - displayBounds.x - displayBounds.width);
+  const bottom = Math.max(0, rect.y + rect.height - displayBounds.y - displayBounds.height);
+  return left + top + right + bottom + (left + right) * rect.height + (top + bottom) * rect.width;
+}
+
+function unionRects(rects) {
+  const x = Math.min(...rects.map((rect) => rect.x));
+  const y = Math.min(...rects.map((rect) => rect.y));
+  const right = Math.max(...rects.map((rect) => rect.x + rect.width));
+  const bottom = Math.max(...rects.map((rect) => rect.y + rect.height));
+  return { x, y, width: right - x, height: bottom - y };
+}
+
+function localRect(rect, viewportBounds) {
+  return {
+    left: Math.round(rect.x - viewportBounds.x),
+    top: Math.round(rect.y - viewportBounds.y),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  };
+}
+
+function preferredPlacement(anchor, displayBounds) {
+  const vertical = rectCenterY(anchor) < rectCenterY(displayBounds) ? 'bottom' : 'top';
+  const horizontal = rectCenterX(anchor) < rectCenterX(displayBounds) ? 'start' : 'end';
+  return `${vertical}-${horizontal}`;
+}
+
+function choosePlacement({ anchor, displayBounds, previousPlacement, traySize }) {
+  const preferred = preferredPlacement(anchor, displayBounds);
+  const placements = ['top-start', 'top-end', 'bottom-start', 'bottom-end']
+    .map((placement) => ({
+      placement,
+      score:
+        overflowScore(trayBoundsForPlacement(anchor, traySize, placement), displayBounds) +
+        (placement === preferred ? 0 : 32) +
+        (placement === previousPlacement ? -PET_PLACEMENT_STICKINESS : 0),
+    }))
+    .sort((a, b) => a.score - b.score);
+  return placements[0] ? placements[0].placement : preferred;
+}
+
+function contentViewportBounds({ contentBounds, displayBounds, viewportSize }) {
+  return {
+    x: clampNumber(contentBounds.x + contentBounds.width - viewportSize.width, displayBounds.x, displayBounds.x + displayBounds.width - viewportSize.width),
+    y: clampNumber(contentBounds.y + contentBounds.height - viewportSize.height, displayBounds.y, displayBounds.y + displayBounds.height - viewportSize.height),
+    width: viewportSize.width,
+    height: viewportSize.height,
+  };
+}
+
+function computePetLayout({
+  anchor,
+  displayBounds,
+  mascotSize,
+  previousPlacement,
+  traySize,
+  viewportSize = PET_VIEWPORT_SIZE,
+}) {
+  const viewport = {
+    width: Math.min(viewportSize.width, displayBounds.width),
+    height: Math.min(viewportSize.height, displayBounds.height),
+  };
+  const safeAnchor = clampRectToDisplay({
+    ...anchor,
+    width: Math.min(mascotSize.width, displayBounds.width),
+    height: Math.min(mascotSize.height, displayBounds.height),
+  }, displayBounds, { bottomPadding: PET_LAYOUT_PADDING.bottom });
+  const maxTrayWidth = Math.max(0, viewport.width - PET_LAYOUT_PADDING.left - PET_LAYOUT_PADDING.right);
+  const maxTrayHeight = Math.max(0, viewport.height - safeAnchor.height - PET_LAYOUT_PADDING.bottom - PET_TRAY_GAP);
+  const clampedTraySize = traySize == null ? null : {
+    width: Math.min(traySize.width, maxTrayWidth),
+    height: Math.min(traySize.height, maxTrayHeight),
+  };
+  const placement = clampedTraySize == null
+    ? previousPlacement
+    : choosePlacement({
+      anchor: safeAnchor,
+      displayBounds,
+      previousPlacement,
+      traySize: clampedTraySize,
+    });
+  const trayBounds = clampedTraySize == null
+    ? null
+    : clampRectToDisplay(trayBoundsForPlacement(safeAnchor, clampedTraySize, placement), displayBounds);
+  const viewportBounds = contentViewportBounds({
+    contentBounds: unionRects([
+      expandedMascotBounds(safeAnchor),
+      ...(trayBounds == null ? [] : [trayBounds]),
+    ]),
+    displayBounds,
+    viewportSize: viewport,
+  });
+  return {
+    anchor: safeAnchor,
+    mascot: localRect(safeAnchor, viewportBounds),
+    placement,
+    tray: trayBounds == null ? null : localRect(trayBounds, viewportBounds),
+    viewport,
+    windowBounds: viewportBounds,
+  };
+}
+
+function defaultPetAnchor(display = screen.getPrimaryDisplay()) {
+  const bounds = display.bounds;
+  return {
+    x: bounds.x + bounds.width - petMascotSize.width - PET_DEFAULT_MARGIN,
+    y: bounds.y + bounds.height - petMascotSize.height - PET_DEFAULT_MARGIN,
+    width: petMascotSize.width,
+    height: petMascotSize.height,
+  };
+}
+
+function displayBoundsForPetAnchor(anchor = petAnchor) {
+  const point = anchor ? pointForRectCenter(anchor) : screen.getCursorScreenPoint();
+  return screen.getDisplayNearestPoint(point).bounds;
+}
+
+function expandedDisplayBounds(bounds, amount) {
+  return {
+    x: bounds.x - amount,
+    y: bounds.y - amount,
+    width: bounds.width + amount * 2,
+    height: bounds.height + amount * 2,
+  };
+}
+
+function pointInRect(point, rect) {
+  return point.x >= rect.x && point.x < rect.x + rect.width && point.y >= rect.y && point.y < rect.y + rect.height;
+}
+
+function sameBounds(a, b) {
+  return !!a && !!b && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+}
+
+function displayBoundsForDragPoint(point, previousDisplayBounds) {
+  const nearest = screen.getDisplayNearestPoint(point).bounds;
+  if (sameBounds(nearest, previousDisplayBounds)) return nearest;
+  if (previousDisplayBounds && pointInRect(point, expandedDisplayBounds(previousDisplayBounds, PET_DISPLAY_SWITCH_SLOP))) {
+    return previousDisplayBounds;
+  }
+  return nearest;
+}
+
+function initialPetWindowBounds() {
+  const saved = readPetOverlayState();
+  if (saved && saved.mascot && Number.isFinite(Number(saved.mascot.width)) && Number.isFinite(Number(saved.mascot.height))) {
+    petMascotSize = { width: Number(saved.mascot.width), height: Number(saved.mascot.height) };
+  }
+  if (saved && saved.tray && Number.isFinite(Number(saved.tray.width)) && Number.isFinite(Number(saved.tray.height))) {
+    petTraySize = { width: Number(saved.tray.width), height: Number(saved.tray.height) };
+  }
+  if (saved && typeof saved.placement === 'string') {
+    petPlacement = saved.placement;
+  }
+  if (saved && saved.anchor && Number.isFinite(Number(saved.anchor.x)) && Number.isFinite(Number(saved.anchor.y))) {
+    petAnchor = {
+      x: Number(saved.anchor.x),
+      y: Number(saved.anchor.y),
+      width: Number(saved.anchor.width) || petMascotSize.width,
+      height: Number(saved.anchor.height) || petMascotSize.height,
+    };
+  } else if (saved && saved.bounds && saved.mascot && Number.isFinite(Number(saved.bounds.x))) {
+    petAnchor = {
+      x: Number(saved.bounds.x) + Number(saved.mascot.left || 0),
+      y: Number(saved.bounds.y) + Number(saved.mascot.top || 0),
+      width: petMascotSize.width,
+      height: petMascotSize.height,
+    };
+  } else {
+    petAnchor = defaultPetAnchor();
+  }
+  petLayout = computePetLayout({
+    anchor: petAnchor,
+    displayBounds: displayBoundsForPetAnchor(petAnchor),
+    mascotSize: petMascotSize,
+    previousPlacement: petPlacement,
+    traySize: petTraySize || PET_DEFAULT_TRAY_SIZE,
+  });
+  petAnchor = petLayout.anchor;
+  petPlacement = petLayout.placement;
+  return petLayout.windowBounds;
+}
+
+function persistPetWindowBounds() {
+  if (!mainWindow || mainWindow.isDestroyed() || !petLayout) return;
+  writePetOverlayState({
+    bounds: mainWindow.getBounds(),
+    anchor: petAnchor,
+    mascot: petLayout.mascot,
+    placement: petPlacement,
+    tray: petLayout.tray,
+  });
+}
+
+function cancelPetMomentum() {
+  if (petMomentumTimer != null) {
+    clearTimeout(petMomentumTimer);
+    petMomentumTimer = null;
+  }
+}
+
+function sendPetLayoutToRenderer() {
+  if (!mainWindow || mainWindow.isDestroyed() || !petLayout || !overlayReady) return;
+  mainWindow.webContents.send('pet-layout-changed', {
+    layout: {
+      mascot: petLayout.mascot,
+      placement: petLayout.placement,
+      tray: petLayout.tray,
+      viewport: petLayout.viewport,
+    },
+  });
+}
+
+function setPetWindowBounds(bounds) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (!bounds || !Number.isFinite(Number(bounds.x)) || !Number.isFinite(Number(bounds.y))) return;
+  mainWindow.setBounds({
+    x: Math.round(Number(bounds.x)),
+    y: Math.round(Number(bounds.y)),
+    width: Math.round(Number(bounds.width) || PET_WINDOW_WIDTH),
+    height: Math.round(Number(bounds.height) || PET_WINDOW_HEIGHT),
+  }, false);
+}
+
+function applyPetLayout(displayBounds = displayBoundsForPetAnchor(), { persist = false } = {}) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  petAnchor = petAnchor || defaultPetAnchor();
+  petLayout = computePetLayout({
+    anchor: petAnchor,
+    displayBounds,
+    mascotSize: petMascotSize,
+    previousPlacement: petPlacement,
+    traySize: petTraySize || PET_DEFAULT_TRAY_SIZE,
+  });
+  petAnchor = petLayout.anchor;
+  petPlacement = petLayout.placement;
+  setPetWindowBounds(petLayout.windowBounds);
+  sendPetLayoutToRenderer();
+  if (persist) persistPetWindowBounds();
+}
+
+function refreshCursorAtCurrentMousePosition(win) {
+  if (!win || win.isDestroyed()) return;
+  const p = screen.getCursorScreenPoint();
+  const b = win.getBounds();
+  const x = p.x - b.x;
+  const y = p.y - b.y;
+  if (x < 0 || y < 0 || x > b.width || y > b.height) return;
+  win.webContents.sendInputEvent({
+    type: 'mouseMove',
+    x,
+    y,
+    movementX: 0,
+    movementY: 0,
+  });
+}
+
+function cursorOverPetScreenRects() {
+  if (!lastCatScreenRects.length) return false;
+  const p = screen.getCursorScreenPoint();
+  return lastCatScreenRects.some((b) => p.x >= b.left && p.x <= b.right && p.y >= b.top && p.y <= b.bottom);
+}
+
+function setPetWindowMouseable(enabled, { refreshCursor = false } = {}) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const next = !!enabled;
+  if (mainWindowMouseable === next) {
+    if (next && refreshCursor) refreshCursorAtCurrentMousePosition(mainWindow);
+    return;
+  }
+  if (next) {
+    mainWindow.setIgnoreMouseEvents(false);
+    mainWindowMouseable = true;
+    if (refreshCursor) refreshCursorAtCurrentMousePosition(mainWindow);
+    return;
+  }
+  mainWindow.setIgnoreMouseEvents(true, { forward: true });
+  mainWindowMouseable = false;
+}
+
+function applyPetMouseInteractivityPolicy() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const shouldAcceptMouse =
+    petKeyboardInteractive ||
+    petDragState != null ||
+    petPointerInteractive ||
+    (!petPointerInteractionSeen && cursorOverPetScreenRects());
+  setPetWindowMouseable(shouldAcceptMouse, { refreshCursor: shouldAcceptMouse });
+}
+
+function openPetOverlay({ persist = true } = {}) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  petOverlayOpenRequested = true;
+  petPointerInteractive = false;
+  petPointerInteractionSeen = false;
+  restoreMainWindowAllWorkspaces();
+  applyPetLayout(undefined, { persist: false });
+  if (!mainWindow.isVisible()) mainWindow.showInactive();
+  mainWindow.moveTop();
+  if (persist) writePetOverlayState({ open: true });
+  rebuildAppMenus();
+}
+
+function setPetKeyboardInteraction(enabled) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  petKeyboardInteractive = !!enabled;
+  if (!petKeyboardInteractive) {
+    mainWindow.setFocusable(false);
+    applyPetMouseInteractivityPolicy();
+    return;
+  }
+  mainWindow.setFocusable(true);
+  setPetWindowMouseable(true, { refreshCursor: true });
+  if (!mainWindow.isVisible()) mainWindow.show();
+  if (process.platform === 'darwin') {
+    app.focus({ steal: true });
+  }
+  mainWindow.focus();
+  mainWindow.webContents.focus();
+  mainWindow.webContents.send('pet-keyboard-interaction-ready', {});
+}
+
+function setPetPointerInteraction(enabled) {
+  petPointerInteractionSeen = true;
+  petPointerInteractive = !!enabled;
+  applyPetMouseInteractivityPolicy();
+}
+
+function closePetOverlay({ persist = true } = {}) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  petOverlayOpenRequested = false;
+  cancelPetMomentum();
+  petDragState = null;
+  setPetPointerInteraction(false);
+  setPetKeyboardInteraction(false);
+  if (mainWindow.isVisible()) mainWindow.hide();
+  if (persist) writePetOverlayState({ open: false });
+  rebuildAppMenus();
+}
+
+function togglePetOverlay() {
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+    closePetOverlay({ persist: true });
+  } else {
+    openPetOverlay({ persist: true });
   }
 }
 
 function createWindow() {
-  const display = screen.getPrimaryDisplay();
-  // The macOS Dock (and Windows taskbar) lives at a higher window level than
-  // our alwaysOnTop transparent overlay, so a window sized to `display.bounds`
-  // gets its bottom edge covered by the Dock and the cats' feet are clipped.
-  // Use `workArea` so the overlay's bottom sits flush with the top of the
-  // Dock / taskbar (or the true screen bottom when the Dock is hidden or on
-  // another display), keeping cats fully visible on all setups.
-  const { x, y, width, height } = display.workArea;
+  const saved = readPetOverlayState();
+  petOverlayOpenRequested = saved.open === true;
+  const { x, y, width, height } = initialPetWindowBounds();
 
   mainWindow = new BrowserWindow({
     width,
@@ -303,7 +667,7 @@ function createWindow() {
     alwaysOnTop: true,
     skipTaskbar: true,
     focusable: false,
-    show: true,
+    show: false,
     backgroundColor: '#00000000',
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
@@ -313,7 +677,8 @@ function createWindow() {
   });
 
   mainWindow.setIgnoreMouseEvents(true, { forward: true });
-  mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
+  mainWindow.setAlwaysOnTop(true, 'floating');
 
   mainWindow.on('show', () => rebuildAppMenus());
   mainWindow.on('hide', () => rebuildAppMenus());
@@ -322,6 +687,12 @@ function createWindow() {
   });
   lastCatScreenRects = [];
   mainWindowMouseable = false;
+  petPointerInteractive = false;
+  petPointerInteractionSeen = false;
+
+  mainWindow.once('ready-to-show', () => {
+    if (petOverlayOpenRequested) openPetOverlay({ persist: false });
+  });
 
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
@@ -333,21 +704,19 @@ function createWindow() {
 function restoreMainWindowAllWorkspaces() {
   if (process.platform !== 'darwin') return;
   if (!mainWindow || mainWindow.isDestroyed() || !mainWindowWasVisibleOnAllWorkspaces) return;
-  mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
   mainWindowWasVisibleOnAllWorkspaces = false;
 }
 
 function ensureOverlayVisibleForSpawn() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  restoreMainWindowAllWorkspaces();
-  if (!mainWindow.isVisible()) {
-    mainWindow.showInactive();
-  }
+  openPetOverlay({ persist: true });
 }
 
 function flushPendingSpawnCats() {
   if (!mainWindow || mainWindow.isDestroyed() || !overlayReady) return;
   ensureOverlayVisibleForSpawn();
+  applyPetLayout(undefined, { persist: false });
   while (pendingSpawnCats.length > 0) {
     mainWindow.webContents.send('spawn-cat', pendingSpawnCats.shift());
   }
@@ -363,21 +732,6 @@ function sendSpawnCatToOverlay(payload) {
   mainWindow.webContents.send('spawn-cat', payload);
 }
 
-/** Best-effort: bring Cursor to the foreground (no workspace/deeplink; see plan). */
-function activateCursorApp() {
-  try {
-    if (process.platform === 'darwin') {
-      spawn('open', ['-a', 'Cursor'], { detached: true, stdio: 'ignore' }).unref();
-    } else if (process.platform === 'win32') {
-      spawn('cursor', [], { detached: true, stdio: 'ignore', shell: true }).unref();
-    } else {
-      spawn('cursor', [], { detached: true, stdio: 'ignore' }).unref();
-    }
-  } catch {
-    // ignore
-  }
-}
-
 function closeWindowOnEscape(win, closeFn) {
   win.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown' || input.key !== 'Escape') return;
@@ -388,13 +742,7 @@ function closeWindowOnEscape(win, closeFn) {
 
 function openNewCatModal(modalContextId) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  const requestedAt = Date.now();
-  const ctx = modalContextId ? modalContexts.get(modalContextId) : null;
-  recordTrace('modal_show_requested', {
-    modalContextId: modalContextId || null,
-    hasPointerContext: !!(ctx && ctx.context),
-    msSinceShortcut: ctx && ctx.createdAt ? requestedAt - ctx.createdAt : null,
-  });
+  recordTrace('modal_show_requested', { modalContextId: modalContextId || null });
 
   if (conversationWindow && !conversationWindow.isDestroyed()) {
     conversationWindow.close();
@@ -411,7 +759,7 @@ function openNewCatModal(modalContextId) {
 
   modalWindow = new BrowserWindow({
     width: 680,
-    height: 500,
+    height: 240,
     useContentSize: true,
     frame: false,
     transparent: true,
@@ -431,12 +779,6 @@ function openNewCatModal(modalContextId) {
     },
   });
 
-  recordTrace('modal_window_created', {
-    modalContextId: modalContextId || null,
-    msSinceModalShowRequested: Date.now() - requestedAt,
-    msSinceShortcut: ctx && ctx.createdAt ? Date.now() - ctx.createdAt : null,
-  });
-
   closeWindowOnEscape(modalWindow, () => {
     if (modalWindow && !modalWindow.isDestroyed()) {
       modalWindow.close();
@@ -444,11 +786,7 @@ function openNewCatModal(modalContextId) {
   });
 
   modalWindow.webContents.once('did-finish-load', () => {
-    recordTrace('modal_dom_loaded', {
-      modalContextId: modalContextId || null,
-      msSinceModalShowRequested: Date.now() - requestedAt,
-      msSinceShortcut: ctx && ctx.createdAt ? Date.now() - ctx.createdAt : null,
-    });
+    recordTrace('modal_dom_loaded', { modalContextId: modalContextId || null });
   });
 
   modalWindow.once('ready-to-show', () => {
@@ -462,13 +800,12 @@ function openNewCatModal(modalContextId) {
     recordTrace('modal_shown_and_focused', {
       modalContextId: modalContextId || null,
       bounds: modalWindow && !modalWindow.isDestroyed() ? modalWindow.getBounds() : null,
-      msSinceModalShowRequested: Date.now() - requestedAt,
-      msSinceShortcut: ctx && ctx.createdAt ? Date.now() - ctx.createdAt : null,
     });
   });
 
   modalWindow.on('closed', () => {
     modalWindow = null;
+    modalContexts.delete(modalContextId);
     if (activeModalContextId === modalContextId) {
       activeModalContextId = null;
     }
@@ -576,48 +913,29 @@ function openConversationWindow(catId) {
 function setCatsVisible(visible) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (visible) {
-    if (!mainWindow.isVisible()) mainWindow.showInactive();
-  } else if (mainWindow.isVisible()) {
-    mainWindow.hide();
+    openPetOverlay({ persist: true });
+  } else {
+    closePetOverlay({ persist: true });
   }
   rebuildAppMenus();
 }
 
 function buildAppMenu() {
   const catsVisible = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible());
-  const activeN = Number.isFinite(catCounts.active) ? catCounts.active : 0;
-  const reviewN = Number.isFinite(catCounts.inReview) ? catCounts.inReview : 0;
+  const accelerator = process.platform === 'darwin' ? 'Command+Shift+C' : 'Control+Shift+C';
   return Menu.buildFromTemplate([
     {
-      label: 'New Cat',
-      accelerator: process.platform === 'darwin' ? 'Command+Shift+C' : 'Control+Shift+C',
+      label: 'New Session',
+      accelerator,
       click: () => {
         void handleNewCatShortcut('menu');
       },
     },
+    { type: 'separator' },
     {
-      label: `Active cats: ${activeN}`,
-      enabled: false,
-    },
-    {
-      label: `In review: ${reviewN}`,
-      enabled: false,
-    },
-    {
-      label: 'Clear finished cats',
-      enabled: reviewN > 0,
+      label: catsVisible ? 'Close Pet' : 'Wake Pet',
       click: () => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('clear-finished-cats');
-        }
-      },
-    },
-    {
-      label: 'Show Cats',
-      type: 'checkbox',
-      checked: catsVisible,
-      click: (menuItem) => {
-        setCatsVisible(menuItem.checked);
+        setCatsVisible(!catsVisible);
       },
     },
     { type: 'separator' },
@@ -631,15 +949,24 @@ function buildAppMenu() {
 }
 
 function buildApplicationMenu() {
+  const catsVisible = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible());
+  const accelerator = process.platform === 'darwin' ? 'Command+Shift+C' : 'Control+Shift+C';
   return Menu.buildFromTemplate([
     {
       label: 'agent-UI',
       submenu: [
         {
-          label: 'New Cat',
-          accelerator: process.platform === 'darwin' ? 'Command+Shift+C' : 'Control+Shift+C',
+          label: 'New Session',
+          accelerator,
           click: () => {
-            void handleNewCatShortcut('shortcut');
+            void handleNewCatShortcut('menu');
+          },
+        },
+        { type: 'separator' },
+        {
+          label: catsVisible ? 'Close Pet' : 'Wake Pet',
+          click: () => {
+            setCatsVisible(!catsVisible);
           },
         },
         { type: 'separator' },
@@ -662,42 +989,21 @@ function rebuildAppMenus() {
 }
 
 function createTray() {
-  const trayPng = path.join(getPackageRoot(), 'assets', 'tray.png');
   const iconPng = path.join(getPackageRoot(), 'assets', 'icon.png');
-  let image;
-  let imageIsEmpty = false;
-  if (fs.existsSync(iconPng)) {
-    const source = nativeImage.createFromPath(iconPng);
-    // macOS menu bar icons render at ~22pt; resizing avoids a giant blurry icon.
-    image = source.isEmpty() ? source : source.resize({ width: 22, height: 22, quality: 'best' });
-  } else if (fs.existsSync(trayPng)) {
-    // Electron auto-picks up assets/tray@2x.png for retina when it's siblings.
-    image = nativeImage.createFromPath(trayPng);
-  } else {
-    // 1×1 transparent PNG so Tray always has a valid image
-    const onePx =
-      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
-    image = nativeImage.createFromBuffer(Buffer.from(onePx, 'base64'));
-    imageIsEmpty = true;
-  }
+  const source = nativeImage.createFromPath(iconPng);
+  const image = source.isEmpty() ? source : source.resize({ width: 22, height: 22, quality: 'best' });
   if (process.platform === 'darwin' && !image.isEmpty()) {
-    // Treat as a template image so macOS tints it for light/dark menu bars.
     image.setTemplateImage(true);
   }
   tray = new Tray(image);
-  // Always give the tray some visible text on macOS. This does two things:
-  //   1. Belt-and-suspenders fallback if the icon asset is missing/empty.
-  //   2. Widens the tray item so it's less likely to be hidden by the notch
-  //      or a crowded menu bar (macOS drops menu bar extras that can't fit).
-  // The title is kept in sync with live counts by `updateTrayTitle()`.
   if (process.platform === 'darwin') {
-    updateTrayTitle({ forceFallback: imageIsEmpty });
+    updateTrayTitle();
   }
   tray.setToolTip('agent-UI');
   rebuildAppMenus();
 }
 
-function updateTrayTitle({ forceFallback = false } = {}) {
+function updateTrayTitle() {
   if (!tray || tray.isDestroyed() || process.platform !== 'darwin') return;
   const active = Number.isFinite(catCounts.active) ? catCounts.active : 0;
   const review = Number.isFinite(catCounts.inReview) ? catCounts.inReview : 0;
@@ -709,254 +1015,239 @@ function updateTrayTitle({ forceFallback = false } = {}) {
   } else if (review > 0) {
     title = `·${review}`;
   } else {
-    // No cats — if we have a visible icon, keep text empty so we don't clutter
-    // the menu bar. If the icon is empty (asset missing), always show a glyph
-    // so the tray is still clickable.
-    title = forceFallback ? '🐱' : '';
+    title = '';
   }
   tray.setTitle(title);
 }
 
-function handleNewCatShortcut(source = 'shortcut') {
-  const modalContextId = randomUUID();
-  activeModalContextId = modalContextId;
-  const ctx = {
-    id: modalContextId,
-    source,
-    context: null,
-    promise: null,
-    createdAt: Date.now(),
+function boundsPayload(bounds) {
+  if (!bounds || typeof bounds !== 'object') return null;
+  const x = Number(bounds.x);
+  const y = Number(bounds.y);
+  const width = Number(bounds.width);
+  const height = Number(bounds.height);
+  if (![x, y, width, height].every(Number.isFinite)) return null;
+  return {
+    x: Math.trunc(x),
+    y: Math.trunc(y),
+    width: Math.trunc(width),
+    height: Math.trunc(height),
   };
-  ctx.promise = capturePointerContext(source, modalContextId)
-    .then((context) => {
-      ctx.context = context;
-      return context;
-    })
-    .catch(() => null);
-  modalContexts.set(modalContextId, ctx);
-  recordTrace('shortcut_received', { source, modalContextId });
-  openNewCatModal(modalContextId);
 }
 
-/** Translate active window to overlay-local coords; exclude our own app window. */
-async function getFrontmostWindowBoundsInOverlay() {
-  const { activeWindow } = await import('get-windows');
+function displayPayload(display) {
+  if (!display || typeof display !== 'object') return null;
+  return {
+    id: display.id,
+    bounds: boundsPayload(display.bounds),
+    workArea: boundsPayload(display.workArea),
+    scaleFactor: Number(display.scaleFactor) || 1,
+    rotation: Number(display.rotation) || 0,
+  };
+}
+
+function isBrowserLikeWindow(win) {
+  const owner = win && win.owner ? win.owner : {};
+  const haystack = [
+    owner.name,
+    owner.bundleId,
+    owner.path,
+    win && win.url ? 'url' : '',
+  ].filter(Boolean).join(' ').toLowerCase();
+  return ['safari', 'firefox', 'chrome', 'chromium', 'arc', 'brave', 'edge', 'opera', 'vivaldi']
+    .some((marker) => haystack.includes(marker));
+}
+
+function screenContextHintForWindow(win) {
+  const owner = win && win.owner ? win.owner : {};
+  const appName = String(owner.name || '').trim();
+  const title = String((win && win.title) || '').trim();
+  if (appName && title) return `Visible window: ${appName} - ${title.slice(0, 180)}`;
+  if (appName) return `Visible app: ${appName}`;
+  return '';
+}
+
+function screenContextHintForContext(activeWindow, frontmostApp) {
+  const windowHint = screenContextHintForWindow(activeWindow);
+  if (windowHint) return windowHint;
+  const appName = String((frontmostApp && frontmostApp.name) || '').trim();
+  return appName ? `Visible app: ${appName}` : '';
+}
+
+function contextQuality(activeWindow, frontmostApp, display, cursor) {
+  const app = activeWindow && activeWindow.owner ? activeWindow.owner : frontmostApp;
+  if (
+    activeWindow &&
+    app &&
+    app.name &&
+    app.processId &&
+    activeWindow.title &&
+    activeWindow.bounds &&
+    display &&
+    cursor
+  ) {
+    return 'full';
+  }
+  if ((app && app.name) || display) return 'partial';
+  return 'minimal';
+}
+
+function missingContextFields(activeWindow, frontmostApp, display, cursor) {
+  const owner = activeWindow && activeWindow.owner ? activeWindow.owner : (frontmostApp || {});
+  const missing = [];
+  if (!activeWindow) missing.push('active_window');
+  if (!owner.name) missing.push('active_app');
+  if (!owner.bundleId) missing.push('bundle_id');
+  if (!owner.processId) missing.push('pid');
+  if (!activeWindow || !activeWindow.title) missing.push('top_window_title');
+  if (!activeWindow || !activeWindow.bounds) missing.push('top_window_bounds');
+  if (!cursor) missing.push('cursor');
+  if (!display) missing.push('display');
+  return missing;
+}
+
+function normalizeActiveWindow(win) {
+  if (!win) return null;
+  return {
+    id: win.id || null,
+    title: win.title || '',
+    bounds: boundsPayload(win.bounds),
+    owner: win.owner ? {
+      name: win.owner.name || '',
+      processId: win.owner.processId || null,
+      bundleId: win.owner.bundleId || '',
+      path: win.owner.path || '',
+    } : null,
+    url: win.url || '',
+  };
+}
+
+function isOwnActiveWindow(win) {
+  const owner = win && win.owner ? win.owner : {};
+  return Number(owner.processId) === Number(process.pid);
+}
+
+function usableRecentExternalWindow(maxAgeMs = 30000) {
+  if (!lastExternalWindowSnapshot) return null;
+  if (Date.now() - Number(lastExternalWindowSnapshot.capturedAt || 0) > maxAgeMs) return null;
+  return lastExternalWindowSnapshot.window || null;
+}
+
+function frontmostAppFromAppleScriptOutput(stdout) {
+  const lines = String(stdout || '').split(/\r?\n/).map((line) => line.trim());
+  const [name, bundleId, pid] = lines;
+  if (!name) return null;
+  return {
+    name,
+    bundleId: bundleId || '',
+    processId: safeInteger(pid),
+    path: '',
+  };
+}
+
+async function frontmostAppWithTimeout(timeoutMs = 600) {
+  if (process.platform !== 'darwin') return null;
+  const script = [
+    'tell application "System Events"',
+    'set p to first application process whose frontmost is true',
+    'return (name of p) & "\\n" & (bundle identifier of p) & "\\n" & ((unix id of p) as text)',
+    'end tell',
+  ].join('\n');
+  const lookup = execFileText('osascript', ['-e', script], { timeout: timeoutMs })
+    .then(frontmostAppFromAppleScriptOutput)
+    .catch(() => null);
+  return Promise.race([
+    lookup,
+    new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+  ]);
+}
+
+async function readActiveWindowSnapshot() {
+  const { activeWindow } = await loadGetWindowsModule();
   const win = await activeWindow({
     accessibilityPermission: false,
     screenRecordingPermission: false,
   });
-  if (!win || !win.bounds) return null;
-  if (win.owner && win.owner.processId === process.pid) return null;
-  return clipScreenBoundsToOverlayLocal({
-    x: win.bounds.x,
-    y: win.bounds.y,
-    width: win.bounds.width,
-    height: win.bounds.height,
-  });
+  const snapshot = normalizeActiveWindow(win);
+  if (snapshot && !isOwnActiveWindow(snapshot)) {
+    lastExternalWindowSnapshot = { capturedAt: Date.now(), window: snapshot };
+  }
+  return snapshot;
 }
 
-function getFrontmostWindowInfo() {
-  if (!activeWindowState.id || !activeWindowState.screenBounds) {
-    return { id: null, bounds: null, stableMs: 0 };
-  }
-  const bounds = clipScreenBoundsToOverlayLocal(activeWindowState.screenBounds);
-  if (!bounds) {
-    return { id: null, bounds: null, stableMs: 0 };
-  }
-  const stableMs = Math.max(0, Date.now() - activeWindowState.firstSeenAt);
-  return { id: activeWindowState.id, bounds, stableMs };
-}
-
-async function osascriptLines(script) {
-  if (process.platform !== 'darwin') return [];
-  try {
-    const text = await execFileText('osascript', ['-e', script], { timeout: 2500 });
-    return text.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
-async function getAppSpecificPointerContext(bundleId, appName) {
-  const bid = String(bundleId || '').toLowerCase();
-  const name = String(appName || '').toLowerCase();
-  if (bid === 'com.google.chrome' || name.includes('chrome')) {
-    const lines = await osascriptLines(
-      'tell application "Google Chrome" to if (count of windows) > 0 then return (title of active tab of front window) & "\\n" & (URL of active tab of front window)'
-    );
-    return { chromeTitle: lines[0] || '', chromeUrl: lines[1] || '' };
-  }
-  if (bid === 'com.apple.preview' || name.includes('preview')) {
-    const lines = await osascriptLines(
-      'tell application "Preview" to if (count of documents) > 0 then return (name of front document) & "\\n" & (path of front document)'
-    );
-    return { previewDocumentName: lines[0] || '', previewDocumentPath: lines[1] || '' };
-  }
-  if (bid === 'com.apple.mail' || name === 'mail') {
-    const lines = await osascriptLines(
-      'tell application "Mail" to if (count of outgoing messages) > 0 then return (subject of item 1 of outgoing messages)'
-    );
-    return { mailFrontDraftSubject: lines[0] || '' };
-  }
-  if (bid === 'md.obsidian' || name.includes('obsidian')) {
-    return { obsidianHint: 'Obsidian is frontmost; inspect the selected agent-UI eval folder for the disposable vault.' };
-  }
-  if (bid === 'net.ankiweb.launcher' || name.includes('anki')) {
-    return { ankiHint: 'Anki is frontmost; benchmark runs with an isolated ANKI_BASE.' };
-  }
-  if (bid === 'com.apple.garageband10' || name.includes('garageband')) {
-    return { garageBandHint: 'GarageBand is frontmost; benchmark project files live in the selected agent-UI eval folder.' };
-  }
-  return {};
-}
-
-function screenshotRectFromBounds(bounds) {
-  if (!bounds) return null;
-  const x = Math.max(0, Math.floor(Number(bounds.x) || 0));
-  const y = Math.max(0, Math.floor(Number(bounds.y) || 0));
-  const width = Math.max(1, Math.floor(Number(bounds.width) || 0));
-  const height = Math.max(1, Math.floor(Number(bounds.height) || 0));
-  return { x, y, width, height };
-}
-
-async function captureContextScreenshot(bounds) {
-  if (process.platform !== 'darwin') return null;
-  if (process.env.AGENT_UI_CONTEXT_CAPTURE !== '1' && process.env.AGENT_UI_EVAL !== '1') return null;
-  const rect = screenshotRectFromBounds(bounds);
-  if (!rect) return null;
-  try {
-    const dir = path.join(evalRunDir, 'context');
-    fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, `shortcut-${Date.now()}.png`);
-    await execFileText('screencapture', [
-      '-x',
-      '-R',
-      `${rect.x},${rect.y},${rect.width},${rect.height}`,
-      file,
-    ], { timeout: 5000 });
-    return file;
-  } catch {
-    return null;
-  }
-}
-
-async function capturePointerContext(reason = 'shortcut', modalContextId = null) {
-  const captureStartedAt = Date.now();
-  recordTrace('pointer_context_capture_started', { modalContextId: modalContextId || null, reason });
-  const cursor = screen.getCursorScreenPoint();
-  let active = null;
-  let usedExternalSnapshot = false;
-  try {
-    const { activeWindow } = await import('get-windows');
-    active = await activeWindow({
-      accessibilityPermission: false,
-      screenRecordingPermission: false,
+function startActiveWindowTracker() {
+  if (activeWindowPollTimer != null) return;
+  const tick = () => {
+    void readActiveWindowSnapshot().catch(() => {
+      // Context capture is best-effort and must not affect the launcher.
     });
-  } catch {
-    active = null;
-  }
-  if (active && active.owner && active.owner.processId === process.pid && lastExternalWindowSnapshot) {
-    active = lastExternalWindowSnapshot;
-    usedExternalSnapshot = true;
-  }
-  const owner = active && active.owner ? active.owner : {};
-  const bounds = active && active.bounds ? {
-    x: active.bounds.x,
-    y: active.bounds.y,
-    width: active.bounds.width,
-    height: active.bounds.height,
-  } : null;
-  const bundleId = owner.bundleId || owner.bundleIdentifier || '';
-  const appName = owner.name || owner.path || '';
-  const appContextStartedAt = Date.now();
-  const appContext = await getAppSpecificPointerContext(bundleId, appName);
-  recordTrace('pointer_app_context_captured', {
-    modalContextId: modalContextId || null,
-    activeApp: { name: appName, bundleId, processId: owner.processId || null },
-    durationMs: Date.now() - appContextStartedAt,
-  });
-  const screenshotStartedAt = Date.now();
-  const screenshotPath = await captureContextScreenshot(bounds);
-  recordTrace('pointer_screenshot_captured', {
-    modalContextId: modalContextId || null,
-    hasScreenshot: !!screenshotPath,
-    durationMs: Date.now() - screenshotStartedAt,
-  });
-  const context = {
-    modalContextId: modalContextId || null,
-    reason,
-    capturedAt: new Date().toISOString(),
-    cursor,
-    activeApp: {
-      name: appName,
-      bundleId,
-      processId: owner.processId || null,
-    },
-    activeWindow: active
-      ? {
-          title: active.title || '',
-          id: active.id || null,
-          bounds,
-        }
-      : null,
-    screenshotPath,
-    evalRunId: evalTraceEnabled ? evalRunId : null,
-    usedExternalSnapshot,
-    ...appContext,
   };
-  recordTrace('pointer_context_captured', {
-    modalContextId: modalContextId || null,
-    reason,
-    activeApp: context.activeApp,
-    activeWindow: context.activeWindow,
-    screenshotPath,
-    durationMs: Date.now() - captureStartedAt,
-  });
-  return context;
+  tick();
+  activeWindowPollTimer = setInterval(tick, 750);
 }
 
-ipcMain.handle('get-app-path', () => getPackageRoot());
-ipcMain.handle('get-frontmost-window-bounds', getFrontmostWindowBoundsInOverlay);
-ipcMain.handle('get-frontmost-window-info', () => getFrontmostWindowInfo());
+async function activeWindowWithTimeout(timeoutMs = 1200) {
+  const lookup = (async () => {
+    try {
+      const snapshot = await readActiveWindowSnapshot();
+      if (snapshot && !isOwnActiveWindow(snapshot)) return snapshot;
+      return usableRecentExternalWindow();
+    } catch {
+      return usableRecentExternalWindow();
+    }
+  })();
+  return Promise.race([
+    lookup,
+    new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+  ]);
+}
+
+async function captureLaunchContext(source, modalContextId) {
+  const capturedAt = new Date().toISOString();
+  const cursor = screen.getCursorScreenPoint();
+  const display = screen.getDisplayNearestPoint(cursor);
+  const activeWindow = await activeWindowWithTimeout();
+  const frontmostApp = activeWindow && activeWindow.owner ? null : await frontmostAppWithTimeout();
+  const displayInfo = displayPayload(display);
+  const cursorInfo = cursor && Number.isFinite(cursor.x) && Number.isFinite(cursor.y)
+    ? { x: Math.trunc(cursor.x), y: Math.trunc(cursor.y) }
+    : null;
+  const missingContext = missingContextFields(activeWindow, frontmostApp, displayInfo, cursorInfo);
+  return {
+    schemaVersion: 1,
+    source,
+    modalContextId,
+    capturedAt,
+    platform: process.platform,
+    cursor: cursorInfo,
+    display: displayInfo,
+    activeWindow,
+    frontmostApp,
+    topWindowIsBrowserLike: isBrowserLikeWindow(activeWindow),
+    screenContextHint: screenContextHintForContext(activeWindow, frontmostApp),
+    contextQuality: contextQuality(activeWindow, frontmostApp, displayInfo, cursorInfo),
+    missingContext,
+  };
+}
+
+async function handleNewCatShortcut(source = 'shortcut') {
+  const modalContextId = randomUUID();
+  activeModalContextId = modalContextId;
+  const launchContext = await captureLaunchContext(source, modalContextId);
+  modalContexts.set(modalContextId, launchContext);
+  recordTrace('shortcut_received', {
+    source,
+    modalContextId,
+    contextQuality: launchContext.contextQuality,
+    missingContext: launchContext.missingContext,
+    screenContextHint: launchContext.screenContextHint || null,
+  });
+  openNewCatModal(modalContextId);
+}
 
 ipcMain.on('overlay-ready', () => {
   overlayReady = true;
   flushPendingSpawnCats();
-});
-
-ipcMain.handle('read-text-file', (_event, relPath) => {
-  const full = assertPathInsideApp(relPath);
-  return fs.readFileSync(full, 'utf8');
-});
-
-ipcMain.handle('get-asset-file-url', (_event, relPath) => {
-  const full = assertPathInsideApp(relPath);
-  const ext = path.extname(full).toLowerCase();
-  const mime =
-    ext === '.png'
-      ? 'image/png'
-      : ext === '.jpg' || ext === '.jpeg'
-        ? 'image/jpeg'
-        : ext === '.gif'
-          ? 'image/gif'
-          : ext === '.webp'
-            ? 'image/webp'
-            : 'application/octet-stream';
-  return `data:${mime};base64,${fs.readFileSync(full).toString('base64')}`;
-});
-
-ipcMain.handle('choose-folder', async () => {
-  const win =
-    (modalWindow && !modalWindow.isDestroyed() && modalWindow) ||
-    (conversationWindow && !conversationWindow.isDestroyed() && conversationWindow) ||
-    undefined;
-  const result = await dialog.showOpenDialog(win || undefined, {
-    properties: ['openDirectory'],
-  });
-  if (result.canceled || !result.filePaths || !result.filePaths.length) {
-    return null;
-  }
-  return result.filePaths[0];
 });
 
 function getAgentUIConfigDir() {
@@ -968,81 +1259,6 @@ function getAgentUIConfigDir() {
   return dir;
 }
 
-function getEvalWorkspaceRoot() {
-  if (process.env.AGENT_UI_EVAL !== '1') return null;
-  return path.join(evalRunDir, 'workspace');
-}
-
-function isPathInside(childPath, parentPath) {
-  const child = path.resolve(String(childPath || ''));
-  const parent = path.resolve(String(parentPath || ''));
-  const rel = path.relative(parent, child);
-  return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
-}
-
-function isEvalAllowedFolder(folder) {
-  const root = getEvalWorkspaceRoot();
-  if (!root) return true;
-  const f = path.resolve(String(folder || ''));
-  return isPathInside(f, root);
-}
-
-function getRecentFoldersPath() {
-  const dir = getAgentUIConfigDir();
-  return path.join(dir, 'recent_folders.json');
-}
-
-ipcMain.handle('get-recent-folders', () => {
-  try {
-    const file = getRecentFoldersPath();
-    if (fs.existsSync(file)) {
-      const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-      if (Array.isArray(data)) return data;
-    }
-  } catch (e) {
-    // ignore
-  }
-  return [];
-});
-
-ipcMain.handle('add-recent-folder', (_event, folder) => {
-  if (!folder) return;
-  try {
-    const file = getRecentFoldersPath();
-    let folders = [];
-    if (fs.existsSync(file)) {
-      const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-      if (Array.isArray(data)) folders = data;
-    }
-    // Remove if exists
-    folders = folders.filter(f => f !== folder);
-    // Add to top
-    folders.unshift(folder);
-    // Keep top 20
-    folders = folders.slice(0, 20);
-    fs.writeFileSync(file, JSON.stringify(folders, null, 2), 'utf8');
-  } catch (e) {
-    // ignore
-  }
-});
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitForModalPointerContext(modalContextId) {
-  const key = modalContextId ? String(modalContextId) : '';
-  const ctx = key ? modalContexts.get(key) : null;
-  if (!ctx) return null;
-  if (ctx.context) return ctx.context;
-  try {
-    await Promise.race([ctx.promise, delay(2500)]);
-  } catch {
-    /* ignore context capture errors */
-  }
-  return ctx.context || null;
-}
-
 async function startCatRunFromPayload(payload = {}, opts = {}) {
   const catId = opts.catId ? String(opts.catId) : randomUUID();
   const modalContextId =
@@ -1050,60 +1266,48 @@ async function startCatRunFromPayload(payload = {}, opts = {}) {
     (payload && payload.modalContextId ? String(payload.modalContextId) : '') ||
     activeModalContextId ||
     '';
-  const submitStartedAt = Date.now();
-  const pointerWaitStartedAt = Date.now();
-  const pointerContext = opts.pointerContext || (await waitForModalPointerContext(modalContextId)) || null;
-  recordTrace('submit_pointer_context_ready', {
-    catId,
-    modalContextId: modalContextId || null,
-    hasPointerContext: !!pointerContext,
-    waitMs: Date.now() - pointerWaitStartedAt,
-  });
   const runtime = 'local';
-  const modelId = 'hermes-cli';
-  if (!isEvalAllowedFolder(payload && payload.folder)) {
-    const folder = String((payload && payload.folder) || '');
-    const error = `Eval local folder is outside the disposable workspace: ${folder}`;
+  const prompt = payload && payload.prompt != null ? String(payload.prompt) : '';
+  const launchContext = modalContextId ? (modalContexts.get(modalContextId) || null) : null;
+  if (!prompt.trim()) {
+    const error = 'Missing task prompt.';
     recordTrace('submit_rejected', {
       catId,
       modalContextId: modalContextId || null,
-      reason: 'folder_outside_eval_workspace',
-      folder,
-      evalWorkspaceRoot: getEvalWorkspaceRoot(),
+      reason: 'missing_prompt',
     });
     return { ok: false, error };
   }
+  recordTrace('submit_context_ready', {
+    catId,
+    modalContextId: modalContextId || null,
+    contextQuality: launchContext ? launchContext.contextQuality : 'missing',
+    missingContext: launchContext ? launchContext.missingContext : ['launch_context'],
+  });
   recordTrace('submit_requested', {
     catId,
     modalContextId: modalContextId || null,
-    promptLength: payload && payload.prompt ? String(payload.prompt).length : 0,
+    promptLength: prompt.length,
     runtime,
-    hasPointerContext: !!pointerContext,
-    folder: payload && payload.folder ? String(payload.folder) : '',
+    contextQuality: launchContext ? launchContext.contextQuality : 'missing',
   });
-  const out = { ...payload, catId, model: modelId, runtime, modalContextId, pointerContext };
+  const out = { catId, prompt, runtime, modalContextId };
+  if (modalContextId) modalContexts.delete(modalContextId);
   if (opts.closeModal !== false && modalWindow && !modalWindow.isDestroyed()) {
     modalWindow.close();
   }
-  recordTrace('cat_spawn_sent', {
-    catId,
-    modalContextId: modalContextId || null,
-    runtime,
-    msSinceSubmitStart: Date.now() - submitStartedAt,
-  });
   sendSpawnCatToOverlay(out);
+  recordTrace('cat_spawn_sent', { catId, modalContextId: modalContextId || null, runtime });
   startAgentForCat(
     {
       catId,
-      folder: payload.folder,
-      prompt: payload.prompt,
-      model: modelId,
+      prompt,
       runtime,
-      pointerContext,
+      pointerContext: launchContext,
     },
-    { getMainWindow: () => mainWindow }
+    { getMainWindow: () => mainWindow, log: console }
   );
-  return { ok: true, catId, modelId: modelId || null, runtime };
+  return { ok: true, catId, runtime };
 }
 
 ipcMain.on('new-cat-submit', (_event, payload) => {
@@ -1114,10 +1318,6 @@ ipcMain.on('new-cat-cancel', () => {
   if (modalWindow && !modalWindow.isDestroyed()) {
     modalWindow.close();
   }
-});
-
-ipcMain.on('resize-modal', (_event, { height } = {}) => {
-  // No-op: modal is now a static 500px height
 });
 
 ipcMain.on('cat-counts', (_event, payload) => {
@@ -1144,14 +1344,139 @@ ipcMain.on('cat-screen-rects', (_event, rects) => {
   );
 });
 
+ipcMain.on('pet-overlay-toggle', () => {
+  togglePetOverlay();
+});
+
+ipcMain.on('pet-context-menu', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  Menu.buildFromTemplate([
+    {
+      label: 'Close pet',
+      click: () => closePetOverlay({ persist: true }),
+    },
+  ]).popup({ window: mainWindow });
+});
+
+ipcMain.on('pet-keyboard-interaction-changed', (_event, payload = {}) => {
+  setPetKeyboardInteraction(!!payload.active);
+});
+
+ipcMain.on('pet-pointer-interaction-changed', (_event, payload = {}) => {
+  setPetPointerInteraction(!!payload.active);
+});
+
+ipcMain.on('pet-element-size-changed', (_event, payload = {}) => {
+  if (!payload || typeof payload !== 'object') return;
+  const mascot = payload.mascot && typeof payload.mascot === 'object' ? payload.mascot : null;
+  const trayPayload = payload.tray && typeof payload.tray === 'object' ? payload.tray : null;
+  const mascotWidth = mascot ? Number(mascot.width) : NaN;
+  const mascotHeight = mascot ? Number(mascot.height) : NaN;
+  if (Number.isFinite(mascotWidth) && Number.isFinite(mascotHeight) && mascotWidth > 0 && mascotHeight > 0) {
+    petMascotSize = { width: Math.ceil(mascotWidth), height: Math.ceil(mascotHeight) };
+    petAnchor = { ...(petAnchor || defaultPetAnchor()), width: petMascotSize.width, height: petMascotSize.height };
+  }
+  const trayWidth = trayPayload ? Number(trayPayload.width) : NaN;
+  const trayHeight = trayPayload ? Number(trayPayload.height) : NaN;
+  petTraySize = Number.isFinite(trayWidth) && Number.isFinite(trayHeight) && trayWidth > 0 && trayHeight > 0
+    ? { width: Math.ceil(trayWidth), height: Math.ceil(trayHeight) }
+    : null;
+  applyPetLayout(undefined, { persist: false });
+});
+
+ipcMain.on('pet-drag-start', (_event, payload = {}) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  cancelPetMomentum();
+  setPetWindowMouseable(true, { refreshCursor: true });
+  const pointerWindowX = Number(payload.pointerWindowX);
+  const pointerWindowY = Number(payload.pointerWindowY);
+  const currentLayout = petLayout || computePetLayout({
+    anchor: petAnchor || defaultPetAnchor(),
+    displayBounds: displayBoundsForPetAnchor(),
+    mascotSize: petMascotSize,
+    previousPlacement: petPlacement,
+    traySize: petTraySize,
+  });
+  petDragState = {
+    pointerAnchorX: (Number.isFinite(pointerWindowX) ? pointerWindowX : currentLayout.mascot.left) - currentLayout.mascot.left,
+    pointerAnchorY: (Number.isFinite(pointerWindowY) ? pointerWindowY : currentLayout.mascot.top) - currentLayout.mascot.top,
+    displayBounds: screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).bounds,
+  };
+});
+
+ipcMain.on('pet-drag-move', () => {
+  if (!mainWindow || mainWindow.isDestroyed() || !petDragState) return;
+  const p = screen.getCursorScreenPoint();
+  const displayBounds = displayBoundsForDragPoint(p, petDragState.displayBounds);
+  petDragState.displayBounds = displayBounds;
+  petAnchor = {
+    ...(petAnchor || defaultPetAnchor()),
+    x: p.x - petDragState.pointerAnchorX,
+    y: p.y - petDragState.pointerAnchorY,
+    width: petMascotSize.width,
+    height: petMascotSize.height,
+  };
+  applyPetLayout(displayBounds, { persist: false });
+});
+
+ipcMain.on('pet-drag-end', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (petDragState) {
+    const p = screen.getCursorScreenPoint();
+    const displayBounds = displayBoundsForDragPoint(p, petDragState.displayBounds);
+    petAnchor = {
+      ...(petAnchor || defaultPetAnchor()),
+      x: p.x - petDragState.pointerAnchorX,
+      y: p.y - petDragState.pointerAnchorY,
+      width: petMascotSize.width,
+      height: petMascotSize.height,
+    };
+    applyPetLayout(displayBounds, { persist: true });
+  }
+  persistPetWindowBounds();
+  petDragState = null;
+  applyPetMouseInteractivityPolicy();
+});
+
+ipcMain.on('pet-drag-release', (_event, payload = {}) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  let vx = Number(payload.velocityX);
+  let vy = Number(payload.velocityY);
+  if (!Number.isFinite(vx) || !Number.isFinite(vy) || (vx === 0 && vy === 0)) return;
+  cancelPetMomentum();
+  let elapsed = 0;
+  const step = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      cancelPetMomentum();
+      return;
+    }
+    petMomentumTimer = null;
+    elapsed += PET_MOMENTUM_FRAME_MS;
+    const requested = {
+      ...(petAnchor || defaultPetAnchor()),
+      x: (petAnchor ? petAnchor.x : defaultPetAnchor().x) + (vx * PET_MOMENTUM_FRAME_MS) / 1000,
+      y: (petAnchor ? petAnchor.y : defaultPetAnchor().y) + (vy * PET_MOMENTUM_FRAME_MS) / 1000,
+      width: petMascotSize.width,
+      height: petMascotSize.height,
+    };
+    petAnchor = requested;
+    applyPetLayout(screen.getDisplayNearestPoint(pointForRectCenter(requested)).bounds, { persist: false });
+    if (petAnchor.x !== Math.round(requested.x)) vx = 0;
+    if (petAnchor.y !== Math.round(requested.y)) vy = 0;
+    vx *= PET_MOMENTUM_DECAY;
+    vy *= PET_MOMENTUM_DECAY;
+    if (elapsed >= PET_MOMENTUM_MAX_MS || Math.hypot(vx, vy) < PET_MOMENTUM_STOP_VELOCITY) {
+      persistPetWindowBounds();
+      return;
+    }
+    petMomentumTimer = setTimeout(step, PET_MOMENTUM_FRAME_MS);
+  };
+  petMomentumTimer = setTimeout(step, PET_MOMENTUM_FRAME_MS);
+});
+
 ipcMain.on('open-cat-conversation', (_e, { catId } = {}) => {
   if (!catId) return;
-  const id = String(catId);
-  if (id.startsWith('ide:')) {
-    activateCursorApp();
-    return;
-  }
-  openConversationWindow(id);
+  openConversationWindow(String(catId));
 });
 
 ipcMain.on('close-conversation-window', () => {
@@ -1162,73 +1487,19 @@ ipcMain.on('close-conversation-window', () => {
 
 ipcMain.on('dismiss-cat', async (_e, { catId } = {}) => {
   if (!catId) return;
-  const id = String(catId);
-  if (id.startsWith('ide:')) {
-    removeIdeCatIfPresent(id, { getMainWindow: () => mainWindow, log: console });
-    if (conversationWindow && !conversationWindow.isDestroyed()) {
-      conversationWindow.close();
-    }
-    return;
-  }
-  await dismissAgent(id, { getMainWindow: () => mainWindow, log: console });
+  const result = await dismissAgent(String(catId), { getMainWindow: () => mainWindow, log: console });
+  if (!result || result.ok === false) return;
   if (conversationWindow && !conversationWindow.isDestroyed()) {
     conversationWindow.close();
   }
 });
 
-ipcMain.on('agent-followup', (_e, { catId, text } = {}) => {
-  if (!catId) return;
-  if (String(catId).startsWith('ide:')) {
-    return;
-  }
-  sendFollowup(String(catId), text, { getMainWindow: () => mainWindow, log: console });
+ipcMain.handle('agent-followup', (_e, { catId, text } = {}) => {
+  if (!catId) return { ok: false, error: 'Missing session id.' };
+  return sendFollowup(String(catId), text, { getMainWindow: () => mainWindow, log: console });
 });
 
 ipcMain.handle('get-agent-conversation', (_e, catId) => getAgentConversation(catId));
-
-ipcMain.handle('revert-cat-changes', async (_e, { catId } = {}) => {
-  if (!catId) return { ok: false, error: 'missing cat id' };
-  const id = String(catId);
-  if (id.startsWith('ide:')) {
-    return { ok: false, error: 'Revert is not available for this cat.' };
-  }
-  const c = getAgentConversation(id);
-  if (!c.found || !c.folder) {
-    return { ok: false, error: 'Conversation not found.' };
-  }
-  const parent =
-    (conversationWindow && !conversationWindow.isDestroyed() && conversationWindow) ||
-    (mainWindow && !mainWindow.isDestroyed() && mainWindow) ||
-    undefined;
-  const { response } = await dialog.showMessageBox(parent, {
-    type: 'warning',
-    message: 'Revert all changes this cat made?',
-    detail: `This will restore the folder to how it was when the cat was spawned:\n\n${c.folder}\n\nThis cannot be undone.`,
-    buttons: ['Cancel', 'Revert'],
-    defaultId: 0,
-    cancelId: 0,
-  });
-  if (response !== 1) {
-    return { ok: false, cancelled: true };
-  }
-  return revertAgentChanges(id, { log: console });
-});
-
-ipcMain.handle('open-external-url', async (_e, url) => {
-  if (typeof url !== 'string' || !url.trim()) {
-    return { ok: false, error: 'invalid url' };
-  }
-  const u = url.trim();
-  if (!/^file:/i.test(u) && !/^https:/i.test(u)) {
-    return { ok: false, error: 'unsupported url scheme' };
-  }
-  try {
-    await shell.openExternal(u);
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: (e && e.message) || String(e) };
-  }
-});
 
 function offsetRect(rect, win) {
   if (!rect || !win || win.isDestroyed()) return null;
@@ -1268,8 +1539,6 @@ async function readDomEvalTargets(win, selectors) {
         const prompt = document.querySelector('#prompt');
         out.promptValueLength = prompt && typeof prompt.value === 'string' ? prompt.value.length : 0;
         out.promptValuePreview = prompt && typeof prompt.value === 'string' ? prompt.value.slice(0, 120) : '';
-        const selected = document.querySelector('.recent-folder-item.selected');
-        out.selectedFolderPath = (document.body && document.body.dataset ? document.body.dataset.selectedFolder : '') || (selected && selected.dataset ? selected.dataset.folder : '') || '';
         const visibleText = document.body && typeof document.body.innerText === 'string' ? document.body.innerText.replace(/\s+/g, ' ').trim() : '';
         out.visibleTextLength = visibleText.length;
         out.visibleTextPreview = visibleText.slice(0, 4000);
@@ -1308,12 +1577,10 @@ async function getEvalUiTargets() {
     promptRect: '#prompt',
     micButtonRect: '#btn-dictate',
     createButtonRect: '#btn-create-cat',
-    selectedFolderRowRects: '.recent-folder-item.selected[]',
   });
   const conversation = await readDomEvalTargets(conversationWindow, {
     logRect: '#log',
     followupRect: '#followup-input',
-    revertButtonRect: '#btn-revert',
   });
   return {
     ok: true,
@@ -1394,7 +1661,7 @@ function textTraceMeta(value, maxPreview = 80) {
 }
 
 async function runSpeechHelper() {
-  const helper = path.join(getPackageRoot(), 'eval', 'human-e2e', 'swift', 'AgentUISpeech.swift');
+  const helper = path.join(getPackageRoot(), 'src', 'main', 'AgentUISpeech.swift');
   if (!fs.existsSync(helper)) {
     return { ok: false, error: 'speech helper is missing' };
   }
@@ -1433,6 +1700,7 @@ ipcMain.on('eval-trace-event', (_event, payload = {}) => {
 
 app.whenReady().then(() => {
   app.setName('agent-UI');
+  void loadGetWindowsModule();
   if (process.platform === 'darwin' && app.dock && process.env.AGENT_UI_EVAL !== '1') {
     app.dock.hide();
   }
@@ -1449,41 +1717,20 @@ app.whenReady().then(() => {
       wait: async (payload = {}) => waitForEvalCat(payload),
       getTrace: async () => getTrace(),
       closeModal: async () => closeEvalModal(),
-      revert: async ({ catId } = {}) => {
-        if (!catId) return { ok: false, error: 'missing cat id' };
-        const result = await revertAgentChanges(String(catId), { log: console });
-        recordTrace('cleanup_revert_completed', { catId: String(catId), ok: !!result.ok });
-        return result;
-      },
       dismiss: async ({ catId } = {}) => {
         if (!catId) return { ok: false, error: 'missing cat id' };
-        await dismissAgent(String(catId), { getMainWindow: () => mainWindow, log: console });
-        recordTrace('cleanup_dismiss_completed', { catId: String(catId), ok: true });
-        return { ok: true };
-      },
-      cancel: async ({ catId } = {}) => {
-        if (!catId) return { ok: false, error: 'missing cat id' };
-        const result = await cancelAgent(String(catId), { getMainWindow: () => mainWindow, log: console });
-        recordTrace('cleanup_cancel_completed', { catId: String(catId), ok: !!result.ok });
+        const result = await dismissAgent(String(catId), { getMainWindow: () => mainWindow, log: console });
+        recordTrace('cleanup_dismiss_completed', {
+          catId: String(catId),
+          ok: !!(result && result.ok),
+          error: result && result.error ? result.error : null,
+        });
         return result;
       },
       shutdown: () => app.quit(),
     },
     console
   );
-
-  void startHookServer({
-    onIdeSessionStart: (p) => handleIdeSessionStart(p, { getMainWindow: () => mainWindow, log: console }),
-    onIdeSessionEnd: (p) => handleIdeSessionEnd(p, { getMainWindow: () => mainWindow, log: console }),
-    log: console,
-  })
-    .then((h) => {
-      closeHookServer = h && h.closeSync ? h.closeSync : null;
-    })
-    .catch((e) => {
-      // eslint-disable-next-line no-console
-      console.warn('[agent-ui] hook server failed to start', e);
-    });
 
   /** Throttle overlay speech bubbles so streaming tokens do not flood IPC. */
   const streamBubbleThrottle = new Map();
@@ -1521,37 +1768,24 @@ app.whenReady().then(() => {
     if (streamBubble) sendStreamBubbleThrottled(_id, streamBubble);
   });
 
-  void tickActiveWindowTracker();
-  setInterval(() => {
-    void tickActiveWindowTracker();
-  }, 1000);
+  const reclampPetOverlay = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (petDragState) {
+      const point = screen.getCursorScreenPoint();
+      petDragState.displayBounds = screen.getDisplayNearestPoint(point).bounds;
+      return;
+    }
+    cancelPetMomentum();
+    applyPetLayout(undefined, { persist: true });
+  };
+  screen.on('display-added', reclampPetOverlay);
+  screen.on('display-removed', reclampPetOverlay);
+  screen.on('display-metrics-changed', reclampPetOverlay);
+  startActiveWindowTracker();
 
   setInterval(() => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
-    if (!lastCatScreenRects.length) {
-      if (mainWindowMouseable) {
-        mainWindow.setIgnoreMouseEvents(true, { forward: true });
-        mainWindowMouseable = false;
-      }
-      return;
-    }
-    const p = screen.getCursorScreenPoint();
-    let over = false;
-    for (const b of lastCatScreenRects) {
-      if (p.x >= b.left && p.x <= b.right && p.y >= b.top && p.y <= b.bottom) {
-        over = true;
-        break;
-      }
-    }
-    if (over) {
-      if (!mainWindowMouseable) {
-        mainWindow.setIgnoreMouseEvents(false);
-        mainWindowMouseable = true;
-      }
-    } else if (mainWindowMouseable) {
-      mainWindow.setIgnoreMouseEvents(true, { forward: true });
-      mainWindowMouseable = false;
-    }
+    applyPetMouseInteractivityPolicy();
   }, 32);
 
   const quit = () => {
@@ -1572,15 +1806,6 @@ app.whenReady().then(() => {
 });
 
 app.on('will-quit', () => {
-  if (typeof closeHookServer === 'function') {
-    try {
-      closeHookServer();
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn('[agent-ui] hook server cleanup', e);
-    }
-    closeHookServer = null;
-  }
   if (typeof closeEvalServer === 'function') {
     try {
       closeEvalServer();
@@ -1599,6 +1824,10 @@ app.on('will-quit', () => {
     closeEvalServer = null;
   }
   cancelAllAgents();
+  if (activeWindowPollTimer != null) {
+    clearInterval(activeWindowPollTimer);
+    activeWindowPollTimer = null;
+  }
   globalShortcut.unregisterAll();
 });
 

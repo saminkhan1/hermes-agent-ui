@@ -7,43 +7,26 @@
       content="default-src 'self' 'unsafe-inline' ws: http://localhost:*; script-src 'self' 'unsafe-inline' http://localhost:*; style-src 'self' 'unsafe-inline'; img-src 'self' file: data: blob:; connect-src 'self' ws: http://localhost:*;"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>New agent-UI</title>
+    <title>New Session</title>
     <link rel="stylesheet" href="/src/modal.css" />
   </head>
   <body>
     <div class="wrap">
       <div class="header">
-        <div
-          id="header-app-icon"
-          class="header-app-icon"
-          role="img"
-          aria-label="agent-UI"
-        ></div>
+        <div id="header-app-icon" class="header-app-icon" role="img" aria-label="agent-UI"></div>
         <div class="header-input-col">
           <textarea
             id="prompt"
             rows="1"
             autocomplete="off"
-            placeholder="Meow, what should I work on?"
+            placeholder="What should Hermes do?"
             spellcheck="true"
             autofocus
           ></textarea>
           <div class="prompt-meta-wrap">
             <div class="prompt-meta">
-              <span class="model-chip" aria-label="Hermes CLI">
-                <svg class="model-chip-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
-                </svg>
-                <span id="model-chip-label">Hermes</span>
-              </span>
               <div id="prompt-send-hint" class="prompt-send-hint" aria-live="polite"></div>
-              <button
-                id="btn-dictate"
-                class="icon-action"
-                type="button"
-                aria-label="Dictate prompt"
-                title="Dictate prompt"
-              >
+              <button id="btn-dictate" class="icon-action" type="button" aria-label="Dictate prompt" title="Dictate prompt">
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
                   <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
@@ -55,36 +38,11 @@
         </div>
       </div>
 
-      <div class="section-title" id="project-section-title">Project</div>
-      
-      <div class="list" id="local-project-section">
-        <div class="list-item" id="btn-choose-folder">
-          <div class="item-icon">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-              <line x1="12" y1="11" x2="12" y2="17"></line>
-              <line x1="9" y1="14" x2="15" y2="14"></line>
-            </svg>
-          </div>
-          <div class="item-content">
-            <div class="item-title">New Project</div>
-            <div class="item-subtitle">Choose a folder…</div>
-          </div>
-          <div class="item-shortcut">
-            <kbd>⌘</kbd><kbd>O</kbd>
-          </div>
-        </div>
-
-        <div id="recent-folders-container" hidden>
-          <div id="recent-folders-list"></div>
-        </div>
-      </div>
-
       <div class="footer">
         <span id="error" class="error" role="alert" hidden></span>
         <div class="footer-actions">
           <span id="spawn-hint" class="hint"></span>
-          <button id="btn-create-cat" class="primary-action" type="button">Create Cat</button>
+          <button id="btn-create-cat" class="primary-action" type="button">Start Session</button>
         </div>
       </div>
     </div>

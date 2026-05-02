@@ -1,7 +1,7 @@
 {
   "name": "agent-ui",
   "version": "1.0.0",
-  "description": "Frameless transparent desktop cat pet with sprite animation",
+  "description": "Codex-style desktop pet overlay for agent sessions",
   "main": "out/main/index.js",
   "bin": {
     "agent-ui": "bin/agent-ui.js"
@@ -10,7 +10,6 @@
     "bin",
     "out",
     "assets",
-    "scripts",
     "src",
     "README.md",
     "electron.vite.config.mjs"
@@ -19,21 +18,17 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
-    "prepare": "electron-vite build",
-    "eval:human": "./autoresearch.sh",
-    "eval:checks": "./autoresearch.checks.sh",
-    "eval:voice-smoke": "node eval/human-e2e/run.js --preflight-only && swift eval/human-e2e/swift/AgentUISpeech.swift"
+    "prepare": "electron-vite build"
   },
   "keywords": [
     "electron",
-    "cat",
-    "desktop-pet"
+    "desktop-pet",
+    "codex"
   ],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
-    "@playwright/test": "^1.59.1",
     "electron-vite": "^5.0.0",
     "vite": "^7.3.2"
   },

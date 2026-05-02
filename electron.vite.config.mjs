@@ -16,7 +16,7 @@ export default defineConfig({
         name: 'copy-main-agents',
         writeBundle() {
           const outMain = join('out', 'main')
-          for (const f of ['agents.js', 'hook-server.js', 'ide-sessions.js', 'eval-trace.js']) {
+          for (const f of ['agents.js', 'eval-trace.js']) {
             copyFileSync(join('src', 'main', f), join(outMain, f))
           }
         },

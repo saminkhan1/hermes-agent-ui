@@ -1,3 +1,0 @@
-- Split the benchmark into a tiny “real user smoke” path and a separate full scenario suite so the primary score tracks the most common flow instead of every edge-case oracle.
-- Replace any remaining artificial prompt suffixes with shorter user-style prompts and keep disposable naming entirely in setup/oracle artifacts.
-- Add one explicit follow-up-only scenario (open conversation, reply once, verify the transcript grows) rather than inferring follow-up coverage from long end-to-end cases.

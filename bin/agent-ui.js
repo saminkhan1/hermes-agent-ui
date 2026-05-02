@@ -8,28 +8,6 @@ const path = require('node:path');
 const pkgRoot = path.resolve(__dirname, '..');
 const mainEntry = path.join(pkgRoot, 'out', 'main', 'index.js');
 
-if (process.argv[2] === 'add-hooks') {
-  try {
-    const { addHooks } = require(path.join(pkgRoot, 'scripts', 'add-hooks.js'));
-    addHooks(pkgRoot, { log: console.log.bind(console) });
-  } catch (e) {
-    console.error('[agent-ui] add-hooks failed:', (e && e.message) || e);
-    process.exit(1);
-  }
-  process.exit(0);
-}
-
-if (process.argv[2] === 'remove-hooks') {
-  try {
-    const { removeHooks } = require(path.join(pkgRoot, 'scripts', 'add-hooks.js'));
-    removeHooks(pkgRoot, { log: console.log.bind(console) });
-  } catch (e) {
-    console.error('[agent-ui] remove-hooks failed:', (e && e.message) || e);
-    process.exit(1);
-  }
-  process.exit(0);
-}
-
 if (!fs.existsSync(mainEntry)) {
   console.error(
     `[agent-ui] Missing built main process at ${mainEntry}. Run "npm run build" in the package root (or reinstall so the "prepare" script can run).`
@@ -50,7 +28,7 @@ ${cyan}-(((---(((--------${reset}
 ${yellow}   agent-UI${reset}
 ${cyan}------------------${reset}
 
-Use Cmd+Shift+C to launch an agent-UI.
+Use Cmd+Shift+C to open the session launcher.
 `);
 
 const child = spawn(electron, [mainEntry, ...process.argv.slice(2)], {

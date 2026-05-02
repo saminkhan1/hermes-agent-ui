@@ -14,16 +14,10 @@
     <div class="wrap">
       <div class="header">
         <p class="meta" id="meta" hidden></p>
-        <button type="button" id="btn-revert" class="header-btn revert-btn" hidden>
-          Revert changes
-        </button>
-        <button type="button" id="btn-dismiss" class="header-btn dismiss-btn">Finish Conversation</button>
+        <button type="button" id="btn-dismiss" class="header-btn dismiss-btn">Dismiss</button>
         <button type="button" id="btn-close" class="close-btn" aria-label="Close">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
-      </div>
-      <div id="revert-error-row" class="revert-error-row" hidden>
-        <span id="revert-error" class="revert-error"></span>
       </div>
       <div class="main-stage" id="main-stage">
         <div id="conversation-section" class="conversation-section">
@@ -33,6 +27,7 @@
       <footer class="composer">
         <div class="composer-label-row">
           <label class="composer-label" for="followup-input">Follow up</label>
+          <span id="composer-error" class="composer-error" role="alert" hidden></span>
         </div>
         <div class="composer-row">
           <textarea

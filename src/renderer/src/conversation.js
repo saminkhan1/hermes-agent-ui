@@ -8,16 +8,12 @@ const logEl = document.getElementById('log');
 const metaEl = document.getElementById('meta');
 const closeBtn = document.getElementById('btn-close');
 const dismissBtn = document.getElementById('btn-dismiss');
-const revertBtn = document.getElementById('btn-revert');
-const revertErrorRow = document.getElementById('revert-error-row');
-const revertErrorEl = document.getElementById('revert-error');
 const followupInput = document.getElementById('followup-input');
 const sendBtn = document.getElementById('btn-send');
+const composerError = document.getElementById('composer-error');
 
 let unsubUpdated = null;
-/** @type {{ runStatus?: string, canRevert?: boolean, reverted?: boolean, revertError?: string | null } | null} */
 let lastData = null;
-let revertInFlight = false;
 
 function kindToLabel(k) {
   return (
@@ -59,57 +55,39 @@ function renderLogItems(items) {
   }
 }
 
+function isRunningConversation(data) {
+  return data && String(data.runStatus || '').toLowerCase() === 'running';
+}
+
+function isDismissibleConversation(data) {
+  const status = String((data && data.runStatus) || '').toLowerCase();
+  return status === 'completed' || status === 'error' || status === 'failed' || status === 'cancelled' || status === 'canceled';
+}
+
 function updateComposerFromData(data) {
   if (!followupInput || !sendBtn) return;
-  const running = data && String(data.runStatus || '').toLowerCase() === 'running';
+  const running = isRunningConversation(data);
   const ok = data && data.found;
-  followupInput.disabled = !ok;
+  followupInput.disabled = !ok || running;
   sendBtn.disabled = !ok || running;
-}
-
-/**
- * @param {{ canRevert?: boolean, reverted?: boolean, runStatus?: string, found?: boolean } | null} data
- */
-function updateRevertFromData(data) {
-  if (!revertBtn) return;
-  if (!data || !data.found || !data.canRevert) {
-    revertBtn.hidden = true;
-    return;
-  }
-  revertBtn.hidden = false;
-  const running = String(data.runStatus || '').toLowerCase() === 'running';
-  if (revertInFlight) {
-    revertBtn.disabled = true;
-    revertBtn.textContent = 'Reverting…';
-  } else if (data.reverted) {
-    revertBtn.disabled = true;
-    revertBtn.textContent = 'Reverted';
-  } else {
-    revertBtn.disabled = running;
-    revertBtn.textContent = 'Revert changes';
+  if (dismissBtn) {
+    const canDismiss = ok && isDismissibleConversation(data);
+    dismissBtn.disabled = !canDismiss;
+    dismissBtn.title = canDismiss ? 'Dismiss session' : 'Dismiss is available after Hermes finishes';
   }
 }
 
-/**
- * @param {{ found?: boolean, revertError?: string | null } | null} data
- */
-function updateRevertErrorRow(data) {
-  if (!revertErrorRow || !revertErrorEl) return;
-  if (!data || !data.found || !data.revertError) {
-    revertErrorRow.hidden = true;
-    revertErrorEl.textContent = '';
-    return;
-  }
-  revertErrorRow.hidden = false;
-  revertErrorEl.textContent = `Could not revert: ${data.revertError}`;
+function setComposerError(message) {
+  if (!composerError) return;
+  const text = String(message || '').trim();
+  composerError.hidden = !text;
+  composerError.textContent = text;
 }
 
 async function render() {
   if (!window.agentUI?.getAgentConversation || !catId) {
     logEl.textContent = 'No conversation to show.';
     updateComposerFromData(null);
-    updateRevertFromData(null);
-    updateRevertErrorRow(null);
     return;
   }
   const data = await window.agentUI.getAgentConversation(catId);
@@ -117,15 +95,12 @@ async function render() {
   if (!data || !data.found) {
     logEl.textContent = 'This conversation is not available yet, or the agent was not started.';
     updateComposerFromData(null);
-    updateRevertFromData(null);
-    updateRevertErrorRow(null);
     return;
   }
 
-  if (data.locationLabel || data.folder) {
+  if (data.locationLabel) {
     metaEl.hidden = false;
-    const location = data.locationLabel || data.folder;
-    metaEl.textContent = data.prompt ? `${location} — “${data.prompt}”` : location;
+    metaEl.textContent = data.prompt ? `${data.locationLabel} - "${data.prompt}"` : data.locationLabel;
   } else {
     metaEl.hidden = true;
   }
@@ -133,19 +108,29 @@ async function render() {
   renderLogItems(data.items || []);
   logEl.scrollTop = logEl.scrollHeight;
   updateComposerFromData(data);
-  updateRevertFromData(data);
-  updateRevertErrorRow(data);
 }
 
-function sendFollowup() {
+async function sendFollowup() {
   if (!catId || !followupInput) return;
   const text = followupInput.value;
   if (!text.trim()) return;
   if (lastData && String(lastData.runStatus || '').toLowerCase() === 'running') return;
   if (typeof window.agentUI.sendFollowup !== 'function') return;
-  followupInput.value = '';
-  void window.agentUI.sendFollowup(catId, text);
-  void render();
+  setComposerError('');
+  if (sendBtn) sendBtn.disabled = true;
+  try {
+    const result = await window.agentUI.sendFollowup(catId, text);
+    if (result && result.ok === false) {
+      setComposerError(result.error || 'Unable to send follow-up.');
+      updateComposerFromData(lastData);
+      return;
+    }
+    followupInput.value = '';
+    await render();
+  } catch {
+    setComposerError('Unable to send follow-up.');
+    updateComposerFromData(lastData);
+  }
 }
 
 if (catId) {
@@ -158,7 +143,7 @@ if (catId) {
     });
   }
 } else {
-  logEl.textContent = 'Missing cat id.';
+  logEl.textContent = 'Missing session id.';
 }
 
 function close() {
@@ -169,6 +154,7 @@ function close() {
 
 function dismiss() {
   if (!catId) return;
+  if (!isDismissibleConversation(lastData)) return;
   if (typeof window.agentUI.dismissCat === 'function') {
     window.agentUI.dismissCat(catId);
   }
@@ -184,26 +170,9 @@ if (dismissBtn) {
   });
 }
 
-if (revertBtn) {
-  revertBtn.addEventListener('click', async () => {
-    if (!catId || typeof window.agentUI?.revertCat !== 'function') return;
-    if (revertInFlight) return;
-    if (lastData && String(lastData.runStatus || '').toLowerCase() === 'running') return;
-    if (lastData && lastData.reverted) return;
-    revertInFlight = true;
-    updateRevertFromData(lastData);
-    try {
-      await window.agentUI.revertCat(catId);
-    } finally {
-      revertInFlight = false;
-      void render();
-    }
-  });
-}
-
 if (sendBtn) {
   sendBtn.addEventListener('click', () => {
-    sendFollowup();
+    void sendFollowup();
   });
 }
 
@@ -217,7 +186,7 @@ if (followupInput) {
     }
     if (e.shiftKey) return;
     e.preventDefault();
-    sendFollowup();
+    void sendFollowup();
   });
 }
 
