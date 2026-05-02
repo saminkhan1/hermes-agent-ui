@@ -15,6 +15,46 @@ const composerError = document.getElementById('composer-error');
 let unsubUpdated = null;
 let lastData = null;
 
+function rectFor(el) {
+  if (!(el instanceof HTMLElement)) return null;
+  const rect = el.getBoundingClientRect();
+  if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+  const wx = window.screenX ?? window.screenLeft ?? 0;
+  const wy = window.screenY ?? window.screenTop ?? 0;
+  return {
+    left: Math.round(wx + rect.left),
+    top: Math.round(wy + rect.top),
+    right: Math.round(wx + rect.right),
+    bottom: Math.round(wy + rect.bottom),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  };
+}
+
+function reportEvalUiState() {
+  if (!window.agentUI || typeof window.agentUI.reportEvalUiState !== 'function') return;
+  const visibleText = document.body && typeof document.body.innerText === 'string'
+    ? document.body.innerText.replace(/\s+/g, ' ').trim()
+    : '';
+  const lineEntries = Array.from(document.querySelectorAll('.line')).slice(0, 20).map((line) => {
+    const label = line.querySelector('.line-label');
+    const text = line.querySelector('.line-text');
+    return {
+      label: label && typeof label.textContent === 'string' ? label.textContent : '',
+      text: text && typeof text.textContent === 'string' ? text.textContent : '',
+    };
+  });
+  window.agentUI.reportEvalUiState('conversation', {
+    catId: catId || null,
+    logRect: rectFor(logEl),
+    followupRect: rectFor(followupInput),
+    activeElement: document.activeElement ? { id: document.activeElement.id || '', tag: document.activeElement.tagName || '' } : null,
+    visibleTextLength: visibleText.length,
+    visibleTextPreview: visibleText.slice(0, 4000),
+    lineEntries,
+  });
+}
+
 function kindToLabel(k) {
   return (
     {
@@ -88,6 +128,7 @@ async function render() {
   if (!window.agentUI?.getAgentConversation || !catId) {
     logEl.textContent = 'No conversation to show.';
     updateComposerFromData(null);
+    reportEvalUiState();
     return;
   }
   const data = await window.agentUI.getAgentConversation(catId);
@@ -95,6 +136,7 @@ async function render() {
   if (!data || !data.found) {
     logEl.textContent = 'This conversation is not available yet, or the agent was not started.';
     updateComposerFromData(null);
+    reportEvalUiState();
     return;
   }
 
@@ -108,6 +150,7 @@ async function render() {
   renderLogItems(data.items || []);
   logEl.scrollTop = logEl.scrollHeight;
   updateComposerFromData(data);
+  reportEvalUiState();
 }
 
 async function sendFollowup() {
@@ -206,3 +249,6 @@ window.addEventListener('beforeunload', () => {
     }
   }
 });
+
+window.addEventListener('resize', reportEvalUiState);
+window.addEventListener('load', reportEvalUiState);

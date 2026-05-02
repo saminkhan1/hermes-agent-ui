@@ -8,7 +8,6 @@ const mascot = document.getElementById('pet-mascot');
 const badgeEl = document.getElementById('pet-badge');
 const tray = document.getElementById('pet-tray');
 const trayList = document.getElementById('pet-tray-list');
-const contentFrame = shell;
 
 const DEFAULT_LAYOUT = {
   mascot: { left: 244, top: 191, width: 112, height: 121 },
@@ -90,10 +89,6 @@ const AVATAR_FRAMES = {
   waiting: linearFrames(5, 8, 150, 260),
 };
 
-const DRAG_THRESHOLD_PX = 4;
-const RELEASE_SAMPLE_WINDOW_MS = 100;
-const RELEASE_MIN_VELOCITY = 320;
-const RELEASE_MAX_VELOCITY = 1600;
 const VISIBLE_SCROLL_STEP = 2;
 const SCROLL_EDGE_SLOP = 2;
 const COLLAPSED_BODY_MAX_HEIGHT = 32;
@@ -110,7 +105,6 @@ const avatarTimers = new WeakMap();
 
 let layout = DEFAULT_LAYOUT;
 let trayOpen = true;
-let dragState = null;
 let mascotHover = false;
 let replyingTo = null;
 let pendingReplyFocus = null;
@@ -121,7 +115,6 @@ let pointerInteractionFrame = null;
 let pointerInteractionObserver = null;
 let scrollState = { hasLatestNotificationsAbove: false, hiddenOlderNotificationCount: 0 };
 let lastElementSizePayload = '';
-let lastRectsPayload = '';
 
 const assetsReady = new Promise((resolve) => {
   const img = new Image();
@@ -133,6 +126,45 @@ const assetsReady = new Promise((resolve) => {
 function traceEvalEvent(type, payload = {}) {
   if (!window.agentUI || typeof window.agentUI.traceEvalEvent !== 'function') return;
   window.agentUI.traceEvalEvent({ type, ...payload });
+}
+
+function rectFor(el) {
+  if (!(el instanceof HTMLElement)) return null;
+  if (el.hidden || window.getComputedStyle(el).display === 'none') return null;
+  const rect = el.getBoundingClientRect();
+  if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+  const wx = window.screenX ?? window.screenLeft ?? 0;
+  const wy = window.screenY ?? window.screenTop ?? 0;
+  return {
+    left: Math.round(wx + rect.left),
+    top: Math.round(wy + rect.top),
+    right: Math.round(wx + rect.right),
+    bottom: Math.round(wy + rect.bottom),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  };
+}
+
+function reportEvalUiState(list = notifications()) {
+  if (!window.agentUI || typeof window.agentUI.reportEvalUiState !== 'function') return;
+  const top = list[0] || null;
+  const cats = [];
+  const push = (el, catId) => {
+    const rect = rectFor(el);
+    if (!rect || !catId) return;
+    cats.push({ catId, ...rect });
+  };
+  push(mascot, top ? top.catId : '__idle_pet__');
+  if (badgeEl && !badgeEl.hidden) push(badgeEl, top ? top.catId : '__idle_pet__');
+  if (tray && !tray.hidden && tray.dataset.collapsed !== 'true') {
+    push(tray, top ? top.catId : '__pet_tray__');
+  }
+  window.agentUI.reportEvalUiState('overlay', {
+    layout,
+    notificationCount: list.length,
+    trayOpen,
+    cats,
+  });
 }
 
 function linearFrames(rowIndex, count, frameDurationMs, finalFrameDurationMs) {
@@ -467,129 +499,6 @@ function dismissNotification(notification) {
   removeSession(id);
 }
 
-function pointerSample(e) {
-  return {
-    screenX: Number(e.screenX) || 0,
-    screenY: Number(e.screenY) || 0,
-    timeMs: Number(e.timeStamp) || performance.now(),
-  };
-}
-
-function trimSamples(samples) {
-  const last = samples.at(-1);
-  if (!last) return samples;
-  return samples.filter((sample) => last.timeMs - sample.timeMs <= RELEASE_SAMPLE_WINDOW_MS);
-}
-
-function releaseVelocity(samples, finalSample) {
-  const recent = trimSamples([...(samples || []), finalSample]);
-  const last = recent.at(-1);
-  if (!last) return null;
-  const first = recent.find((sample) => last.timeMs - sample.timeMs > 16);
-  if (!first) return null;
-  const dt = (last.timeMs - first.timeMs) / 1000;
-  if (dt <= 0) return null;
-  const velocity = {
-    x: (last.screenX - first.screenX) / dt,
-    y: (last.screenY - first.screenY) / dt,
-  };
-  const speed = Math.hypot(velocity.x, velocity.y);
-  if (speed < RELEASE_MIN_VELOCITY) return null;
-  if (speed <= RELEASE_MAX_VELOCITY) return velocity;
-  const scale = RELEASE_MAX_VELOCITY / speed;
-  return { x: velocity.x * scale, y: velocity.y * scale };
-}
-
-function endDrag(pointerId, { releaseSample = null, shouldOpenMainWindow = false } = {}) {
-  if (!dragState || dragState.pointerId !== pointerId) return;
-  const state = dragState;
-  dragState = null;
-  if (contentFrame) {
-    contentFrame.dataset.dragging = 'false';
-    try {
-      if (contentFrame.hasPointerCapture?.(pointerId)) contentFrame.releasePointerCapture?.(pointerId);
-    } catch {
-      // ignore pointer capture release errors
-    }
-  }
-  const velocity = releaseSample && state.hasMoved ? releaseVelocity(state.samples, releaseSample) : null;
-  if (window.agentUI && typeof window.agentUI.endPetDrag === 'function') {
-    window.agentUI.endPetDrag({});
-  }
-  if (velocity && window.agentUI && typeof window.agentUI.releasePetDrag === 'function') {
-    window.agentUI.releasePetDrag({ velocityX: velocity.x, velocityY: velocity.y });
-  }
-  if (shouldOpenMainWindow && state.startedOnMascot && !state.hasMoved) {
-    const top = notifications()[0];
-    if (top) openSessionConversation(top.catId);
-  }
-  renderAll();
-}
-
-function installPetDrag() {
-  if (!contentFrame) return;
-  contentFrame.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0) return;
-    if (!(e.target instanceof Element)) return;
-    if (e.target.closest('.no-drag')) return;
-    e.preventDefault();
-    contentFrame.setPointerCapture?.(e.pointerId);
-    const sample = pointerSample(e);
-    dragState = {
-      startedOnMascot: e.target.closest('[data-avatar-mascot="true"]') != null,
-      hasMoved: false,
-      pointerId: e.pointerId,
-      samples: [sample],
-      screenX: sample.screenX,
-      screenY: sample.screenY,
-    };
-    contentFrame.dataset.dragging = 'true';
-    if (window.agentUI && typeof window.agentUI.startPetDrag === 'function') {
-      window.agentUI.startPetDrag({
-        pointerWindowX: e.clientX,
-        pointerWindowY: e.clientY,
-      });
-    }
-    renderAll();
-  });
-
-  contentFrame.addEventListener('pointermove', (e) => {
-    const state = dragState;
-    if (!state || state.pointerId !== e.pointerId) return;
-    const sample = pointerSample(e);
-    state.samples = trimSamples([...state.samples, sample]);
-    const dx = sample.screenX - state.screenX;
-    const dy = sample.screenY - state.screenY;
-    if (Math.abs(dx) < DRAG_THRESHOLD_PX && Math.abs(dy) < DRAG_THRESHOLD_PX) return;
-    state.hasMoved = true;
-    state.screenX = sample.screenX;
-    state.screenY = sample.screenY;
-    if (dx >= DRAG_THRESHOLD_PX) state.transientState = 'running-right';
-    else if (dx <= -DRAG_THRESHOLD_PX) state.transientState = 'running-left';
-    if (window.agentUI && typeof window.agentUI.movePetDrag === 'function') {
-      window.agentUI.movePetDrag({});
-    }
-    renderMascot(notifications());
-  });
-
-  contentFrame.addEventListener('pointerup', (e) => {
-    endDrag(e.pointerId, { releaseSample: pointerSample(e), shouldOpenMainWindow: true });
-  });
-  contentFrame.addEventListener('pointercancel', (e) => {
-    endDrag(e.pointerId, { shouldOpenMainWindow: false });
-  });
-  contentFrame.addEventListener('lostpointercapture', (e) => {
-    endDrag(e.pointerId, { shouldOpenMainWindow: false });
-  });
-
-  window.addEventListener('pointerup', (e) => {
-    endDrag(e.pointerId, { releaseSample: pointerSample(e), shouldOpenMainWindow: true });
-  });
-  window.addEventListener('pointercancel', (e) => {
-    endDrag(e.pointerId, { shouldOpenMainWindow: false });
-  });
-}
-
 function styleBox(el, box) {
   if (!el || !box) return;
   el.style.left = `${box.left}px`;
@@ -615,12 +524,11 @@ function ensureMascotAvatar() {
 function renderMascot(list) {
   const top = list[0] || null;
   const meta = statusMeta(top ? top.level : 'idle');
-  const state = dragState?.transientState || (mascotHover ? 'jumping' : meta.mascotState);
+  const state = mascotHover ? 'jumping' : meta.mascotState;
   const stage = mascot ? mascot.closest('.pet-stage') : null;
   styleBox(stage, layout.mascot);
   if (stage) {
     stage.dataset.avatarOverlayHitRegion = 'mascot';
-    stage.dataset.dragging = dragState ? 'true' : 'false';
   }
   if (mascot) {
     mascot.dataset.state = state;
@@ -973,38 +881,6 @@ function reportElementSize(list) {
   });
 }
 
-function postCatRects() {
-  if (!window.agentUI || typeof window.agentUI.postCatScreenRects !== 'function') return;
-  requestAnimationFrame(() => {
-    const wx = window.screenX ?? window.screenLeft ?? 0;
-    const wy = window.screenY ?? window.screenTop ?? 0;
-    const rects = [];
-    const push = (el, catId) => {
-      if (!(el instanceof HTMLElement) || !catId) return;
-      if (el.hidden || window.getComputedStyle(el).display === 'none') return;
-      const rect = el.getBoundingClientRect();
-      if (!rect || rect.width <= 0 || rect.height <= 0) return;
-      rects.push({
-        catId,
-        left: Math.round(wx + rect.left),
-        top: Math.round(wy + rect.top),
-        right: Math.round(wx + rect.right),
-        bottom: Math.round(wy + rect.bottom),
-      });
-    };
-    const top = notifications()[0];
-    push(mascot, top ? top.catId : '__idle_pet__');
-    if (badgeEl && !badgeEl.hidden) push(badgeEl, top ? top.catId : '__idle_pet__');
-    if (tray && !tray.hidden && tray.dataset.collapsed !== 'true') {
-      push(tray, top ? top.catId : '__pet_tray__');
-    }
-    const key = JSON.stringify(rects);
-    if (key === lastRectsPayload) return;
-    lastRectsPayload = key;
-    window.agentUI.postCatScreenRects(rects);
-  });
-}
-
 function renderAll() {
   const list = notifications();
   if (root) root.hidden = false;
@@ -1014,8 +890,8 @@ function renderAll() {
   setPetKeyboardInteraction(replyingTo != null && list.some((notification) => notification.id === replyingTo));
   updateCounts(list);
   reportElementSize(list);
-  postCatRects();
   schedulePetPointerInteraction();
+  reportEvalUiState(list);
   traceEvalEvent('pet_rendered', { notificationCount: list.length });
 }
 
@@ -1183,8 +1059,6 @@ async function boot() {
   }
 
   installPetPointerInteractivity();
-  installPetDrag();
-
   if (badgeEl) {
     badgeEl.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
@@ -1216,11 +1090,10 @@ async function boot() {
 
   trayList?.addEventListener('scroll', () => {
     updateScrollState();
-    postCatRects();
   }, { passive: true });
   window.addEventListener('resize', () => {
     reportElementSize(notifications());
-    postCatRects();
+    reportEvalUiState();
   });
   window.addEventListener('beforeunload', () => {
     clearPetPointerInteraction({ force: true });

@@ -13,7 +13,6 @@ const fs = require('fs');
 const os = require('os');
 const { randomUUID, createHash } = require('crypto');
 const { execFile } = require('child_process');
-const http = require('http');
 const {
   recordTrace,
   getTrace,
@@ -31,6 +30,16 @@ const {
   sendFollowup,
   getAgentArtifacts,
 } = require('./agents');
+const { startAgentUIEvalServer } = require('./eval-server');
+const {
+  PET_DEFAULT_MASCOT_SIZE,
+  PET_DEFAULT_TRAY_SIZE,
+  PET_WINDOW_HEIGHT,
+  PET_WINDOW_WIDTH,
+  computePetLayout,
+  defaultPetAnchor: defaultPetAnchorForDisplay,
+  pointForRectCenter,
+} = require('./pet-layout');
 
 let getWindowsModulePromise = null;
 
@@ -54,41 +63,6 @@ function getPackageRoot() {
   return path.resolve(__dirname, '..', '..');
 }
 
-function readEvalJson(req) {
-  return new Promise((resolve, reject) => {
-    let body = '';
-    req.setEncoding('utf8');
-    req.on('data', (chunk) => {
-      body += chunk;
-      if (body.length > 1024 * 1024) {
-        reject(new Error('request body too large'));
-        req.destroy();
-      }
-    });
-    req.on('end', () => {
-      if (!body.trim()) {
-        resolve({});
-        return;
-      }
-      try {
-        resolve(JSON.parse(body));
-      } catch (e) {
-        reject(e);
-      }
-    });
-    req.on('error', reject);
-  });
-}
-
-function sendEvalJson(res, statusCode, payload) {
-  const text = JSON.stringify(payload);
-  res.writeHead(statusCode, {
-    'content-type': 'application/json; charset=utf-8',
-    'content-length': Buffer.byteLength(text),
-  });
-  res.end(text);
-}
-
 function execFileText(command, args, opts = {}) {
   return new Promise((resolve, reject) => {
     execFile(command, args, { encoding: 'utf8', timeout: 5000, ...opts }, (err, stdout, stderr) => {
@@ -103,102 +77,13 @@ function execFileText(command, args, opts = {}) {
   });
 }
 
-function writeEvalPortFile(port) {
-  const file = String(process.env.AGENT_UI_EVAL_PORT_FILE || '').trim();
-  if (!file) return;
-  fs.writeFileSync(file, `${port}\n`, 'utf8');
-}
-
-function startAgentUIEvalServer(handlers, log = console) {
-  if (process.env.AGENT_UI_EVAL !== '1') return null;
-
-  const server = http.createServer(async (req, res) => {
-    try {
-      const url = new URL(req.url || '/', 'http://127.0.0.1');
-      if (req.method === 'GET' && url.pathname === '/health') {
-        sendEvalJson(res, 200, { ok: true, app: 'agent-UI', eval: true });
-        return;
-      }
-      if (req.method === 'GET' && url.pathname === '/conversation') {
-        sendEvalJson(res, 200, await handlers.getConversation(url.searchParams.get('catId')));
-        return;
-      }
-      if (req.method === 'GET' && url.pathname === '/conversations') {
-        sendEvalJson(res, 200, await handlers.listConversations());
-        return;
-      }
-      if (req.method === 'GET' && url.pathname === '/ui-targets') {
-        sendEvalJson(res, 200, await handlers.getUiTargets());
-        return;
-      }
-      if (req.method === 'POST' && url.pathname === '/wait') {
-        sendEvalJson(res, 200, await handlers.wait(await readEvalJson(req)));
-        return;
-      }
-      if (req.method === 'GET' && url.pathname === '/trace') {
-        sendEvalJson(res, 200, await handlers.getTrace());
-        return;
-      }
-      if (req.method === 'POST' && url.pathname === '/close-modal') {
-        sendEvalJson(res, 200, await handlers.closeModal());
-        return;
-      }
-      if (req.method === 'POST' && url.pathname === '/dismiss') {
-        sendEvalJson(res, 200, await handlers.dismiss(await readEvalJson(req)));
-        return;
-      }
-      if (req.method === 'POST' && url.pathname === '/shutdown') {
-        sendEvalJson(res, 200, { ok: true });
-        setTimeout(() => handlers.shutdown(), 25);
-        return;
-      }
-      sendEvalJson(res, 404, { ok: false, error: 'not found' });
-    } catch (e) {
-      sendEvalJson(res, 500, { ok: false, error: (e && e.message) || String(e) });
-    }
-  });
-
-  const port = Number(process.env.AGENT_UI_EVAL_PORT || 0);
-  server.listen(port, '127.0.0.1', () => {
-    const address = server.address();
-    const actualPort = address && typeof address === 'object' ? address.port : port;
-    writeEvalPortFile(actualPort);
-    log.log(`[agent-ui] eval server listening on http://127.0.0.1:${actualPort}`);
-  });
-
-  return {
-    closeSync() {
-      try {
-        server.close();
-      } catch {
-        // ignore cleanup errors
-      }
-    },
-  };
-}
-
 let mainWindow;
 let modalWindow;
 let conversationWindow;
 /** Square conversation panel — content dimensions (px). */
 const CONVERSATION_WINDOW_SIDE = 800;
-const PET_WINDOW_WIDTH = 356;
-const PET_WINDOW_HEIGHT = 320;
-const PET_VIEWPORT_SIZE = { width: PET_WINDOW_WIDTH, height: PET_WINDOW_HEIGHT };
-const PET_DEFAULT_MARGIN = 24;
-const PET_LAYOUT_PADDING = { top: 8, right: 28, bottom: 8, left: 0 };
-const PET_TRAY_GAP = 4;
-const PET_PLACEMENT_STICKINESS = 96;
-const PET_DEFAULT_MASCOT_SIZE = { width: 112, height: 121 };
-const PET_DEFAULT_TRAY_SIZE = { width: 276, height: 131 };
-const PET_DISPLAY_SWITCH_SLOP = 24;
-const PET_MOMENTUM_FRAME_MS = 16;
-const PET_MOMENTUM_DECAY = 0.88;
-const PET_MOMENTUM_STOP_VELOCITY = 65;
-const PET_MOMENTUM_MAX_MS = 900;
 /** When true, the overlay is accepting mouse (cursor over a cat). */
 let mainWindowMouseable = false;
-let lastCatScreenRects = [];
 let tray;
 let closeEvalServer = null;
 /** Opening a child window temporarily clears `setVisibleOnAllWorkspaces` on the overlay (stacking/focus on macOS); restore when the child closes. */
@@ -209,13 +94,13 @@ let overlayReady = false;
 const pendingSpawnCats = [];
 let activeModalContextId = null;
 const modalContexts = new Map();
+const evalUiSnapshots = new Map();
 let lastExternalWindowSnapshot = null;
 let activeWindowPollTimer = null;
 let petOverlayOpenRequested = false;
-let petDragState = null;
-let petMomentumTimer = null;
+let petWindowMovePersistTimer = null;
+let applyingPetWindowBounds = false;
 let petPointerInteractive = false;
-let petPointerInteractionSeen = false;
 let petKeyboardInteractive = false;
 let petAnchor = null;
 let petLayout = null;
@@ -248,200 +133,18 @@ function writePetOverlayState(patch = {}) {
   }
 }
 
-function rectCenterX(rect) {
-  return rect.x + rect.width / 2;
-}
-
-function rectCenterY(rect) {
-  return rect.y + rect.height / 2;
-}
-
-function pointForRectCenter(rect) {
-  return { x: rectCenterX(rect), y: rectCenterY(rect) };
-}
-
-function clampNumber(value, min, max) {
-  if (min > max) return Math.round((min + max) / 2);
-  return Math.min(Math.max(Math.round(value), min), max);
-}
-
 function safeInteger(value) {
   const n = Number(value);
   return Number.isFinite(n) ? Math.trunc(n) : null;
 }
 
-function clampRectToDisplay(rect, displayBounds, { bottomPadding = 0 } = {}) {
-  return {
-    ...rect,
-    x: clampNumber(rect.x, displayBounds.x, displayBounds.x + displayBounds.width - rect.width),
-    y: clampNumber(rect.y, displayBounds.y, displayBounds.y + displayBounds.height - rect.height - bottomPadding),
-  };
-}
-
-function expandedMascotBounds(mascotBounds) {
-  return {
-    x: mascotBounds.x - PET_LAYOUT_PADDING.left,
-    y: mascotBounds.y - PET_LAYOUT_PADDING.top,
-    width: mascotBounds.width + PET_LAYOUT_PADDING.left + PET_LAYOUT_PADDING.right,
-    height: mascotBounds.height + PET_LAYOUT_PADDING.top + PET_LAYOUT_PADDING.bottom,
-  };
-}
-
-function trayBoundsForPlacement(anchor, traySize, placement) {
-  const isTop = placement.startsWith('top');
-  return {
-    x: placement.endsWith('end') ? anchor.x + anchor.width - traySize.width : anchor.x,
-    y: isTop ? anchor.y - traySize.height - PET_TRAY_GAP : anchor.y + anchor.height + PET_TRAY_GAP,
-    width: traySize.width,
-    height: traySize.height,
-  };
-}
-
-function overflowScore(rect, displayBounds) {
-  const left = Math.max(0, displayBounds.x - rect.x);
-  const top = Math.max(0, displayBounds.y - rect.y);
-  const right = Math.max(0, rect.x + rect.width - displayBounds.x - displayBounds.width);
-  const bottom = Math.max(0, rect.y + rect.height - displayBounds.y - displayBounds.height);
-  return left + top + right + bottom + (left + right) * rect.height + (top + bottom) * rect.width;
-}
-
-function unionRects(rects) {
-  const x = Math.min(...rects.map((rect) => rect.x));
-  const y = Math.min(...rects.map((rect) => rect.y));
-  const right = Math.max(...rects.map((rect) => rect.x + rect.width));
-  const bottom = Math.max(...rects.map((rect) => rect.y + rect.height));
-  return { x, y, width: right - x, height: bottom - y };
-}
-
-function localRect(rect, viewportBounds) {
-  return {
-    left: Math.round(rect.x - viewportBounds.x),
-    top: Math.round(rect.y - viewportBounds.y),
-    width: Math.round(rect.width),
-    height: Math.round(rect.height),
-  };
-}
-
-function preferredPlacement(anchor, displayBounds) {
-  const vertical = rectCenterY(anchor) < rectCenterY(displayBounds) ? 'bottom' : 'top';
-  const horizontal = rectCenterX(anchor) < rectCenterX(displayBounds) ? 'start' : 'end';
-  return `${vertical}-${horizontal}`;
-}
-
-function choosePlacement({ anchor, displayBounds, previousPlacement, traySize }) {
-  const preferred = preferredPlacement(anchor, displayBounds);
-  const placements = ['top-start', 'top-end', 'bottom-start', 'bottom-end']
-    .map((placement) => ({
-      placement,
-      score:
-        overflowScore(trayBoundsForPlacement(anchor, traySize, placement), displayBounds) +
-        (placement === preferred ? 0 : 32) +
-        (placement === previousPlacement ? -PET_PLACEMENT_STICKINESS : 0),
-    }))
-    .sort((a, b) => a.score - b.score);
-  return placements[0] ? placements[0].placement : preferred;
-}
-
-function contentViewportBounds({ contentBounds, displayBounds, viewportSize }) {
-  return {
-    x: clampNumber(contentBounds.x + contentBounds.width - viewportSize.width, displayBounds.x, displayBounds.x + displayBounds.width - viewportSize.width),
-    y: clampNumber(contentBounds.y + contentBounds.height - viewportSize.height, displayBounds.y, displayBounds.y + displayBounds.height - viewportSize.height),
-    width: viewportSize.width,
-    height: viewportSize.height,
-  };
-}
-
-function computePetLayout({
-  anchor,
-  displayBounds,
-  mascotSize,
-  previousPlacement,
-  traySize,
-  viewportSize = PET_VIEWPORT_SIZE,
-}) {
-  const viewport = {
-    width: Math.min(viewportSize.width, displayBounds.width),
-    height: Math.min(viewportSize.height, displayBounds.height),
-  };
-  const safeAnchor = clampRectToDisplay({
-    ...anchor,
-    width: Math.min(mascotSize.width, displayBounds.width),
-    height: Math.min(mascotSize.height, displayBounds.height),
-  }, displayBounds, { bottomPadding: PET_LAYOUT_PADDING.bottom });
-  const maxTrayWidth = Math.max(0, viewport.width - PET_LAYOUT_PADDING.left - PET_LAYOUT_PADDING.right);
-  const maxTrayHeight = Math.max(0, viewport.height - safeAnchor.height - PET_LAYOUT_PADDING.bottom - PET_TRAY_GAP);
-  const clampedTraySize = traySize == null ? null : {
-    width: Math.min(traySize.width, maxTrayWidth),
-    height: Math.min(traySize.height, maxTrayHeight),
-  };
-  const placement = clampedTraySize == null
-    ? previousPlacement
-    : choosePlacement({
-      anchor: safeAnchor,
-      displayBounds,
-      previousPlacement,
-      traySize: clampedTraySize,
-    });
-  const trayBounds = clampedTraySize == null
-    ? null
-    : clampRectToDisplay(trayBoundsForPlacement(safeAnchor, clampedTraySize, placement), displayBounds);
-  const viewportBounds = contentViewportBounds({
-    contentBounds: unionRects([
-      expandedMascotBounds(safeAnchor),
-      ...(trayBounds == null ? [] : [trayBounds]),
-    ]),
-    displayBounds,
-    viewportSize: viewport,
-  });
-  return {
-    anchor: safeAnchor,
-    mascot: localRect(safeAnchor, viewportBounds),
-    placement,
-    tray: trayBounds == null ? null : localRect(trayBounds, viewportBounds),
-    viewport,
-    windowBounds: viewportBounds,
-  };
-}
-
 function defaultPetAnchor(display = screen.getPrimaryDisplay()) {
-  const bounds = display.bounds;
-  return {
-    x: bounds.x + bounds.width - petMascotSize.width - PET_DEFAULT_MARGIN,
-    y: bounds.y + bounds.height - petMascotSize.height - PET_DEFAULT_MARGIN,
-    width: petMascotSize.width,
-    height: petMascotSize.height,
-  };
+  return defaultPetAnchorForDisplay(display.bounds, petMascotSize);
 }
 
 function displayBoundsForPetAnchor(anchor = petAnchor) {
   const point = anchor ? pointForRectCenter(anchor) : screen.getCursorScreenPoint();
   return screen.getDisplayNearestPoint(point).bounds;
-}
-
-function expandedDisplayBounds(bounds, amount) {
-  return {
-    x: bounds.x - amount,
-    y: bounds.y - amount,
-    width: bounds.width + amount * 2,
-    height: bounds.height + amount * 2,
-  };
-}
-
-function pointInRect(point, rect) {
-  return point.x >= rect.x && point.x < rect.x + rect.width && point.y >= rect.y && point.y < rect.y + rect.height;
-}
-
-function sameBounds(a, b) {
-  return !!a && !!b && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
-}
-
-function displayBoundsForDragPoint(point, previousDisplayBounds) {
-  const nearest = screen.getDisplayNearestPoint(point).bounds;
-  if (sameBounds(nearest, previousDisplayBounds)) return nearest;
-  if (previousDisplayBounds && pointInRect(point, expandedDisplayBounds(previousDisplayBounds, PET_DISPLAY_SWITCH_SLOP))) {
-    return previousDisplayBounds;
-  }
-  return nearest;
 }
 
 function initialPetWindowBounds() {
@@ -495,10 +198,10 @@ function persistPetWindowBounds() {
   });
 }
 
-function cancelPetMomentum() {
-  if (petMomentumTimer != null) {
-    clearTimeout(petMomentumTimer);
-    petMomentumTimer = null;
+function cancelPetWindowMovePersist() {
+  if (petWindowMovePersistTimer != null) {
+    clearTimeout(petWindowMovePersistTimer);
+    petWindowMovePersistTimer = null;
   }
 }
 
@@ -517,12 +220,16 @@ function sendPetLayoutToRenderer() {
 function setPetWindowBounds(bounds) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (!bounds || !Number.isFinite(Number(bounds.x)) || !Number.isFinite(Number(bounds.y))) return;
+  applyingPetWindowBounds = true;
   mainWindow.setBounds({
     x: Math.round(Number(bounds.x)),
     y: Math.round(Number(bounds.y)),
     width: Math.round(Number(bounds.width) || PET_WINDOW_WIDTH),
     height: Math.round(Number(bounds.height) || PET_WINDOW_HEIGHT),
   }, false);
+  setImmediate(() => {
+    applyingPetWindowBounds = false;
+  });
 }
 
 function applyPetLayout(displayBounds = displayBoundsForPetAnchor(), { persist = false } = {}) {
@@ -542,6 +249,28 @@ function applyPetLayout(displayBounds = displayBoundsForPetAnchor(), { persist =
   if (persist) persistPetWindowBounds();
 }
 
+function syncPetAnchorFromWindowBounds() {
+  if (!mainWindow || mainWindow.isDestroyed() || !petLayout) return;
+  const bounds = mainWindow.getBounds();
+  petAnchor = {
+    ...(petAnchor || defaultPetAnchor()),
+    x: bounds.x + petLayout.mascot.left,
+    y: bounds.y + petLayout.mascot.top,
+    width: petMascotSize.width,
+    height: petMascotSize.height,
+  };
+}
+
+function scheduleMovedPetPersist() {
+  if (!mainWindow || mainWindow.isDestroyed() || applyingPetWindowBounds) return;
+  cancelPetWindowMovePersist();
+  petWindowMovePersistTimer = setTimeout(() => {
+    petWindowMovePersistTimer = null;
+    syncPetAnchorFromWindowBounds();
+    applyPetLayout(displayBoundsForPetAnchor(), { persist: true });
+  }, 140);
+}
+
 function refreshCursorAtCurrentMousePosition(win) {
   if (!win || win.isDestroyed()) return;
   const p = screen.getCursorScreenPoint();
@@ -556,12 +285,6 @@ function refreshCursorAtCurrentMousePosition(win) {
     movementX: 0,
     movementY: 0,
   });
-}
-
-function cursorOverPetScreenRects() {
-  if (!lastCatScreenRects.length) return false;
-  const p = screen.getCursorScreenPoint();
-  return lastCatScreenRects.some((b) => p.x >= b.left && p.x <= b.right && p.y >= b.top && p.y <= b.bottom);
 }
 
 function setPetWindowMouseable(enabled, { refreshCursor = false } = {}) {
@@ -585,9 +308,7 @@ function applyPetMouseInteractivityPolicy() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const shouldAcceptMouse =
     petKeyboardInteractive ||
-    petDragState != null ||
-    petPointerInteractive ||
-    (!petPointerInteractionSeen && cursorOverPetScreenRects());
+    petPointerInteractive;
   setPetWindowMouseable(shouldAcceptMouse, { refreshCursor: shouldAcceptMouse });
 }
 
@@ -595,7 +316,6 @@ function openPetOverlay({ persist = true } = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   petOverlayOpenRequested = true;
   petPointerInteractive = false;
-  petPointerInteractionSeen = false;
   restoreMainWindowAllWorkspaces();
   applyPetLayout(undefined, { persist: false });
   if (!mainWindow.isVisible()) mainWindow.showInactive();
@@ -624,7 +344,6 @@ function setPetKeyboardInteraction(enabled) {
 }
 
 function setPetPointerInteraction(enabled) {
-  petPointerInteractionSeen = true;
   petPointerInteractive = !!enabled;
   applyPetMouseInteractivityPolicy();
 }
@@ -632,8 +351,7 @@ function setPetPointerInteraction(enabled) {
 function closePetOverlay({ persist = true } = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   petOverlayOpenRequested = false;
-  cancelPetMomentum();
-  petDragState = null;
+  cancelPetWindowMovePersist();
   setPetPointerInteraction(false);
   setPetKeyboardInteraction(false);
   if (mainWindow.isVisible()) mainWindow.hide();
@@ -662,7 +380,7 @@ function createWindow() {
     frame: false,
     transparent: true,
     resizable: false,
-    movable: false,
+    movable: true,
     hasShadow: false,
     alwaysOnTop: true,
     skipTaskbar: true,
@@ -682,13 +400,12 @@ function createWindow() {
 
   mainWindow.on('show', () => rebuildAppMenus());
   mainWindow.on('hide', () => rebuildAppMenus());
+  mainWindow.on('move', scheduleMovedPetPersist);
   mainWindow.webContents.on('did-start-loading', () => {
     overlayReady = false;
   });
-  lastCatScreenRects = [];
   mainWindowMouseable = false;
   petPointerInteractive = false;
-  petPointerInteractionSeen = false;
 
   mainWindow.once('ready-to-show', () => {
     if (petOverlayOpenRequested) openPetOverlay({ persist: false });
@@ -1330,20 +1047,6 @@ ipcMain.on('cat-counts', (_event, payload) => {
   updateTrayTitle();
 });
 
-ipcMain.on('cat-screen-rects', (_event, rects) => {
-  if (!Array.isArray(rects)) {
-    lastCatScreenRects = [];
-    return;
-  }
-  lastCatScreenRects = rects.filter(
-    (r) =>
-      r &&
-      [r.left, r.top, r.right, r.bottom].every((n) => typeof n === 'number' && Number.isFinite(n)) &&
-      r.right - r.left > 0 &&
-      r.bottom - r.top > 0
-  );
-});
-
 ipcMain.on('pet-overlay-toggle', () => {
   togglePetOverlay();
 });
@@ -1384,96 +1087,6 @@ ipcMain.on('pet-element-size-changed', (_event, payload = {}) => {
   applyPetLayout(undefined, { persist: false });
 });
 
-ipcMain.on('pet-drag-start', (_event, payload = {}) => {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  cancelPetMomentum();
-  setPetWindowMouseable(true, { refreshCursor: true });
-  const pointerWindowX = Number(payload.pointerWindowX);
-  const pointerWindowY = Number(payload.pointerWindowY);
-  const currentLayout = petLayout || computePetLayout({
-    anchor: petAnchor || defaultPetAnchor(),
-    displayBounds: displayBoundsForPetAnchor(),
-    mascotSize: petMascotSize,
-    previousPlacement: petPlacement,
-    traySize: petTraySize,
-  });
-  petDragState = {
-    pointerAnchorX: (Number.isFinite(pointerWindowX) ? pointerWindowX : currentLayout.mascot.left) - currentLayout.mascot.left,
-    pointerAnchorY: (Number.isFinite(pointerWindowY) ? pointerWindowY : currentLayout.mascot.top) - currentLayout.mascot.top,
-    displayBounds: screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).bounds,
-  };
-});
-
-ipcMain.on('pet-drag-move', () => {
-  if (!mainWindow || mainWindow.isDestroyed() || !petDragState) return;
-  const p = screen.getCursorScreenPoint();
-  const displayBounds = displayBoundsForDragPoint(p, petDragState.displayBounds);
-  petDragState.displayBounds = displayBounds;
-  petAnchor = {
-    ...(petAnchor || defaultPetAnchor()),
-    x: p.x - petDragState.pointerAnchorX,
-    y: p.y - petDragState.pointerAnchorY,
-    width: petMascotSize.width,
-    height: petMascotSize.height,
-  };
-  applyPetLayout(displayBounds, { persist: false });
-});
-
-ipcMain.on('pet-drag-end', () => {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (petDragState) {
-    const p = screen.getCursorScreenPoint();
-    const displayBounds = displayBoundsForDragPoint(p, petDragState.displayBounds);
-    petAnchor = {
-      ...(petAnchor || defaultPetAnchor()),
-      x: p.x - petDragState.pointerAnchorX,
-      y: p.y - petDragState.pointerAnchorY,
-      width: petMascotSize.width,
-      height: petMascotSize.height,
-    };
-    applyPetLayout(displayBounds, { persist: true });
-  }
-  persistPetWindowBounds();
-  petDragState = null;
-  applyPetMouseInteractivityPolicy();
-});
-
-ipcMain.on('pet-drag-release', (_event, payload = {}) => {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  let vx = Number(payload.velocityX);
-  let vy = Number(payload.velocityY);
-  if (!Number.isFinite(vx) || !Number.isFinite(vy) || (vx === 0 && vy === 0)) return;
-  cancelPetMomentum();
-  let elapsed = 0;
-  const step = () => {
-    if (!mainWindow || mainWindow.isDestroyed()) {
-      cancelPetMomentum();
-      return;
-    }
-    petMomentumTimer = null;
-    elapsed += PET_MOMENTUM_FRAME_MS;
-    const requested = {
-      ...(petAnchor || defaultPetAnchor()),
-      x: (petAnchor ? petAnchor.x : defaultPetAnchor().x) + (vx * PET_MOMENTUM_FRAME_MS) / 1000,
-      y: (petAnchor ? petAnchor.y : defaultPetAnchor().y) + (vy * PET_MOMENTUM_FRAME_MS) / 1000,
-      width: petMascotSize.width,
-      height: petMascotSize.height,
-    };
-    petAnchor = requested;
-    applyPetLayout(screen.getDisplayNearestPoint(pointForRectCenter(requested)).bounds, { persist: false });
-    if (petAnchor.x !== Math.round(requested.x)) vx = 0;
-    if (petAnchor.y !== Math.round(requested.y)) vy = 0;
-    vx *= PET_MOMENTUM_DECAY;
-    vy *= PET_MOMENTUM_DECAY;
-    if (elapsed >= PET_MOMENTUM_MAX_MS || Math.hypot(vx, vy) < PET_MOMENTUM_STOP_VELOCITY) {
-      persistPetWindowBounds();
-      return;
-    }
-    petMomentumTimer = setTimeout(step, PET_MOMENTUM_FRAME_MS);
-  };
-  petMomentumTimer = setTimeout(step, PET_MOMENTUM_FRAME_MS);
-});
-
 ipcMain.on('open-cat-conversation', (_e, { catId } = {}) => {
   if (!catId) return;
   openConversationWindow(String(catId));
@@ -1501,102 +1114,34 @@ ipcMain.handle('agent-followup', (_e, { catId, text } = {}) => {
 
 ipcMain.handle('get-agent-conversation', (_e, catId) => getAgentConversation(catId));
 
-function offsetRect(rect, win) {
-  if (!rect || !win || win.isDestroyed()) return null;
-  const wb = win.getBounds();
+function evalWindowState(win) {
   return {
-    left: wb.x + rect.left,
-    top: wb.y + rect.top,
-    right: wb.x + rect.right,
-    bottom: wb.y + rect.bottom,
-    width: rect.width,
-    height: rect.height,
+    visible: !!(win && !win.isDestroyed() && win.isVisible()),
+    bounds: win && !win.isDestroyed() ? win.getBounds() : null,
+    osProcessId: win && !win.isDestroyed() ? win.webContents.getOSProcessId() : null,
   };
 }
 
-async function readDomEvalTargets(win, selectors) {
-  if (!win || win.isDestroyed()) return {};
-  try {
-    const raw = await win.webContents.executeJavaScript(
-      `(() => {
-        const selectors = ${JSON.stringify(selectors)};
-        const out = {};
-        const rectFor = (el) => {
-          if (!el) return null;
-          const r = el.getBoundingClientRect();
-          if (!r || r.width <= 0 || r.height <= 0) return null;
-          return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height };
-        };
-        for (const [key, selector] of Object.entries(selectors)) {
-          if (selector.endsWith('[]')) {
-            const base = selector.slice(0, -2);
-            out[key] = Array.from(document.querySelectorAll(base)).map(rectFor).filter(Boolean);
-          } else {
-            out[key] = rectFor(document.querySelector(selector));
-          }
-        }
-        out.activeElement = document.activeElement ? { id: document.activeElement.id || '', tag: document.activeElement.tagName || '' } : null;
-        const prompt = document.querySelector('#prompt');
-        out.promptValueLength = prompt && typeof prompt.value === 'string' ? prompt.value.length : 0;
-        out.promptValuePreview = prompt && typeof prompt.value === 'string' ? prompt.value.slice(0, 120) : '';
-        const visibleText = document.body && typeof document.body.innerText === 'string' ? document.body.innerText.replace(/\s+/g, ' ').trim() : '';
-        out.visibleTextLength = visibleText.length;
-        out.visibleTextPreview = visibleText.slice(0, 4000);
-        out.lineEntries = Array.from(document.querySelectorAll('.line')).slice(0, 20).map((line) => {
-          const label = line.querySelector('.line-label');
-          const text = line.querySelector('.line-text');
-          return {
-            label: label && typeof label.textContent === 'string' ? label.textContent : '',
-            text: text && typeof text.textContent === 'string' ? text.textContent : '',
-          };
-        });
-        return out;
-      })()`,
-      true
-    );
-    const out = {};
-    for (const [key, value] of Object.entries(raw || {})) {
-      if (key === 'lineEntries') {
-        out[key] = value;
-      } else if (Array.isArray(value)) {
-        out[key] = value.map((r) => offsetRect(r, win)).filter(Boolean);
-      } else if (value && typeof value === 'object' && 'left' in value) {
-        out[key] = offsetRect(value, win);
-      } else {
-        out[key] = value;
-      }
-    }
-    return out;
-  } catch (e) {
-    return { error: (e && e.message) || String(e) };
-  }
-}
-
 async function getEvalUiTargets() {
-  const modal = await readDomEvalTargets(modalWindow, {
-    promptRect: '#prompt',
-    micButtonRect: '#btn-dictate',
-    createButtonRect: '#btn-create-cat',
-  });
-  const conversation = await readDomEvalTargets(conversationWindow, {
-    logRect: '#log',
-    followupRect: '#followup-input',
-  });
+  const modal = evalUiSnapshots.get('modal') || {};
+  const conversation = evalUiSnapshots.get('conversation') || {};
+  const overlay = evalUiSnapshots.get('overlay') || {};
   return {
     ok: true,
     modal: {
       modalContextId: activeModalContextId,
-      visible: !!(modalWindow && !modalWindow.isDestroyed() && modalWindow.isVisible()),
-      bounds: modalWindow && !modalWindow.isDestroyed() ? modalWindow.getBounds() : null,
-      osProcessId: modalWindow && !modalWindow.isDestroyed() ? modalWindow.webContents.getOSProcessId() : null,
+      ...evalWindowState(modalWindow),
       ...modal,
     },
     conversation: {
-      visible: !!(conversationWindow && !conversationWindow.isDestroyed() && conversationWindow.isVisible()),
-      bounds: conversationWindow && !conversationWindow.isDestroyed() ? conversationWindow.getBounds() : null,
+      ...evalWindowState(conversationWindow),
       ...conversation,
     },
-    cats: lastCatScreenRects.slice(),
+    overlay: {
+      ...evalWindowState(mainWindow),
+      ...overlay,
+    },
+    cats: Array.isArray(overlay.cats) ? overlay.cats.slice() : [],
     configDir: getAgentUIConfigDir(),
     trace: {
       enabled: evalTraceEnabled,
@@ -1698,6 +1243,16 @@ ipcMain.on('eval-trace-event', (_event, payload = {}) => {
   recordTrace(type, rest);
 });
 
+ipcMain.on('eval-ui-state', (_event, payload = {}) => {
+  if (!evalTraceEnabled || !payload || typeof payload !== 'object') return;
+  const surface = String(payload.surface || '').trim();
+  if (!surface) return;
+  evalUiSnapshots.set(surface, {
+    ...(payload.payload && typeof payload.payload === 'object' ? payload.payload : {}),
+    reportedAt: Date.now(),
+  });
+});
+
 app.whenReady().then(() => {
   app.setName('agent-UI');
   void loadGetWindowsModule();
@@ -1770,23 +1325,13 @@ app.whenReady().then(() => {
 
   const reclampPetOverlay = () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
-    if (petDragState) {
-      const point = screen.getCursorScreenPoint();
-      petDragState.displayBounds = screen.getDisplayNearestPoint(point).bounds;
-      return;
-    }
-    cancelPetMomentum();
+    cancelPetWindowMovePersist();
     applyPetLayout(undefined, { persist: true });
   };
   screen.on('display-added', reclampPetOverlay);
   screen.on('display-removed', reclampPetOverlay);
   screen.on('display-metrics-changed', reclampPetOverlay);
   startActiveWindowTracker();
-
-  setInterval(() => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    applyPetMouseInteractivityPolicy();
-  }, 32);
 
   const quit = () => {
     app.quit();

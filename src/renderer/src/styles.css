@@ -56,9 +56,16 @@ body {
   display: none !important;
 }
 
+.no-drag {
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+
 button,
 input {
+  app-region: no-drag;
   font: inherit;
+  -webkit-app-region: no-drag;
 }
 
 button svg,
@@ -87,11 +94,8 @@ button svg,
   cursor: grab;
 }
 
-.pet-shell[data-dragging='true'] {
-  cursor: grabbing;
-}
-
 .pet-stage {
+  app-region: drag;
   position: absolute;
   display: flex;
   align-items: center;
@@ -100,11 +104,7 @@ button svg,
   cursor: inherit;
   touch-action: none;
   transition: transform 160ms ease-out;
-}
-
-.pet-shell[data-dragging='true'] .pet-stage {
-  transform: scale(0.95);
-  transition: none;
+  -webkit-app-region: drag;
 }
 
 .pet-mascot {
@@ -162,6 +162,7 @@ button svg,
 }
 
 .pet-badge {
+  app-region: no-drag;
   position: absolute;
   top: 0;
   right: 0;
@@ -180,6 +181,7 @@ button svg,
   font-weight: 600;
   line-height: 1;
   pointer-events: auto;
+  -webkit-app-region: no-drag;
 }
 
 .pet-badge svg {
@@ -188,6 +190,7 @@ button svg,
 }
 
 .pet-tray {
+  app-region: no-drag;
   position: absolute;
   z-index: 5;
   overflow: hidden;
@@ -195,6 +198,7 @@ button svg,
   pointer-events: auto;
   transform-origin: bottom right;
   transition: opacity 160ms ease, transform 160ms ease, visibility 160ms ease;
+  -webkit-app-region: no-drag;
 }
 
 .pet-tray[data-collapsed='true'] {

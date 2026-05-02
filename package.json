@@ -18,6 +18,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
+    "test": "node --test test/*.test.js",
     "prepare": "electron-vite build"
   },
   "keywords": [

@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('agentUI', {
   startVoiceDictation: () => ipcRenderer.invoke('start-voice-dictation'),
   traceEvalEvent: (payload) => ipcRenderer.send('eval-trace-event', payload),
+  reportEvalUiState: (surface, payload) => ipcRenderer.send('eval-ui-state', { surface, payload }),
   submitNewCat: (payload) => ipcRenderer.send('new-cat-submit', payload),
   cancelNewCat: () => ipcRenderer.send('new-cat-cancel'),
   overlayReady: () => ipcRenderer.send('overlay-ready'),
@@ -11,10 +12,6 @@ contextBridge.exposeInMainWorld('agentUI', {
   reportPetElementSize: (payload) => ipcRenderer.send('pet-element-size-changed', payload),
   setPetPointerInteraction: (active) => ipcRenderer.send('pet-pointer-interaction-changed', { active: !!active }),
   setPetKeyboardInteraction: (active) => ipcRenderer.send('pet-keyboard-interaction-changed', { active: !!active }),
-  startPetDrag: (payload) => ipcRenderer.send('pet-drag-start', payload),
-  movePetDrag: (payload) => ipcRenderer.send('pet-drag-move', payload),
-  endPetDrag: (payload) => ipcRenderer.send('pet-drag-end', payload),
-  releasePetDrag: (payload) => ipcRenderer.send('pet-drag-release', payload),
   onPetLayoutChanged: (callback) => {
     const listener = (_event, payload) => {
       try {
@@ -69,9 +66,6 @@ contextBridge.exposeInMainWorld('agentUI', {
     };
     ipcRenderer.on('agent-stream-bubble', listener);
     return () => ipcRenderer.removeListener('agent-stream-bubble', listener);
-  },
-  postCatScreenRects: (rects) => {
-    ipcRenderer.send('cat-screen-rects', rects);
   },
   openCatConversation: (catId) => {
     ipcRenderer.send('open-cat-conversation', { catId });

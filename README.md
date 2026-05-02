@@ -15,19 +15,44 @@ To use a different wrapper:
 export AGENT_UI_HERMES_BIN=/path/to/aura-hermes
 ```
 
-## Run
+## Clone And Install
 
 ```bash
+git clone https://github.com/saminkhan1/Cursor-Cats.git agent-UI
+cd agent-UI
 npm install
+```
+
+## Run From Source
+
+Use dev mode while working on the app:
+
+```bash
 npm run dev
 ```
 
-Build and preview:
+Build and preview the production bundle:
 
 ```bash
 npm run build
 npm start
 ```
+
+## Use As A Local CLI
+
+After installing dependencies, link the package once:
+
+```bash
+npm link
+```
+
+Then launch it from any terminal:
+
+```bash
+agent-ui
+```
+
+If the built app is missing, run `npm run build` from the repo root.
 
 ## Use
 

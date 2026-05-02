@@ -9,14 +9,14 @@ const RENDERER_DEV_PORT = 56247
 
 export default defineConfig({
   main: {
-    // Main entry is a single Vite output; `require('./agents')` in index.js
-    // needs this helper file on disk in `out/main/`.
+    // Main entry is a single Vite output; local `require('./...')` helpers
+    // need these files on disk in `out/main/`.
     plugins: [
       {
         name: 'copy-main-agents',
         writeBundle() {
           const outMain = join('out', 'main')
-          for (const f of ['agents.js', 'eval-trace.js']) {
+          for (const f of ['agents.js', 'eval-server.js', 'eval-trace.js', 'pet-layout.js']) {
             copyFileSync(join('src', 'main', f), join(outMain, f))
           }
         },

@@ -40,15 +40,51 @@ function traceEvalEvent(type, payload = {}) {
   window.agentUI.traceEvalEvent({ type, modalContextId: modalContextId || null, ...payload });
 }
 
+function rectFor(el) {
+  if (!(el instanceof HTMLElement)) return null;
+  const rect = el.getBoundingClientRect();
+  if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+  const wx = window.screenX ?? window.screenLeft ?? 0;
+  const wy = window.screenY ?? window.screenTop ?? 0;
+  return {
+    left: Math.round(wx + rect.left),
+    top: Math.round(wy + rect.top),
+    right: Math.round(wx + rect.right),
+    bottom: Math.round(wy + rect.bottom),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  };
+}
+
+function reportEvalUiState() {
+  if (!window.agentUI || typeof window.agentUI.reportEvalUiState !== 'function') return;
+  const visibleText = document.body && typeof document.body.innerText === 'string'
+    ? document.body.innerText.replace(/\s+/g, ' ').trim()
+    : '';
+  window.agentUI.reportEvalUiState('modal', {
+    modalContextId: modalContextId || null,
+    promptRect: rectFor(promptEl),
+    micButtonRect: rectFor(btnDictate),
+    createButtonRect: rectFor(btnCreateCat),
+    activeElement: document.activeElement ? { id: document.activeElement.id || '', tag: document.activeElement.tagName || '' } : null,
+    promptValueLength: promptEl && typeof promptEl.value === 'string' ? promptEl.value.length : 0,
+    promptValuePreview: promptEl && typeof promptEl.value === 'string' ? promptEl.value.slice(0, 120) : '',
+    visibleTextLength: visibleText.length,
+    visibleTextPreview: visibleText.slice(0, 4000),
+  });
+}
+
 function setError(msg) {
   if (!errorEl) return;
   if (!msg) {
     errorEl.hidden = true;
     errorEl.textContent = '';
+    reportEvalUiState();
     return;
   }
   errorEl.hidden = false;
   errorEl.textContent = msg;
+  reportEvalUiState();
 }
 
 function submit() {
@@ -119,6 +155,7 @@ function syncPromptHeight() {
   if (!promptEl) return;
   promptEl.style.height = '1px';
   promptEl.style.height = `${promptEl.scrollHeight}px`;
+  reportEvalUiState();
 }
 
 btnCreateCat?.addEventListener('click', submit);
@@ -157,9 +194,13 @@ document.addEventListener('keydown', (e) => {
 });
 
 window.addEventListener('resize', syncPromptHeight);
-window.addEventListener('load', syncPromptHeight);
+window.addEventListener('load', () => {
+  syncPromptHeight();
+  reportEvalUiState();
+});
 
 void (async () => {
   promptEl?.focus();
   syncPromptHeight();
+  reportEvalUiState();
 })();
