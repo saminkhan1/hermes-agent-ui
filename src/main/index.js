@@ -1499,6 +1499,11 @@ app.whenReady().then(() => {
       streamBubbleThrottle.set(id, slot);
     }
     slot.text = msg;
+    if (!slot.sentFirst) {
+      slot.sentFirst = true;
+      mainWindow.webContents.send('agent-stream-bubble', { catId: id, text: msg });
+      return;
+    }
     if (slot.timer) return;
     slot.timer = setTimeout(() => {
       slot.timer = null;
