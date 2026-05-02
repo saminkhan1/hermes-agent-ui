@@ -911,7 +911,7 @@ const scenarios = [
       await openScenarioApp('Preview', pdf);
       return { pdf };
     },
-    prompt: 'Read the visible PDF report. Draft an unsent Mail message to agent-ui-e2e@example.invalid summarizing risks, decisions, and next actions. Also create Reminders follow-ups and a Notes backup. Name all outputs agent-UI E2E.',
+    prompt: 'Look at the Chrome page and the PDF about quarterly risk. Draft an unsent Mail message to agent-ui-e2e@example.invalid summarizing the risks, decisions, and next actions. Also create Reminders follow-ups and a Notes backup.',
     oracle: async (dir, result) => (
       await labelCountIncreased(result, ['mail', 'reminderItems', 'notesItems'])
       || existsAnyAfter(dir, ['mail-draft', 'reminders', 'notes-backup'], result.submitAt || result.startedAt || 0)
@@ -930,7 +930,7 @@ const scenarios = [
       await openScenarioApp('Preview', pdf);
       return { lesson, pdf };
     },
-    prompt: 'Turn the visible Chrome lesson and PDF into an Anki study deck in the isolated Anki profile, with at least 12 basic/cloze cards. Then write a study plan in the disposable Obsidian vault. Name all outputs agent-UI E2E.',
+    prompt: 'Look at the Chrome lesson page and the PDF notes about spaced repetition and study design. Turn them into an Anki study deck with at least 12 basic and cloze cards, then write a study plan in Obsidian.',
     oracle: async (dir, result) => ankiCollectionTouched(dir) || existsAnyAfter(dir, ['anki', 'deck', 'Study Plan'], result.submitAt || result.startedAt || 0),
   },
   {
@@ -941,13 +941,13 @@ const scenarios = [
       await openApp('GarageBand').catch(() => {});
       await createNotesFolder(context.name('GarageBand Brief'), 'GarageBand brief', 'Make a 16 bar lo-fi beat at 92 BPM with drums, bass, warm chords, and a small lead hook.', { focus: true });
     },
-    prompt: 'Use the visible Notes creative brief to make a short GarageBand beat sketch. Save a disposable GarageBand project or MIDI/audio sketch in the selected folder, and write production notes in Obsidian. Include drums, bass, chords, melody, BPM, and sections.',
+    prompt: 'Look at the Notes brief about a lo-fi beat. Make a short GarageBand sketch, save the project or a MIDI/audio file in the selected folder, and write production notes in Obsidian. Include drums, bass, chords, melody, BPM, and sections.',
     oracle: async (dir, result) => garageBandArtifactExists(dir) || existsAnyAfter(dir, ['Production Notes'], result.submitAt || result.startedAt || 0),
   },
   {
     name: 'mail-to-reminders-and-obsidian-response',
     mode: 'voice',
-    transcript: 'Turn the visible Mail request into a reply draft, create a timeline in Reminders, and update the Obsidian project note. Use only agent-UI E2E disposable data.',
+    transcript: 'Look at the Mail request and turn it into a reply draft, a timeline in Reminders, and an updated Obsidian project note.',
     setup: async (context) => {
       await createReminderList(context.name('Client Timeline'));
       await setupObsidianVault(context, 'Client Timeline', '# Client Timeline\n');
@@ -967,7 +967,7 @@ const scenarios = [
       writeFile(source, '<h1>Research Source</h1><p>Reliable automation needs traceability, cleanup, and deterministic fixtures.</p>');
       await openScenarioApp('Google Chrome', source);
     },
-    prompt: 'Clean up the visible research notes, create an Anki study deck from them, and draft an unsent Mail review request. Keep all artifacts disposable and named agent-UI E2E.',
+    prompt: 'Look at the research notes, clean them up, create an Anki study deck, and draft an unsent Mail review request.',
     oracle: async (dir, result) => (
       ankiCollectionTouched(dir)
       || await labelCountIncreased(result, ['mail', 'notesItems'])
@@ -977,7 +977,7 @@ const scenarios = [
   {
     name: 'obsidian-release-to-garageband-sting-and-reminders',
     mode: 'voice',
-    transcript: 'Use the visible Obsidian release checklist to create a short GarageBand launch sting and schedule release reminders. Save all files in the selected folder.',
+    transcript: 'Look at the Obsidian release checklist, create a short GarageBand launch sting, and schedule release reminders.',
     setup: async (context) => {
       await createReminderList(context.name('Release'));
       await openApp('GarageBand').catch(() => {});
