@@ -314,18 +314,27 @@ body {
 }
 
 .pet-mascot[data-state='running'] .pet-mascot-sprite {
+  background-position: 0 -128px;
   animation: petPulse 1.2s ease-in-out infinite;
 }
 
 .pet-mascot[data-state='review'] .pet-mascot-sprite {
+  background-position: 0 -192px;
   animation: petFloat 2.4s ease-in-out infinite;
 }
 
+.pet-mascot[data-state='waiting'] .pet-mascot-sprite {
+  background-position: 0 -320px;
+  animation: petPulse 1.8s ease-in-out infinite;
+}
+
 .pet-mascot[data-state='failed'] .pet-mascot-sprite {
+  background-position: 0 -384px;
   animation: petShake 0.55s ease-in-out infinite;
 }
 
 .pet-mascot[data-state='idle'] .pet-mascot-sprite {
+  background-position: 0 0;
   animation: petFloat 3s ease-in-out infinite;
 }
 
