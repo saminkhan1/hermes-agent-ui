@@ -118,7 +118,7 @@ Gateway mode behavior:
 ## Clone And Install
 
 ```bash
-git clone https://github.com/saminkhan1/Cursor-Cats.git agent-UI
+git clone https://github.com/saminkhan1/agent-UI.git agent-UI
 cd agent-UI
 npm install
 ```
