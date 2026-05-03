@@ -3,6 +3,8 @@ name: mac bootstrap release gate
 on:
   workflow_dispatch:
   push:
+    branches:
+      - deployment
     tags:
       - 'v*'
 

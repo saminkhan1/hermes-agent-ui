@@ -30,6 +30,7 @@ test('default mac distribution uses the bootstrap no-paid-plan path', () => {
   assert.match(bootstrapConfig.artifactName, /bootstrap/);
 
   assert.match(workflow, /macos-15/);
+  assert.match(workflow, /branches:\n\s+- deployment/);
   assert.match(workflow, /RELEASE_VERIFY_MODE: bootstrap/);
   assert.match(workflow, /npm run dist:mac/);
   assert.doesNotMatch(workflow, /MACOS_CSC_LINK|APPLE_API_KEY|notarize|staple/);
