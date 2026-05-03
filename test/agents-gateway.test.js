@@ -22,7 +22,6 @@ function setupGatewayEnv(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-agents-'));
   process.env.AGENT_UI_CONFIG_DIR = dir;
   process.env.LOCAL_DESKTOP_GATEWAY_KEY = 'secret';
-  process.env.AGENT_UI_HERMES_TRANSPORT = 'gateway';
   t.after(() => {
     agents.cancelAllAgents();
     agents._test.resetGatewayClientForTests();
@@ -114,6 +113,35 @@ test('gateway follow-up is sent while session is running', async (t) => {
   assert.equal(posts[1].text, 'plain follow up');
 });
 
+test('gateway first-message slash commands pass through without context wrapper', async (t) => {
+  setupGatewayEnv(t);
+  const posts = [];
+  global.fetch = async (url, opts = {}) => {
+    const textUrl = String(url);
+    if (textUrl.endsWith('/events')) return emptySseResponse();
+    if (textUrl.endsWith('/messages')) {
+      posts.push(JSON.parse(opts.body));
+      return new Response(JSON.stringify({ ok: true, accepted: true }), {
+        status: 202,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ ok: true, latest_seq: 0 }), { status: 200 });
+  };
+
+  agents.startAgentForCat({
+    catId: 'cat-command',
+    prompt: '/background Check all services',
+    runtime: 'local',
+    pointerContext: { capturedAt: '2026-05-03T00:00:00.000Z', contextQuality: 'minimal' },
+  }, { getMainWindow: () => null, log: { warn() {} } });
+
+  await waitFor(() => posts.length === 1);
+  assert.equal(posts[0].conversation_id, 'cat-command');
+  assert.equal(posts[0].text, '/background Check all services');
+  assert.equal(posts[0].metadata.include_context, false);
+});
+
 test('multiple gateway pets use separate conversations', async (t) => {
   setupGatewayEnv(t);
   const posts = [];
@@ -172,6 +200,99 @@ test('gateway SSE events update local conversation state', async (t) => {
   assert.equal(conversation.items.at(-1).text, 'Final answer');
 });
 
+test('gateway attachment events hydrate as structured safe descriptors', (t) => {
+  setupGatewayEnv(t);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-attachment-'));
+  const imagePath = path.join(dir, 'result.png');
+  fs.writeFileSync(imagePath, 'png-ish', 'utf8');
+
+  agents._test.handleGatewayEvent({
+    seq: 11,
+    type: 'attachment.created',
+    conversation_id: 'cat-attachment',
+    message_id: 'att-1',
+    attachment_type: 'image',
+    ref: imagePath,
+    caption: 'Generated chart',
+    reply_to: 'm1',
+    metadata: { tool: 'image' },
+    created_at: 1760000000,
+  });
+
+  const conversation = agents.getAgentConversation('cat-attachment');
+  assert.equal(conversation.found, true);
+  assert.equal(conversation.transport, 'gateway');
+  assert.equal(conversation.items.length, 1);
+  assert.equal(conversation.items[0].kind, 'attachment');
+  assert.equal(conversation.items[0].attachmentType, 'image');
+  assert.equal(conversation.items[0].caption, 'Generated chart');
+  assert.equal(conversation.items[0].ref, imagePath);
+  assert.equal(conversation.items[0].replyTo, 'm1');
+  assert.equal(conversation.items[0].metadata.tool, 'image');
+  assert.equal(conversation.items[0].messageId, 'att-1');
+  assert.equal(conversation.items[0].seq, 11);
+  assert.equal(conversation.items[0].attachment.status, 'ready');
+  assert.equal(conversation.items[0].attachment.source, 'local');
+  assert.match(conversation.items[0].attachment.url, /^agent-ui-attachment:\/\/file\//);
+
+  agents._test.handleGatewayEvent({
+    seq: 12,
+    type: 'message.deleted',
+    conversation_id: 'cat-attachment',
+    message_id: 'att-1',
+  });
+
+  assert.equal(agents.getAgentConversation('cat-attachment').items.length, 0);
+});
+
+test('gateway replayed message events hydrate unknown conversations in memory', (t) => {
+  setupGatewayEnv(t);
+  agents._test.handleGatewayEvent({
+    seq: 20,
+    type: 'message.created',
+    conversation_id: 'cat-replay',
+    message_id: 'm-replay',
+    text: 'Replayed answer',
+    metadata: { replay: true },
+  });
+
+  const conversation = agents.getAgentConversation('cat-replay');
+  assert.equal(conversation.found, true);
+  assert.equal(conversation.items[0].kind, 'assistant');
+  assert.equal(conversation.items[0].text, 'Replayed answer');
+  assert.equal(conversation.items[0].messageId, 'm-replay');
+  assert.equal(conversation.items[0].metadata.replay, true);
+});
+
+test('gateway typing events expose typing state without forcing terminal status', (t) => {
+  setupGatewayEnv(t);
+  agents._test.handleGatewayEvent({
+    seq: 30,
+    type: 'typing.started',
+    conversation_id: 'cat-typing',
+    message_id: 'inbound-1',
+    metadata: { phase: 'thinking' },
+  });
+
+  let conversation = agents.getAgentConversation('cat-typing');
+  assert.equal(conversation.found, true);
+  assert.equal(conversation.runStatus, 'running');
+  assert.equal(conversation.typing.active, true);
+  assert.equal(conversation.typing.messageId, 'inbound-1');
+  assert.equal(conversation.typing.metadata.phase, 'thinking');
+
+  agents._test.handleGatewayEvent({
+    seq: 31,
+    type: 'typing.stopped',
+    conversation_id: 'cat-typing',
+    transient: true,
+  });
+
+  conversation = agents.getAgentConversation('cat-typing');
+  assert.equal(conversation.runStatus, 'running');
+  assert.equal(conversation.typing.active, false);
+});
+
 test('conversation window does not disable web security', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'index.js'), 'utf8');
   assert.equal(source.includes('webSecurity: false'), false);
@@ -180,4 +301,6 @@ test('conversation window does not disable web security', () => {
 test('electron build copies gateway client into main output', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'electron.vite.config.mjs'), 'utf8');
   assert.match(source, /hermes-gateway-client\.js/);
+  assert.match(source, /hermes-attachments\.js/);
+  assert.match(source, /window-lifecycle\.js/);
 });

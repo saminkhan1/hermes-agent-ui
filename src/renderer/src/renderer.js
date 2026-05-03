@@ -95,6 +95,8 @@ const sessions = new Map();
 const expandedRows = new Set();
 const expandableRows = new Map();
 const avatarTimers = new WeakMap();
+const renderedRowKeys = new Map();
+const rowMeasurementKeys = new Map();
 
 let layout = DEFAULT_LAYOUT;
 let trayOpen = true;
@@ -110,6 +112,7 @@ let petDrag = null;
 let petDragAvatarState = null;
 let petOptions = DEFAULT_PET_OPTIONS.slice();
 let selectedPetId = DEFAULT_PET_ID;
+let renderFrame = null;
 
 function traceEvalEvent(type, payload = {}) {
   if (!window.agentUI || typeof window.agentUI.traceEvalEvent !== 'function') return;
@@ -166,39 +169,52 @@ function linearFrames(rowIndex, count, frameDurationMs, finalFrameDurationMs) {
 function normalizePetOption(option) {
   if (!option || typeof option !== 'object') return null;
   const id = String(option.id || '').trim();
-  const spriteUrl = String(option.spriteUrl || option.spritesheetUrl || option.spritesheetDataUrl || '').trim();
-  if (!id || !spriteUrl) return null;
+  if (!id) return null;
   return {
     assetRef: String(option.assetRef || 'codex'),
     description: String(option.description || '').trim(),
     displayName: String(option.displayName || option.label || id).trim() || id,
     id,
-    spriteUrl,
+    spriteUrl: String(option.spriteUrl || option.spritesheetUrl || option.spritesheetDataUrl || '').trim(),
   };
 }
 
-function setPetOptions(options, selectedId = selectedPetId) {
+function setPetOptions(options, selectedId = selectedPetId, selectedSpriteUrl = '') {
   const nextOptions = Array.isArray(options) ? options.map(normalizePetOption).filter(Boolean) : [];
   if (nextOptions.length > 0) petOptions = nextOptions;
   const candidate = String(selectedId || '').trim();
   selectedPetId = petOptionById(candidate).id;
+  setActivePetSprite(selectedPetId, selectedSpriteUrl);
 }
 
-function preloadPetAssets(options = petOptions) {
-  return Promise.all(options.map((pet) => new Promise((resolve) => {
+function setActivePetSprite(id, spriteUrl) {
+  const url = String(spriteUrl || '').trim();
+  if (!url) return;
+  const pet = petOptions.find((option) => option.id === id);
+  if (pet) pet.spriteUrl = url;
+}
+
+function preloadActivePetAsset() {
+  const pet = currentPetOption();
+  if (!pet.spriteUrl) return Promise.resolve(false);
+  return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => resolve(true);
     img.onerror = () => resolve(false);
     img.src = pet.spriteUrl;
-  })));
+  });
 }
 
 async function loadPetOptionsFromBridge() {
   if (!window.agentUI || typeof window.agentUI.getPetCharacters !== 'function') return;
   try {
     const payload = await window.agentUI.getPetCharacters();
-    setPetOptions(payload && payload.options, payload && payload.id);
-    await preloadPetAssets();
+    setPetOptions(
+      payload && payload.options,
+      payload && payload.id,
+      (payload && payload.selectedSpriteUrl) || (payload && payload.selected && payload.selected.spriteUrl)
+    );
+    await preloadActivePetAsset();
   } catch {
     // Keep rendering with the last known pet options.
   }
@@ -248,7 +264,7 @@ function animateAvatar(el, state) {
   el.dataset.avatarAssetRef = pet.assetRef || 'codex';
   el.dataset.avatarState = nextState;
   el.dataset.avatarPetId = pet.id;
-  el.style.backgroundImage = `url("${pet.spriteUrl}")`;
+  if (pet.spriteUrl) el.style.backgroundImage = `url("${pet.spriteUrl}")`;
 
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const animation = framesForState(nextState, prefersReducedMotion);
@@ -762,6 +778,27 @@ function makeRow(notification, index) {
   return row;
 }
 
+function rowRenderKey(notification) {
+  const id = String(notification.id);
+  return JSON.stringify({
+    id,
+    level: notification.level,
+    title: notification.title,
+    body: rowBody(notification),
+    canDismiss: !!notification.canDismiss,
+    canExpand: notificationCanExpand(notification),
+    expanded: expandedRows.has(id),
+  });
+}
+
+function rowMeasureKey(notification) {
+  return JSON.stringify({
+    id: String(notification.id),
+    body: rowBody(notification),
+    trayWidth: layout.tray ? layout.tray.width : 0,
+  });
+}
+
 function trayRows() {
   if (!trayList) return [];
   return Array.from(trayList.children).filter((child) => child instanceof HTMLElement);
@@ -774,8 +811,18 @@ function pruneExpandableRows(list) {
   }
 }
 
-function scheduleRowOverflowMeasurement(list) {
+function scheduleRowOverflowMeasurement(list, { force = false } = {}) {
   if (!trayList || rowMeasureFrame != null) return;
+  let changed = force;
+  for (const notification of list) {
+    const id = String(notification.id);
+    const key = rowMeasureKey(notification);
+    if (rowMeasurementKeys.get(id) !== key) {
+      rowMeasurementKeys.set(id, key);
+      changed = true;
+    }
+  }
+  if (!changed) return;
   rowMeasureFrame = window.requestAnimationFrame(() => {
     rowMeasureFrame = null;
     pruneExpandableRows(list);
@@ -890,11 +937,39 @@ function renderTray(list) {
     tray.style.visibility = 'hidden';
   }
 
-  trayList.replaceChildren();
+  const existingRows = new Map();
+  for (const row of trayRows()) {
+    const id = String(row.dataset.notificationId || '');
+    if (id) existingRows.set(id, row);
+  }
+  const fragment = document.createDocumentFragment();
+  let rowsChanged = existingRows.size !== list.length;
   trayList.dataset.avatarOverlaySize = 'notification-tray-list';
   trayList.setAttribute('aria-label', 'Activity notifications');
-  list.forEach((notification, index) => trayList.appendChild(makeRow(notification, index)));
-  scheduleRowOverflowMeasurement(list);
+  list.forEach((notification, index) => {
+    const id = String(notification.id);
+    const key = rowRenderKey(notification);
+    const existing = existingRows.get(id);
+    if (existing && renderedRowKeys.get(id) === key) {
+      fragment.appendChild(existing);
+      return;
+    }
+    rowsChanged = true;
+    const row = makeRow(notification, index);
+    renderedRowKeys.set(id, key);
+    fragment.appendChild(row);
+  });
+  const ids = new Set(list.map((notification) => String(notification.id)));
+  for (const id of renderedRowKeys.keys()) {
+    if (!ids.has(id)) renderedRowKeys.delete(id);
+  }
+  for (const id of rowMeasurementKeys.keys()) {
+    if (!ids.has(id)) rowMeasurementKeys.delete(id);
+  }
+  if (rowsChanged || trayList.children.length !== list.length) {
+    trayList.replaceChildren(fragment);
+  }
+  scheduleRowOverflowMeasurement(list, { force: rowsChanged });
   updateScrollState();
 
   const existingControls = tray.querySelectorAll('.pet-scroll-control');
@@ -939,7 +1014,8 @@ function reportElementSize(list) {
   });
 }
 
-function renderAll() {
+function renderAllNow() {
+  renderFrame = null;
   const list = notifications();
   if (root) root.hidden = false;
   if (shell) shell.hidden = false;
@@ -950,6 +1026,11 @@ function renderAll() {
   schedulePetPointerInteraction();
   reportEvalUiState(list);
   traceEvalEvent('pet_rendered', { notificationCount: list.length });
+}
+
+function renderAll() {
+  if (renderFrame != null) return;
+  renderFrame = window.requestAnimationFrame(renderAllNow);
 }
 
 function upsertSession(payload = {}) {
@@ -981,6 +1062,7 @@ function applyStreamBubble(ev = {}) {
   if (!session) return;
   const text = String(ev.text || '').trim();
   if (!text) return;
+  if (session.streamBubble === text && normalizeStatus(session.status) === 'running') return;
   session.streamBubble = text;
   if (normalizeStatus(session.status) === 'idle') session.status = 'running';
   session.updatedAt = Date.now();
@@ -1055,8 +1137,17 @@ async function boot() {
 
   if (typeof window.agentUI.onPetCharacterChanged === 'function') {
     window.agentUI.onPetCharacterChanged((payload) => {
-      if (payload && Array.isArray(payload.options)) setPetOptions(payload.options, payload.id);
-      setSelectedPet(payload && payload.id);
+      if (payload && Array.isArray(payload.options)) {
+        setPetOptions(
+          payload.options,
+          payload.id,
+          payload.selectedSpriteUrl || (payload.selected && payload.selected.spriteUrl)
+        );
+        void preloadActivePetAsset();
+        renderAll();
+      } else {
+        setSelectedPet(payload && payload.id);
+      }
     });
   }
 
@@ -1163,6 +1254,7 @@ async function boot() {
   });
   window.addEventListener('beforeunload', () => {
     if (petDrag) finishPetDrag(petDrag.pointerId, { shouldOpenMainWindow: false });
+    if (renderFrame != null) window.cancelAnimationFrame(renderFrame);
     clearPetPointerInteraction({ force: true });
     if (pointerInteractionObserver) pointerInteractionObserver.disconnect();
   });

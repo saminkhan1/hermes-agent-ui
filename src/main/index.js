@@ -8,10 +8,13 @@ const {
   ipcMain,
   screen,
   shell,
+  protocol,
+  net,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { pathToFileURL } = require('url');
 const { randomUUID, createHash } = require('crypto');
 const { execFile } = require('child_process');
 const {
@@ -29,7 +32,6 @@ const {
   setOnConversationPushed,
   dismissAgent,
   sendFollowup,
-  sendGatewayCommand,
   getAgentArtifacts,
 } = require('./agents');
 const { startAgentUIEvalServer } = require('./eval-server');
@@ -42,6 +44,10 @@ const {
   defaultPetAnchor: defaultPetAnchorForDisplay,
   pointForRectCenter,
 } = require('./pet-layout');
+const petAssets = require('./pet-assets');
+const hermesAttachments = require('./hermes-attachments');
+const { captureAndTranscribeVoice } = require('./hermes-runtime');
+const { clearCurrentWindow, focusWindow, isCurrentWindow, isLiveWindow, runForCurrentWindow } = require('./window-lifecycle');
 
 const IS_MAC = process.platform === 'darwin';
 const MAC_FULL_SCREEN_WORKSPACE_OPTIONS = {
@@ -50,18 +56,43 @@ const MAC_FULL_SCREEN_WORKSPACE_OPTIONS = {
 };
 const PET_OVERLAY_WINDOW_LEVEL = 'floating';
 const FOCUSED_OVERLAY_WINDOW_LEVEL = 'modal-panel';
-const CUSTOM_PET_PREFIX = 'custom:';
-const PET_MANIFEST_FILE = 'pet.json';
-const LEGACY_AVATAR_MANIFEST_FILE = 'avatar.json';
-const PET_DEFAULT_SPRITESHEET = 'spritesheet.webp';
-const PET_SPRITESHEET_WIDTH = 1536;
-const PET_SPRITESHEET_HEIGHT = 1872;
+const CUSTOM_PET_PREFIX = petAssets.CUSTOM_PET_PREFIX;
 const PET_DRAG_DISPLAY_HYSTERESIS = 24;
 const PET_MOMENTUM_INTERVAL_MS = 16;
 const PET_MOMENTUM_DECAY = 0.88;
 const PET_MOMENTUM_STOP_SPEED = 65;
 const PET_MOMENTUM_MAX_DURATION_MS = 900;
 const FALLBACK_PET_CHARACTER_ID = `${CUSTOM_PET_PREFIX}goblin`;
+const PET_ASSET_SCHEME = petAssets.PET_ASSET_SCHEME;
+const ATTACHMENT_SCHEME = hermesAttachments.ATTACHMENT_SCHEME;
+const MAX_CAT_ID_LENGTH = 128;
+const MAX_PROMPT_CHARS = 200000;
+const MAX_EVAL_PAYLOAD_BYTES = 65536;
+const MAX_DRAG_COORDINATE = 10000;
+const MAX_REPORTED_ELEMENT_SIZE = 2000;
+const ACTIVE_WINDOW_CACHE_INTERVAL_MS = 3000;
+const ACTIVE_WINDOW_CACHE_DURATION_MS = 15000;
+const INPUT_MODE_TEXT = 'text';
+const INPUT_MODE_VOICE = 'voice';
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: PET_ASSET_SCHEME,
+    privileges: {
+      secure: true,
+      standard: true,
+      supportFetchAPI: true,
+    },
+  },
+  {
+    scheme: ATTACHMENT_SCHEME,
+    privileges: {
+      secure: true,
+      standard: true,
+      supportFetchAPI: true,
+    },
+  },
+]);
 
 let getWindowsModulePromise = null;
 
@@ -100,183 +131,58 @@ function primaryCodexPetsDir() {
   return dir;
 }
 
-function bufferToDataUrl(buffer, mimeType) {
-  return `data:${mimeType};base64,${buffer.toString('base64')}`;
-}
-
-function readJsonFile(file) {
-  const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-  return data && typeof data === 'object' ? data : {};
-}
-
-function safeManifestString(value) {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function pathInsideDirectory(file, dir) {
-  const relative = path.relative(dir, file);
-  return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
-function resolvePetSpritesheetPath(packageDir, manifest) {
-  const rel = safeManifestString(manifest.spritesheetPath) || PET_DEFAULT_SPRITESHEET;
-  const resolved = path.resolve(packageDir, rel);
-  return pathInsideDirectory(resolved, packageDir) ? resolved : null;
-}
-
-function readPngDimensions(buffer) {
-  if (
-    buffer.length < 24 ||
-    buffer[0] !== 0x89 ||
-    buffer.toString('ascii', 1, 4) !== 'PNG' ||
-    buffer.toString('ascii', 12, 16) !== 'IHDR'
-  ) return null;
-  return {
-    width: buffer.readUInt32BE(16),
-    height: buffer.readUInt32BE(20),
-  };
-}
-
-function readUint24LE(buffer, offset) {
-  return buffer[offset] | (buffer[offset + 1] << 8) | (buffer[offset + 2] << 16);
-}
-
-function readWebpDimensions(buffer) {
-  if (
-    buffer.length < 16 ||
-    buffer.toString('ascii', 0, 4) !== 'RIFF' ||
-    buffer.toString('ascii', 8, 12) !== 'WEBP'
-  ) return null;
-  let offset = 12;
-  while (offset + 8 <= buffer.length) {
-    const type = buffer.toString('ascii', offset, offset + 4);
-    const size = buffer.readUInt32LE(offset + 4);
-    const data = offset + 8;
-    if (data + size > buffer.length) return null;
-    if (type === 'VP8X' && size >= 10) {
-      return {
-        width: readUint24LE(buffer, data + 4) + 1,
-        height: readUint24LE(buffer, data + 7) + 1,
-      };
-    }
-    if (type === 'VP8L' && size >= 5 && buffer[data] === 0x2f) {
-      const b1 = buffer[data + 1];
-      const b2 = buffer[data + 2];
-      const b3 = buffer[data + 3];
-      const b4 = buffer[data + 4];
-      return {
-        width: 1 + b1 + ((b2 & 0x3f) << 8),
-        height: 1 + ((b2 & 0xc0) >> 6) + (b3 << 2) + ((b4 & 0x0f) << 10),
-      };
-    }
-    if (
-      type === 'VP8 ' &&
-      size >= 10 &&
-      buffer[data + 3] === 0x9d &&
-      buffer[data + 4] === 0x01 &&
-      buffer[data + 5] === 0x2a
-    ) {
-      return {
-        width: buffer.readUInt16LE(data + 6) & 0x3fff,
-        height: buffer.readUInt16LE(data + 8) & 0x3fff,
-      };
-    }
-    offset = data + size + (size % 2);
-  }
-  return null;
-}
-
-function spritesheetMimeType(file) {
-  const ext = path.extname(file).toLowerCase();
-  if (ext === '.png') return 'image/png';
-  if (ext === '.webp') return 'image/webp';
-  return '';
-}
-
-function readSpritesheetDimensions(file, buffer) {
-  const mimeType = spritesheetMimeType(file);
-  if (mimeType === 'image/png') return readPngDimensions(buffer);
-  if (mimeType === 'image/webp') return readWebpDimensions(buffer);
-  return null;
-}
-
-function loadPetPackage(packageDir, manifestFile) {
-  const manifestPath = path.join(packageDir, manifestFile);
-  if (!fs.existsSync(manifestPath)) return null;
-  const manifest = readJsonFile(manifestPath);
-  const spritesheetPath = resolvePetSpritesheetPath(packageDir, manifest);
-  if (!spritesheetPath || !fs.existsSync(spritesheetPath)) return null;
-  const buffer = fs.readFileSync(spritesheetPath);
-  const dimensions = readSpritesheetDimensions(spritesheetPath, buffer);
-  if (
-    !dimensions ||
-    dimensions.width !== PET_SPRITESHEET_WIDTH ||
-    dimensions.height !== PET_SPRITESHEET_HEIGHT
-  ) return null;
-  const directoryId = path.basename(packageDir);
-  const id = `${CUSTOM_PET_PREFIX}${directoryId}`;
-  const displayName = safeManifestString(manifest.displayName) || safeManifestString(manifest.id) || directoryId;
-  const description = manifest.description == null ? '' : safeManifestString(manifest.description);
-  return {
-    assetRef: 'codex',
-    description,
-    displayName,
-    id,
-    label: displayName,
-    sourceDirectory: packageDir,
-    spriteUrl: bufferToDataUrl(buffer, spritesheetMimeType(spritesheetPath)),
-  };
-}
-
-function scanPetPackageRoot(rootDir, manifestFile, { create = false } = {}) {
-  try {
-    if (create) ensureDir(rootDir);
-    if (!fs.existsSync(rootDir)) return [];
-    return fs.readdirSync(rootDir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => {
-        try {
-          return loadPetPackage(path.join(rootDir, entry.name), manifestFile);
-        } catch {
-          return null;
-        }
-      })
-      .filter(Boolean);
-  } catch (e) {
-    console.warn('[agent-ui] pet package scan failed', rootDir, e && e.message ? e.message : e);
-    return [];
-  }
-}
-
 function loadPetCharacterOptions() {
-  const codexHome = getCodexHomeDir();
-  const packageRoot = getPackageRoot();
-  const byId = new Map();
-  const roots = [
-    { dir: path.join(packageRoot, 'assets', 'pets'), manifestFile: PET_MANIFEST_FILE, create: false },
-    { dir: path.join(codexHome, 'avatars'), manifestFile: LEGACY_AVATAR_MANIFEST_FILE, create: false },
-    { dir: path.join(codexHome, 'pets'), manifestFile: PET_MANIFEST_FILE, create: true },
-  ];
-  for (const root of roots) {
-    for (const pet of scanPetPackageRoot(root.dir, root.manifestFile, { create: root.create })) {
-      byId.set(pet.id, pet);
-    }
-  }
-  return [...byId.values()].sort((a, b) => a.displayName.localeCompare(b.displayName));
+  return petAssets.loadPetCharacterOptions({
+    codexHome: getCodexHomeDir(),
+    packageRoot: getPackageRoot(),
+  });
 }
 
 function petCharactersPayload() {
-  return {
-    id: selectedPetCharacterId,
-    options: petCharacterOptions.map((pet) => ({
-      assetRef: pet.assetRef,
-      description: pet.description,
-      displayName: pet.displayName,
-      id: pet.id,
-      label: pet.label,
-      spriteUrl: pet.spriteUrl,
-    })),
-  };
+  return petAssets.petCharactersPayload({
+    options: petCharacterOptions,
+    selectedId: selectedPetCharacterId,
+  });
+}
+
+function findPetCharacter(id) {
+  const value = String(id || '').trim();
+  return petCharacterOptions.find((pet) => pet.id === value) || null;
+}
+
+function installPetAssetProtocol() {
+  protocol.handle(PET_ASSET_SCHEME, (request) => {
+    try {
+      const url = new URL(request.url);
+      if (url.hostname !== 'sprite') return new Response('not found', { status: 404 });
+      const id = decodeURIComponent(url.pathname.replace(/^\/+/, ''));
+      const pet = findPetCharacter(id);
+      if (!pet || !pet.spritesheetPath) return new Response('not found', { status: 404 });
+      return net.fetch(pathToFileURL(pet.spritesheetPath).toString());
+    } catch {
+      return new Response('not found', { status: 404 });
+    }
+  });
+}
+
+function installAttachmentProtocol() {
+  protocol.handle(ATTACHMENT_SCHEME, async (request) => {
+    try {
+      const resolved = hermesAttachments.resolveAttachmentRequest(request.url);
+      if (!resolved || !resolved.file) return new Response('not found', { status: 404 });
+      const upstream = await net.fetch(pathToFileURL(resolved.file).toString());
+      const headers = new Headers(upstream.headers);
+      if (resolved.mimeType) headers.set('content-type', resolved.mimeType);
+      headers.set('cache-control', 'no-store');
+      return new Response(upstream.body, {
+        status: upstream.status,
+        statusText: upstream.statusText,
+        headers,
+      });
+    } catch {
+      return new Response('not found', { status: 404 });
+    }
+  });
 }
 
 function execFileText(command, args, opts = {}) {
@@ -296,6 +202,7 @@ function execFileText(command, args, opts = {}) {
 let mainWindow;
 let modalWindow;
 let conversationWindow;
+let activeConversationCatId = null;
 /** Square conversation panel — content dimensions (px). */
 const CONVERSATION_WINDOW_SIDE = 800;
 /** When true, the overlay is accepting mouse (cursor over a cat). */
@@ -310,7 +217,8 @@ let activeModalContextId = null;
 const modalContexts = new Map();
 const evalUiSnapshots = new Map();
 let lastExternalWindowSnapshot = null;
-let activeWindowPollTimer = null;
+let activeWindowCacheTimer = null;
+let activeWindowCacheStopTimer = null;
 let petOverlayOpenRequested = false;
 let petWindowMovePersistTimer = null;
 let applyingPetWindowBounds = false;
@@ -324,9 +232,49 @@ let petTraySize = null;
 let petPlacement = 'top-end';
 let petCharacterOptions = [];
 let selectedPetCharacterId = FALLBACK_PET_CHARACTER_ID;
+let selectedInputMode = INPUT_MODE_TEXT;
 
 function getPetOverlayStatePath() {
   return path.join(getAgentUIConfigDir(), 'pet-overlay.json');
+}
+
+function getAppSettingsPath() {
+  return path.join(getAgentUIConfigDir(), 'settings.json');
+}
+
+function readAppSettings() {
+  try {
+    const file = getAppSettingsPath();
+    if (!fs.existsSync(file)) return {};
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return data && typeof data === 'object' ? data : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeAppSettings(patch = {}) {
+  try {
+    const file = getAppSettingsPath();
+    const current = readAppSettings();
+    fs.writeFileSync(file, JSON.stringify({ ...current, ...patch }, null, 2), 'utf8');
+  } catch {
+    // ignore persistence errors
+  }
+}
+
+function normalizeInputMode(value) {
+  return String(value || '').trim() === INPUT_MODE_VOICE ? INPUT_MODE_VOICE : INPUT_MODE_TEXT;
+}
+
+function loadInputModeSetting() {
+  selectedInputMode = normalizeInputMode(readAppSettings().inputMode);
+}
+
+function setSelectedInputMode(mode, { persist = true } = {}) {
+  selectedInputMode = normalizeInputMode(mode);
+  if (persist) writeAppSettings({ inputMode: selectedInputMode });
+  rebuildAppMenus();
 }
 
 function readPetOverlayState() {
@@ -384,6 +332,54 @@ function setSelectedPetCharacter(id, { persist = true } = {}) {
 function safeInteger(value) {
   const n = Number(value);
   return Number.isFinite(n) ? Math.trunc(n) : null;
+}
+
+function boundedText(value, maxChars = MAX_PROMPT_CHARS) {
+  const text = value == null ? '' : String(value);
+  return text.length > maxChars ? text.slice(0, maxChars) : text;
+}
+
+function normalizeCatId(value) {
+  const id = String(value || '').trim();
+  if (!id || id.length > MAX_CAT_ID_LENGTH) return '';
+  return /^[A-Za-z0-9_.:-]+$/.test(id) ? id : '';
+}
+
+function finiteNumberInRange(value, maxAbs = MAX_DRAG_COORDINATE) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  if (Math.abs(n) > maxAbs) return null;
+  return n;
+}
+
+function normalizedDragStartPayload(payload = {}) {
+  if (!payload || typeof payload !== 'object') return null;
+  const pointerWindowX = finiteNumberInRange(payload.pointerWindowX);
+  const pointerWindowY = finiteNumberInRange(payload.pointerWindowY);
+  if (pointerWindowX == null || pointerWindowY == null) return null;
+  return { pointerWindowX, pointerWindowY };
+}
+
+function normalizedDragReleasePayload(payload = {}) {
+  if (!payload || typeof payload !== 'object') return null;
+  const velocityX = finiteNumberInRange(payload.velocityX, 5000);
+  const velocityY = finiteNumberInRange(payload.velocityY, 5000);
+  if (velocityX == null || velocityY == null) return null;
+  return { velocityX, velocityY };
+}
+
+function normalizedSize(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0 || n > MAX_REPORTED_ELEMENT_SIZE) return null;
+  return Math.ceil(n);
+}
+
+function evalPayloadWithinLimit(payload) {
+  try {
+    return Buffer.byteLength(JSON.stringify(payload || {}), 'utf8') <= MAX_EVAL_PAYLOAD_BYTES;
+  } catch {
+    return false;
+  }
 }
 
 function macPanelWindowOptions() {
@@ -867,21 +863,34 @@ function closeWindowOnEscape(win, closeFn) {
   });
 }
 
-function openNewCatModal(modalContextId) {
+function focusExistingSessionWindow(reason) {
+  if (isLiveWindow(modalWindow)) {
+    focusWindow(modalWindow);
+    recordTrace('session_window_open_blocked', { reason, surface: 'modal' });
+    return true;
+  }
+  if (isLiveWindow(conversationWindow)) {
+    focusWindow(conversationWindow);
+    recordTrace('session_window_open_blocked', {
+      catId: activeConversationCatId || null,
+      reason,
+      surface: 'conversation',
+    });
+    return true;
+  }
+  return false;
+}
+
+function openNewCatModal(modalContextId, inputMode = selectedInputMode) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  recordTrace('modal_show_requested', { modalContextId: modalContextId || null });
+  const normalizedInputMode = normalizeInputMode(inputMode);
+  recordTrace('modal_show_requested', { modalContextId: modalContextId || null, inputMode: normalizedInputMode });
 
-  if (conversationWindow && !conversationWindow.isDestroyed()) {
-    conversationWindow.close();
-  }
-
-  if (modalWindow && !modalWindow.isDestroyed()) {
-    modalWindow.close();
-  }
+  if (focusExistingSessionWindow('new_session_requested')) return null;
 
   const modalBounds = centeredWindowBounds(680, 240, launchDisplayForModal(modalContextId));
 
-  modalWindow = new BrowserWindow({
+  const win = new BrowserWindow({
     width: modalBounds.width,
     height: modalBounds.height,
     x: modalBounds.x,
@@ -905,75 +914,66 @@ function openNewCatModal(modalContextId) {
       nodeIntegration: false,
     },
   });
-  applyOverlayWindowPolicy(modalWindow, { level: FOCUSED_OVERLAY_WINDOW_LEVEL });
+  modalWindow = win;
+  applyOverlayWindowPolicy(win, { level: FOCUSED_OVERLAY_WINDOW_LEVEL });
 
-  closeWindowOnEscape(modalWindow, () => {
-    if (modalWindow && !modalWindow.isDestroyed()) {
-      modalWindow.close();
+  closeWindowOnEscape(win, () => {
+    if (isCurrentWindow(win, () => modalWindow)) {
+      win.close();
     }
   });
 
-  modalWindow.webContents.once('did-finish-load', () => {
-    recordTrace('modal_dom_loaded', { modalContextId: modalContextId || null });
+  win.webContents.once('did-finish-load', () => {
+    if (!isCurrentWindow(win, () => modalWindow)) return;
+    recordTrace('modal_dom_loaded', { modalContextId: modalContextId || null, inputMode: normalizedInputMode });
   });
 
-  modalWindow.once('ready-to-show', () => {
-    modalWindow.show();
-    modalWindow.moveTop();
-    modalWindow.focus();
-    modalWindow.webContents.focus();
-    recordTrace('modal_shown_and_focused', {
-      modalContextId: modalContextId || null,
-      bounds: modalWindow && !modalWindow.isDestroyed() ? modalWindow.getBounds() : null,
+  win.once('ready-to-show', () => {
+    runForCurrentWindow(win, () => modalWindow, (currentWindow) => {
+      currentWindow.show();
+      currentWindow.moveTop();
+      currentWindow.focus();
+      currentWindow.webContents.focus();
+      recordTrace('modal_shown_and_focused', {
+        modalContextId: modalContextId || null,
+        bounds: currentWindow.getBounds(),
+      });
     });
   });
 
-  modalWindow.on('closed', () => {
-    modalWindow = null;
+  win.on('closed', () => {
     modalContexts.delete(modalContextId);
     if (activeModalContextId === modalContextId) {
       activeModalContextId = null;
     }
+    clearCurrentWindow(win, () => modalWindow, (next) => {
+      modalWindow = next;
+    });
   });
 
   if (process.env.ELECTRON_RENDERER_URL) {
     const base = process.env.ELECTRON_RENDERER_URL.replace(/\/?$/, '');
-    modalWindow.loadURL(`${base}/modal.html?${new URLSearchParams({ modalContextId: modalContextId || '' }).toString()}`);
+    win.loadURL(`${base}/modal.html?${new URLSearchParams({
+      modalContextId: modalContextId || '',
+      inputMode: normalizedInputMode,
+    }).toString()}`);
   } else {
-    modalWindow.loadFile(path.join(__dirname, '../renderer/modal.html'), {
-      query: { modalContextId: modalContextId || '' },
+    win.loadFile(path.join(__dirname, '../renderer/modal.html'), {
+      query: { modalContextId: modalContextId || '', inputMode: normalizedInputMode },
     });
   }
+  return win;
+}
+
+function showConversationWindow(win) {
+  focusWindow(win);
 }
 
 function openConversationWindow(catId) {
   if (!mainWindow || mainWindow.isDestroyed() || !catId) return;
 
-  if (modalWindow && !modalWindow.isDestroyed()) {
-    modalWindow.close();
-  }
-
   const q = { catId: String(catId) };
-  if (conversationWindow && !conversationWindow.isDestroyed()) {
-    if (process.env.ELECTRON_RENDERER_URL) {
-      const base = process.env.ELECTRON_RENDERER_URL.replace(/\/?$/, '');
-      void conversationWindow.loadURL(
-        `${base}/conversation.html?${new URLSearchParams(q).toString()}`
-      );
-    } else {
-      void conversationWindow.loadFile(path.join(__dirname, '../renderer/conversation.html'), {
-        query: q,
-      });
-    }
-    conversationWindow.setContentSize(CONVERSATION_WINDOW_SIDE, CONVERSATION_WINDOW_SIDE);
-    conversationWindow.setBounds(
-      centeredWindowBounds(CONVERSATION_WINDOW_SIDE, CONVERSATION_WINDOW_SIDE, displayForPetOrCursor()),
-      false
-    );
-    applyOverlayWindowPolicy(conversationWindow, { level: FOCUSED_OVERLAY_WINDOW_LEVEL });
-    conversationWindow.show();
-    conversationWindow.focus();
-    conversationWindow.webContents.focus();
+  if (focusExistingSessionWindow('conversation_requested')) {
     return;
   }
 
@@ -983,7 +983,7 @@ function openConversationWindow(catId) {
     displayForPetOrCursor()
   );
 
-  conversationWindow = new BrowserWindow({
+  const win = new BrowserWindow({
     width: conversationBounds.width,
     height: conversationBounds.height,
     x: conversationBounds.x,
@@ -1006,32 +1006,34 @@ function openConversationWindow(catId) {
       nodeIntegration: false,
     },
   });
-  applyOverlayWindowPolicy(conversationWindow, { level: FOCUSED_OVERLAY_WINDOW_LEVEL });
+  conversationWindow = win;
+  activeConversationCatId = q.catId;
+  applyOverlayWindowPolicy(win, { level: FOCUSED_OVERLAY_WINDOW_LEVEL });
 
-  closeWindowOnEscape(conversationWindow, () => {
-    if (conversationWindow && !conversationWindow.isDestroyed()) {
-      conversationWindow.close();
+  closeWindowOnEscape(win, () => {
+    if (isCurrentWindow(win, () => conversationWindow)) {
+      win.close();
     }
   });
 
-  conversationWindow.once('ready-to-show', () => {
-    conversationWindow.show();
-    conversationWindow.moveTop();
-    conversationWindow.focus();
-    conversationWindow.webContents.focus();
+  win.once('ready-to-show', () => {
+    runForCurrentWindow(win, () => conversationWindow, showConversationWindow);
   });
 
-  conversationWindow.on('closed', () => {
-    conversationWindow = null;
+  win.on('closed', () => {
+    const cleared = clearCurrentWindow(win, () => conversationWindow, (next) => {
+      conversationWindow = next;
+    });
+    if (cleared) activeConversationCatId = null;
   });
 
   if (process.env.ELECTRON_RENDERER_URL) {
     const base = process.env.ELECTRON_RENDERER_URL.replace(/\/?$/, '');
-    void conversationWindow.loadURL(
+    void win.loadURL(
       `${base}/conversation.html?${new URLSearchParams(q).toString()}`
     );
   } else {
-    void conversationWindow.loadFile(path.join(__dirname, '../renderer/conversation.html'), {
+    void win.loadFile(path.join(__dirname, '../renderer/conversation.html'), {
       query: q,
     });
   }
@@ -1078,17 +1080,49 @@ function openPetFolderMenuItem() {
   };
 }
 
+function inputModeMenuItem() {
+  return {
+    label: 'Input Mode',
+    submenu: [
+      {
+        label: 'Text',
+        type: 'radio',
+        checked: selectedInputMode === INPUT_MODE_TEXT,
+        click: () => setSelectedInputMode(INPUT_MODE_TEXT),
+      },
+      {
+        label: 'Voice',
+        type: 'radio',
+        checked: selectedInputMode === INPUT_MODE_VOICE,
+        click: () => setSelectedInputMode(INPUT_MODE_VOICE),
+      },
+    ],
+  };
+}
+
+function settingsMenuItem() {
+  return {
+    label: 'Settings',
+    submenu: [
+      inputModeMenuItem(),
+    ],
+  };
+}
+
 function buildAppMenu() {
   const catsVisible = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible());
   const accelerator = process.platform === 'darwin' ? 'Command+Shift+C' : 'Control+Shift+C';
+  const newSessionLabel = selectedInputMode === INPUT_MODE_VOICE ? 'Start Voice Session' : 'New Text Session';
   return Menu.buildFromTemplate([
     {
-      label: 'New Session',
+      label: newSessionLabel,
       accelerator,
       click: () => {
         void handleNewCatShortcut('menu');
       },
     },
+    { type: 'separator' },
+    settingsMenuItem(),
     { type: 'separator' },
     {
       label: catsVisible ? 'Close Pet' : 'Wake Pet',
@@ -1112,17 +1146,20 @@ function buildAppMenu() {
 function buildApplicationMenu() {
   const catsVisible = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible());
   const accelerator = process.platform === 'darwin' ? 'Command+Shift+C' : 'Control+Shift+C';
+  const newSessionLabel = selectedInputMode === INPUT_MODE_VOICE ? 'Start Voice Session' : 'New Text Session';
   return Menu.buildFromTemplate([
     {
       label: 'agent-UI',
       submenu: [
         {
-          label: 'New Session',
+          label: newSessionLabel,
           accelerator,
           click: () => {
             void handleNewCatShortcut('menu');
           },
         },
+        { type: 'separator' },
+        settingsMenuItem(),
         { type: 'separator' },
         {
           label: catsVisible ? 'Close Pet' : 'Wake Pet',
@@ -1339,15 +1376,34 @@ async function readActiveWindowSnapshot() {
   return snapshot;
 }
 
-function startActiveWindowTracker() {
-  if (activeWindowPollTimer != null) return;
+function stopActiveWindowTracker() {
+  if (activeWindowCacheTimer != null) {
+    clearInterval(activeWindowCacheTimer);
+    activeWindowCacheTimer = null;
+  }
+  if (activeWindowCacheStopTimer != null) {
+    clearTimeout(activeWindowCacheStopTimer);
+    activeWindowCacheStopTimer = null;
+  }
+}
+
+function startActiveWindowTracker({
+  durationMs = ACTIVE_WINDOW_CACHE_DURATION_MS,
+  intervalMs = ACTIVE_WINDOW_CACHE_INTERVAL_MS,
+} = {}) {
   const tick = () => {
     void readActiveWindowSnapshot().catch(() => {
       // Context capture is best-effort and must not affect the launcher.
     });
   };
   tick();
-  activeWindowPollTimer = setInterval(tick, 750);
+  if (activeWindowCacheTimer == null) {
+    activeWindowCacheTimer = setInterval(tick, intervalMs);
+  }
+  if (activeWindowCacheStopTimer != null) {
+    clearTimeout(activeWindowCacheStopTimer);
+  }
+  activeWindowCacheStopTimer = setTimeout(stopActiveWindowTracker, Math.max(1000, Number(durationMs) || ACTIVE_WINDOW_CACHE_DURATION_MS));
 }
 
 async function activeWindowWithTimeout(timeoutMs = 1200) {
@@ -1395,9 +1451,12 @@ async function captureLaunchContext(source, modalContextId) {
 }
 
 async function handleNewCatShortcut(source = 'shortcut') {
+  if (focusExistingSessionWindow('new_session_shortcut')) return;
   const modalContextId = randomUUID();
   activeModalContextId = modalContextId;
+  const inputMode = selectedInputMode;
   const launchContext = await captureLaunchContext(source, modalContextId);
+  startActiveWindowTracker();
   modalContexts.set(modalContextId, launchContext);
   recordTrace('shortcut_received', {
     source,
@@ -1405,8 +1464,20 @@ async function handleNewCatShortcut(source = 'shortcut') {
     contextQuality: launchContext.contextQuality,
     missingContext: launchContext.missingContext,
     screenContextHint: launchContext.screenContextHint || null,
+    inputMode,
   });
-  openNewCatModal(modalContextId);
+  const newModalWindow = openNewCatModal(modalContextId, inputMode);
+  if (!newModalWindow) {
+    modalContexts.delete(modalContextId);
+    if (activeModalContextId === modalContextId) activeModalContextId = null;
+    return;
+  }
+  if (inputMode === INPUT_MODE_VOICE && newModalWindow && !newModalWindow.isDestroyed()) {
+    newModalWindow.webContents.once('did-finish-load', () => {
+      if (newModalWindow.isDestroyed()) return;
+      void startVoiceSessionFromShortcut(newModalWindow, modalContextId);
+    });
+  }
 }
 
 ipcMain.on('overlay-ready', () => {
@@ -1417,7 +1488,13 @@ ipcMain.on('overlay-ready', () => {
 
 function getAgentUIConfigDir() {
   const configured = String(process.env.AGENT_UI_CONFIG_DIR || '').trim();
-  const dir = configured ? path.resolve(configured) : path.join(os.homedir(), '.agent-ui');
+  let userHome = '';
+  try {
+    userHome = os.userInfo().homedir;
+  } catch {
+    userHome = '';
+  }
+  const dir = configured ? path.resolve(configured) : path.join(userHome || os.homedir(), '.agent-ui');
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -1425,14 +1502,17 @@ function getAgentUIConfigDir() {
 }
 
 async function startCatRunFromPayload(payload = {}, opts = {}) {
-  const catId = opts.catId ? String(opts.catId) : randomUUID();
+  const catId = opts.catId ? normalizeCatId(opts.catId) : randomUUID();
   const modalContextId =
-    (opts.modalContextId && String(opts.modalContextId)) ||
-    (payload && payload.modalContextId ? String(payload.modalContextId) : '') ||
+    normalizeCatId(opts.modalContextId) ||
+    normalizeCatId(payload && payload.modalContextId) ||
     activeModalContextId ||
     '';
   const runtime = 'local';
-  const prompt = payload && payload.prompt != null ? String(payload.prompt) : '';
+  const prompt = boundedText(payload && payload.prompt);
+  if (!catId) {
+    return { ok: false, error: 'Invalid session id.' };
+  }
   const launchContext = modalContextId ? (modalContexts.get(modalContextId) || null) : null;
   if (!prompt.trim()) {
     const error = 'Missing task prompt.';
@@ -1490,7 +1570,10 @@ ipcMain.on('cat-counts', (_event, payload) => {
   const active = Number(payload.active);
   const inReview = Number(payload.inReview);
   if (!Number.isFinite(active) || !Number.isFinite(inReview)) return;
-  catCounts = { active: Math.max(0, Math.floor(active)), inReview: Math.max(0, Math.floor(inReview)) };
+  catCounts = {
+    active: Math.min(1000, Math.max(0, Math.floor(active))),
+    inReview: Math.min(1000, Math.max(0, Math.floor(inReview))),
+  };
   rebuildAppMenus();
   updateTrayTitle();
 });
@@ -1515,6 +1598,8 @@ ipcMain.on('pet-context-menu', () => {
       click: () => closePetOverlay({ persist: true }),
     },
     { type: 'separator' },
+    settingsMenuItem(),
+    { type: 'separator' },
     petCharacterMenuItem(),
     refreshPetMenuItem(),
     openPetFolderMenuItem(),
@@ -1526,7 +1611,8 @@ ipcMain.on('pet-pointer-interaction-changed', (_event, payload = {}) => {
 });
 
 ipcMain.on('pet-drag-start', (_event, payload = {}) => {
-  startPetDrag(payload);
+  const safePayload = normalizedDragStartPayload(payload);
+  if (safePayload) startPetDrag(safePayload);
 });
 
 ipcMain.on('pet-drag-move', () => {
@@ -1538,7 +1624,8 @@ ipcMain.on('pet-drag-end', () => {
 });
 
 ipcMain.on('pet-drag-release', (_event, payload = {}) => {
-  throwPetWithVelocity(payload.velocityX, payload.velocityY);
+  const safePayload = normalizedDragReleasePayload(payload);
+  if (safePayload) throwPetWithVelocity(safePayload.velocityX, safePayload.velocityY);
 });
 
 ipcMain.on('pet-element-size-changed', (_event, payload = {}) => {
@@ -1546,23 +1633,24 @@ ipcMain.on('pet-element-size-changed', (_event, payload = {}) => {
   cancelPetMomentum();
   const mascot = payload.mascot && typeof payload.mascot === 'object' ? payload.mascot : null;
   const trayPayload = payload.tray && typeof payload.tray === 'object' ? payload.tray : null;
-  const mascotWidth = mascot ? Number(mascot.width) : NaN;
-  const mascotHeight = mascot ? Number(mascot.height) : NaN;
-  if (Number.isFinite(mascotWidth) && Number.isFinite(mascotHeight) && mascotWidth > 0 && mascotHeight > 0) {
-    petMascotSize = { width: Math.ceil(mascotWidth), height: Math.ceil(mascotHeight) };
+  const mascotWidth = mascot ? normalizedSize(mascot.width) : null;
+  const mascotHeight = mascot ? normalizedSize(mascot.height) : null;
+  if (mascotWidth != null && mascotHeight != null) {
+    petMascotSize = { width: mascotWidth, height: mascotHeight };
     petAnchor = { ...(petAnchor || defaultPetAnchor()), width: petMascotSize.width, height: petMascotSize.height };
   }
-  const trayWidth = trayPayload ? Number(trayPayload.width) : NaN;
-  const trayHeight = trayPayload ? Number(trayPayload.height) : NaN;
-  petTraySize = Number.isFinite(trayWidth) && Number.isFinite(trayHeight) && trayWidth > 0 && trayHeight > 0
-    ? { width: Math.ceil(trayWidth), height: Math.ceil(trayHeight) }
+  const trayWidth = trayPayload ? normalizedSize(trayPayload.width) : null;
+  const trayHeight = trayPayload ? normalizedSize(trayPayload.height) : null;
+  petTraySize = trayWidth != null && trayHeight != null
+    ? { width: trayWidth, height: trayHeight }
     : null;
   applyPetLayout(undefined, { persist: false });
 });
 
 ipcMain.on('open-cat-conversation', (_e, { catId } = {}) => {
-  if (!catId) return;
-  openConversationWindow(String(catId));
+  const id = normalizeCatId(catId);
+  if (!id) return;
+  openConversationWindow(id);
 });
 
 ipcMain.on('close-conversation-window', () => {
@@ -1572,8 +1660,9 @@ ipcMain.on('close-conversation-window', () => {
 });
 
 ipcMain.on('dismiss-cat', async (_e, { catId } = {}) => {
-  if (!catId) return;
-  const result = await dismissAgent(String(catId), { getMainWindow: () => mainWindow, log: console });
+  const id = normalizeCatId(catId);
+  if (!id) return;
+  const result = await dismissAgent(id, { getMainWindow: () => mainWindow, log: console });
   if (!result || result.ok === false) return;
   if (conversationWindow && !conversationWindow.isDestroyed()) {
     conversationWindow.close();
@@ -1581,23 +1670,36 @@ ipcMain.on('dismiss-cat', async (_e, { catId } = {}) => {
 });
 
 ipcMain.handle('agent-followup', (_e, { catId, text } = {}) => {
-  if (!catId) return { ok: false, error: 'Missing session id.' };
-  return sendFollowup(String(catId), text, { getMainWindow: () => mainWindow, log: console });
+  const id = normalizeCatId(catId);
+  if (!id) return { ok: false, error: 'Missing session id.' };
+  return sendFollowup(id, boundedText(text), { getMainWindow: () => mainWindow, log: console });
 });
 
-ipcMain.handle('agent-cancel', (_e, { catId } = {}) => {
-  if (!catId) return { ok: false, error: 'Missing session id.' };
-  return sendGatewayCommand(String(catId), '/stop', { getMainWindow: () => mainWindow, log: console });
+ipcMain.handle('open-agent-attachment', async (_e, { url } = {}) => {
+  const value = boundedText(url, 4096).trim();
+  if (!value) return { ok: false, error: 'Missing attachment URL.' };
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol === `${ATTACHMENT_SCHEME}:`) {
+      const resolved = hermesAttachments.resolveAttachmentRequest(value);
+      if (!resolved || !resolved.file) return { ok: false, error: 'Attachment is unavailable.' };
+      const error = await shell.openPath(resolved.file);
+      return error ? { ok: false, error } : { ok: true };
+    }
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      await shell.openExternal(parsed.toString());
+      return { ok: true };
+    }
+  } catch {
+    return { ok: false, error: 'Attachment is unavailable.' };
+  }
+  return { ok: false, error: 'Unsupported attachment URL.' };
 });
 
-ipcMain.handle('agent-background', (_e, { catId, text } = {}) => {
-  if (!catId) return { ok: false, error: 'Missing session id.' };
-  const prompt = String(text || '').trim();
-  if (!prompt) return { ok: false, error: 'Missing background prompt.' };
-  return sendGatewayCommand(String(catId), `/background ${prompt}`, { getMainWindow: () => mainWindow, log: console });
+ipcMain.handle('get-agent-conversation', (_e, catId) => {
+  const id = normalizeCatId(catId);
+  return id ? getAgentConversation(id) : { found: false, items: [] };
 });
-
-ipcMain.handle('get-agent-conversation', (_e, catId) => getAgentConversation(catId));
 
 function evalWindowState(win) {
   return {
@@ -1690,20 +1792,7 @@ function textTraceMeta(value, maxPreview = 80) {
   };
 }
 
-async function runSpeechHelper() {
-  const helper = path.join(getPackageRoot(), 'src', 'main', 'AgentUISpeech.swift');
-  if (!fs.existsSync(helper)) {
-    return { ok: false, error: 'speech helper is missing' };
-  }
-  try {
-    const transcript = (await execFileText('/usr/bin/swift', [helper], { timeout: 30000 })).trim();
-    return transcript ? { ok: true, transcript } : { ok: false, error: 'empty transcript' };
-  } catch (e) {
-    return { ok: false, error: (e && (e.stderr || e.message)) || String(e) };
-  }
-}
-
-ipcMain.handle('start-voice-dictation', async () => {
+async function captureVoicePromptTranscript(onStatus) {
   recordTrace('voice_started', {});
   if (process.env.AGENT_UI_EVAL === '1') {
     const transcript = await readDeterministicTranscript();
@@ -1715,14 +1804,60 @@ ipcMain.handle('start-voice-dictation', async () => {
     recordTrace('voice_final_transcript', { deterministic: true, ...textTraceMeta(transcript) });
     return { ok: true, deterministic: true, transcript };
   }
-  const result = await runSpeechHelper();
+  const result = await captureAndTranscribeVoice({ onStatus });
   if (result.ok) {
     recordTrace('voice_final_transcript', { deterministic: false, ...textTraceMeta(result.transcript) });
   }
   return result;
-});
+}
+
+function sendVoiceInputStatus(win, modalContextId, payload = {}) {
+  const state = String(payload.state || '').trim();
+  if (!state || !isCurrentWindow(win, () => modalWindow)) return;
+  win.webContents.send('voice-input-status', {
+    modalContextId: modalContextId || null,
+    state,
+    transcript: boundedText(payload.transcript || ''),
+    error: boundedText(payload.error || ''),
+    provider: payload.provider ? String(payload.provider).slice(0, 128) : '',
+  });
+}
+
+async function startVoiceSessionFromShortcut(win, modalContextId) {
+  if (!isCurrentWindow(win, () => modalWindow)) return;
+  recordTrace('voice_session_recording_requested', { modalContextId: modalContextId || null });
+  sendVoiceInputStatus(win, modalContextId, { state: 'recording' });
+  const result = await captureVoicePromptTranscript((state) => {
+    sendVoiceInputStatus(win, modalContextId, { state });
+  });
+  if (!isCurrentWindow(win, () => modalWindow)) return;
+  if (!result || !result.ok) {
+    const error = (result && result.error) || 'Could not capture voice input.';
+    recordTrace('voice_session_rejected', { modalContextId: modalContextId || null, error });
+    sendVoiceInputStatus(win, modalContextId, { state: 'error', error });
+    return;
+  }
+  const prompt = String(result.transcript || '').trim();
+  if (!prompt) {
+    const error = 'Voice input produced no transcript.';
+    recordTrace('voice_session_rejected', { modalContextId: modalContextId || null, error });
+    sendVoiceInputStatus(win, modalContextId, { state: 'error', error });
+    return;
+  }
+  recordTrace('voice_session_transcript_ready', {
+    modalContextId: modalContextId || null,
+    deterministic: !!result.deterministic,
+    ...textTraceMeta(prompt),
+  });
+  sendVoiceInputStatus(win, modalContextId, {
+    state: 'transcript_ready',
+    transcript: prompt,
+    provider: result.provider || '',
+  });
+}
 
 ipcMain.on('eval-trace-event', (_event, payload = {}) => {
+  if (!evalPayloadWithinLimit(payload)) return;
   const type = payload && payload.type ? payload.type : 'renderer_event';
   const { type: _type, ...rest } = payload && typeof payload === 'object' ? payload : {};
   recordTrace(type, rest);
@@ -1730,6 +1865,7 @@ ipcMain.on('eval-trace-event', (_event, payload = {}) => {
 
 ipcMain.on('eval-ui-state', (_event, payload = {}) => {
   if (!evalTraceEnabled || !payload || typeof payload !== 'object') return;
+  if (!evalPayloadWithinLimit(payload)) return;
   const surface = String(payload.surface || '').trim();
   if (!surface) return;
   evalUiSnapshots.set(surface, {
@@ -1740,6 +1876,9 @@ ipcMain.on('eval-ui-state', (_event, payload = {}) => {
 
 app.whenReady().then(() => {
   app.setName('agent-UI');
+  loadInputModeSetting();
+  installPetAssetProtocol();
+  installAttachmentProtocol();
   refreshPetCharacterOptions();
   void loadGetWindowsModule();
   if (process.platform === 'darwin' && app.dock && process.env.AGENT_UI_EVAL !== '1') {
@@ -1823,7 +1962,6 @@ app.whenReady().then(() => {
   screen.on('display-added', reclampPetOverlay);
   screen.on('display-removed', reclampPetOverlay);
   screen.on('display-metrics-changed', reclampPetOverlay);
-  startActiveWindowTracker();
 
   const quit = () => {
     app.quit();
@@ -1862,10 +2000,7 @@ app.on('will-quit', () => {
   }
   cancelAllAgents();
   cancelPetMomentum();
-  if (activeWindowPollTimer != null) {
-    clearInterval(activeWindowPollTimer);
-    activeWindowPollTimer = null;
-  }
+  stopActiveWindowTracker();
   globalShortcut.unregisterAll();
 });
 

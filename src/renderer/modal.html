@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self' 'unsafe-inline' ws: http://localhost:*; script-src 'self' 'unsafe-inline' http://localhost:*; style-src 'self' 'unsafe-inline'; img-src 'self' file: data: blob:; connect-src 'self' ws: http://localhost:*;"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' agent-ui-pet: data: blob:; connect-src 'self' ws://localhost:* http://localhost:*;"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>New Session</title>
@@ -26,13 +26,6 @@
           <div class="prompt-meta-wrap">
             <div class="prompt-meta">
               <div id="prompt-send-hint" class="prompt-send-hint" aria-live="polite"></div>
-              <button id="btn-dictate" class="icon-action" type="button" aria-label="Dictate prompt" title="Dictate prompt">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
-                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
-                  <path d="M12 19v3"></path>
-                </svg>
-              </button>
             </div>
           </div>
         </div>

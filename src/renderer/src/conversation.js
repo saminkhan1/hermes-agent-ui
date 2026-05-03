@@ -6,6 +6,7 @@ const params = new URLSearchParams(window.location.search);
 const catId = params.get('catId');
 const logEl = document.getElementById('log');
 const metaEl = document.getElementById('meta');
+const statusEl = document.getElementById('typing-status');
 const closeBtn = document.getElementById('btn-close');
 const dismissBtn = document.getElementById('btn-dismiss');
 const followupInput = document.getElementById('followup-input');
@@ -55,7 +56,14 @@ function reportEvalUiState() {
   });
 }
 
-function kindToLabel(k) {
+function kindToLabel(k, item = {}) {
+  if (k === 'attachment') {
+    const type = String(item.attachmentType || '').trim().toLowerCase();
+    if (type === 'image') return 'Image';
+    if (type === 'video') return 'Video';
+    if (type === 'voice') return 'Audio';
+    return 'Document';
+  }
   return (
     {
       user: 'You',
@@ -70,29 +78,124 @@ function kindClass(k) {
   return `line--${safe}`;
 }
 
+function attachmentStateText(reason) {
+  return (
+    {
+      missing: 'Attachment unavailable',
+      not_file: 'Attachment unavailable',
+      unsupported_type: 'Unsupported attachment',
+      too_large: 'Attachment too large',
+      missing_ref: 'Attachment unavailable',
+      unsupported_ref: 'Unsupported attachment',
+    }[String(reason || '')] || 'Attachment unavailable'
+  );
+}
+
+function attachmentName(item = {}) {
+  const descriptor = item.attachment || {};
+  return String(descriptor.fileName || item.caption || `${item.attachmentType || 'file'} attachment`);
+}
+
+function renderAttachmentContent(item = {}) {
+  const descriptor = item.attachment || {};
+  const type = String(item.attachmentType || '').toLowerCase();
+  const wrap = document.createElement('div');
+  wrap.className = 'attachment';
+
+  const caption = String(item.caption || '').trim();
+  if (caption) {
+    const captionEl = document.createElement('div');
+    captionEl.className = 'attachment-caption';
+    captionEl.textContent = caption;
+    wrap.appendChild(captionEl);
+  }
+
+  if (descriptor.status === 'ready' && descriptor.url) {
+    if (type === 'image') {
+      const img = document.createElement('img');
+      img.className = 'attachment-media';
+      img.src = descriptor.url;
+      img.alt = caption || attachmentName(item);
+      img.loading = 'lazy';
+      wrap.appendChild(img);
+      return wrap;
+    }
+    if (type === 'video') {
+      const video = document.createElement('video');
+      video.className = 'attachment-media';
+      video.src = descriptor.url;
+      video.controls = true;
+      video.preload = 'metadata';
+      wrap.appendChild(video);
+      return wrap;
+    }
+    if (type === 'voice') {
+      const audio = document.createElement('audio');
+      audio.className = 'attachment-media';
+      audio.src = descriptor.url;
+      audio.controls = true;
+      audio.preload = 'metadata';
+      wrap.appendChild(audio);
+      return wrap;
+    }
+
+    const file = document.createElement('div');
+    file.className = 'attachment-file';
+    const name = document.createElement('span');
+    name.className = 'attachment-file-name';
+    name.textContent = attachmentName(item);
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'attachment-open';
+    open.textContent = 'Open';
+    open.addEventListener('click', async () => {
+      if (typeof window.agentUI?.openAgentAttachment !== 'function') return;
+      setComposerError('');
+      try {
+        const result = await window.agentUI.openAgentAttachment(descriptor.url);
+        if (result && result.ok === false) setComposerError(result.error || 'Unable to open attachment.');
+      } catch {
+        setComposerError('Unable to open attachment.');
+      }
+    });
+    file.append(name, open);
+    wrap.appendChild(file);
+    return wrap;
+  }
+
+  const state = document.createElement('div');
+  state.className = 'attachment-state';
+  const text = document.createElement('span');
+  text.className = 'attachment-state-text';
+  text.textContent = `${attachmentStateText(descriptor.reason)} - ${attachmentName(item)}`;
+  state.appendChild(text);
+  wrap.appendChild(state);
+  return wrap;
+}
+
 function renderLogItems(items) {
   logEl.replaceChildren();
   for (const item of items || []) {
-    if (!item || !['user', 'assistant', 'error'].includes(item.kind)) continue;
+    if (!item || !['user', 'assistant', 'error', 'attachment'].includes(item.kind)) continue;
 
     const line = document.createElement('div');
     line.className = `line ${kindClass(item.kind)}`;
 
     const label = document.createElement('span');
     label.className = 'line-label';
-    label.textContent = kindToLabel(item.kind);
+    label.textContent = kindToLabel(item.kind, item);
 
     const text = document.createElement('div');
     text.className = 'line-text';
-    text.textContent = item.text == null ? '' : String(item.text);
+    if (item.kind === 'attachment') {
+      text.appendChild(renderAttachmentContent(item));
+    } else {
+      text.textContent = item.text == null ? '' : String(item.text);
+    }
 
     line.append(label, text);
     logEl.appendChild(line);
   }
-}
-
-function isRunningConversation(data) {
-  return data && String(data.runStatus || '').toLowerCase() === 'running';
 }
 
 function isDismissibleConversation(data) {
@@ -102,16 +205,38 @@ function isDismissibleConversation(data) {
 
 function updateComposerFromData(data) {
   if (!followupInput || !sendBtn) return;
-  const running = isRunningConversation(data);
-  const cliTransport = data && String(data.transport || '').toLowerCase() === 'cli';
   const ok = data && data.found;
-  followupInput.disabled = !ok || (running && cliTransport);
-  sendBtn.disabled = !ok || (running && cliTransport);
+  followupInput.disabled = !ok;
+  sendBtn.disabled = !ok;
   if (dismissBtn) {
     const canDismiss = ok && isDismissibleConversation(data);
     dismissBtn.disabled = !canDismiss;
     dismissBtn.title = canDismiss ? 'Dismiss session' : 'Dismiss is available after Hermes finishes';
   }
+}
+
+function updateStatusFromData(data) {
+  if (!statusEl) return;
+  if (!data || !data.found) {
+    statusEl.hidden = true;
+    statusEl.textContent = '';
+    return;
+  }
+  const status = String(data.runStatus || '').toLowerCase();
+  const typing = data.typing && data.typing.active;
+  const label = typing
+    ? 'Typing'
+    : status === 'running'
+      ? 'Running'
+      : status === 'completed'
+        ? 'Done'
+        : status === 'cancelled' || status === 'canceled'
+          ? 'Stopped'
+          : status === 'error' || status === 'failed'
+            ? 'Error'
+            : '';
+  statusEl.hidden = !label;
+  statusEl.textContent = label;
 }
 
 function setComposerError(message) {
@@ -125,6 +250,7 @@ async function render() {
   if (!window.agentUI?.getAgentConversation || !catId) {
     logEl.textContent = 'No conversation to show.';
     updateComposerFromData(null);
+    updateStatusFromData(null);
     reportEvalUiState();
     return;
   }
@@ -133,6 +259,7 @@ async function render() {
   if (!data || !data.found) {
     logEl.textContent = 'This conversation is not available yet, or the agent was not started.';
     updateComposerFromData(null);
+    updateStatusFromData(null);
     reportEvalUiState();
     return;
   }
@@ -147,6 +274,7 @@ async function render() {
   renderLogItems(data.items || []);
   logEl.scrollTop = logEl.scrollHeight;
   updateComposerFromData(data);
+  updateStatusFromData(data);
   reportEvalUiState();
 }
 
@@ -154,8 +282,6 @@ async function sendFollowup() {
   if (!catId || !followupInput) return;
   const text = followupInput.value;
   if (!text.trim()) return;
-  const cliTransport = lastData && String(lastData.transport || '').toLowerCase() === 'cli';
-  if (cliTransport && lastData && String(lastData.runStatus || '').toLowerCase() === 'running') return;
   if (typeof window.agentUI.sendFollowup !== 'function') return;
   setComposerError('');
   if (sendBtn) sendBtn.disabled = true;

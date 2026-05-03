@@ -6,12 +6,32 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const {
+  defaultGatewayEnvPath,
+  getAgentUIConfigDir,
   HermesGatewayClient,
+  gatewayBaseUrlFromEnv,
+  gatewayKeyFromEnv,
   parseSseFrame,
+  readGatewayEnvFile,
 } = require('../src/main/hermes-gateway-client');
 
 function tempStatePath() {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-gateway-')), 'state.json');
+}
+
+const originalEnv = { ...process.env };
+
+function isolateEnv(t) {
+  process.env = { ...originalEnv };
+  delete process.env.AGENT_UI_HERMES_GATEWAY_KEY;
+  delete process.env.LOCAL_DESKTOP_GATEWAY_KEY;
+  delete process.env.AGENT_UI_HERMES_GATEWAY_URL;
+  delete process.env.LOCAL_DESKTOP_HOST;
+  delete process.env.LOCAL_DESKTOP_PORT;
+  delete process.env.AGENT_UI_CONFIG_DIR;
+  t.after(() => {
+    process.env = { ...originalEnv };
+  });
 }
 
 test('parseSseFrame parses event id, type, and JSON data', () => {
@@ -98,15 +118,114 @@ test('postMessage retries retryable failures with the same idempotency payload',
   assert.equal(calls[1].message_id, 'msg-1');
 });
 
-test('conversation id and last sequence persist across client instances', () => {
+test('gateway config falls back to local desktop env file', (t) => {
+  isolateEnv(t);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-gateway-env-'));
+  process.env.AGENT_UI_CONFIG_DIR = dir;
+  fs.writeFileSync(path.join(dir, 'local-desktop-gateway.env'), [
+    'export LOCAL_DESKTOP_GATEWAY_KEY="file-secret"',
+    'LOCAL_DESKTOP_HOST=127.0.0.2',
+    'LOCAL_DESKTOP_PORT=9911',
+    '',
+  ].join('\n'), 'utf8');
+
+  assert.equal(gatewayKeyFromEnv(), 'file-secret');
+  assert.equal(gatewayBaseUrlFromEnv(), 'http://127.0.0.2:9911');
+  assert.equal(readGatewayEnvFile().LOCAL_DESKTOP_GATEWAY_KEY, 'file-secret');
+});
+
+test('default gateway config ignores Hermes-owned HOME override', (t) => {
+  isolateEnv(t);
+  const poisonedHome = path.join(os.userInfo().homedir, 'Documents', 'jarvis', '.aura', 'home');
+  process.env.HOME = poisonedHome;
+  const expectedDir = path.join(os.userInfo().homedir, '.agent-ui');
+
+  assert.equal(getAgentUIConfigDir(), expectedDir);
+  assert.equal(defaultGatewayEnvPath(), path.join(expectedDir, 'local-desktop-gateway.env'));
+});
+
+test('explicit gateway env overrides local desktop env file', (t) => {
+  isolateEnv(t);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-gateway-env-'));
+  process.env.AGENT_UI_CONFIG_DIR = dir;
+  process.env.AGENT_UI_HERMES_GATEWAY_KEY = 'direct-secret';
+  process.env.AGENT_UI_HERMES_GATEWAY_URL = 'http://127.0.0.9:7777/';
+  fs.writeFileSync(path.join(dir, 'local-desktop-gateway.env'), [
+    'LOCAL_DESKTOP_GATEWAY_KEY=file-secret',
+    'LOCAL_DESKTOP_HOST=127.0.0.2',
+    'LOCAL_DESKTOP_PORT=9911',
+    '',
+  ].join('\n'), 'utf8');
+
+  assert.equal(gatewayKeyFromEnv(), 'direct-secret');
+  assert.equal(gatewayBaseUrlFromEnv(), 'http://127.0.0.9:7777');
+});
+
+test('SSE disconnect logging is actionable and throttled', () => {
+  const warnings = [];
+  const client = new HermesGatewayClient({
+    baseUrl: 'http://127.0.0.1:8766',
+    key: 'secret',
+    statePath: tempStatePath(),
+    fetchImpl: async () => {},
+    log: { warn: (...args) => warnings.push(args.join(' ')) },
+    sseDisconnectLogThrottleMs: 30000,
+  });
+  const error = new TypeError('fetch failed');
+  error.cause = new Error('connect ECONNREFUSED 127.0.0.1:8766');
+
+  client.logSseDisconnect(error);
+  client.logSseDisconnect(error);
+
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /fetch failed/);
+  assert.match(warnings[0], /127\.0\.0\.1:8766/);
+  assert.match(warnings[0], /Hermes gateway is running/);
+});
+
+test('last sequence persists across client instances without conversation content', () => {
   const statePath = tempStatePath();
   const first = new HermesGatewayClient({ key: 'secret', statePath, fetchImpl: async () => {} });
-  first.rememberConversation('cat-1', 'cat-1');
   first.handleEvent({ seq: 7, type: 'message.created', conversation_id: 'cat-1' });
+  first.flushState();
+  assert.deepEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')), { lastSeq: 7 });
 
   const second = new HermesGatewayClient({ key: 'secret', statePath, fetchImpl: async () => {} });
-  assert.equal(second.conversationIdFor('cat-1'), 'cat-1');
   assert.equal(second.state.lastSeq, 7);
+  assert.equal(Object.prototype.hasOwnProperty.call(second.state, 'conversations'), false);
+});
+
+test('stale gateway state conversation maps are scrubbed on load', () => {
+  const statePath = tempStatePath();
+  fs.writeFileSync(statePath, JSON.stringify({
+    lastSeq: 9,
+    conversations: { 'cat-1': 'cat-1' },
+    other: true,
+  }), 'utf8');
+
+  const client = new HermesGatewayClient({ key: 'secret', statePath, fetchImpl: async () => {} });
+
+  assert.deepEqual(client.state, { lastSeq: 9 });
+  assert.deepEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')), { lastSeq: 9 });
+});
+
+test('last sequence persistence is debounced and flushes on stop', () => {
+  const statePath = tempStatePath();
+  const client = new HermesGatewayClient({
+    key: 'secret',
+    statePath,
+    fetchImpl: async () => {},
+    stateSaveDebounceMs: 10000,
+  });
+
+  client.handleEvent({ seq: 1, type: 'message.created', conversation_id: 'cat-1' });
+  client.handleEvent({ seq: 2, type: 'message.updated', conversation_id: 'cat-1' });
+
+  assert.equal(fs.existsSync(statePath), false);
+  client.stop();
+
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  assert.equal(persisted.lastSeq, 2);
 });
 
 test('replay-window 409 clears last sequence and reports expiration', async () => {

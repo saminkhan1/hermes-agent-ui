@@ -16,7 +16,7 @@ export default defineConfig({
         name: 'copy-main-agents',
         writeBundle() {
           const outMain = join('out', 'main')
-          for (const f of ['agents.js', 'eval-server.js', 'eval-trace.js', 'hermes-gateway-client.js', 'pet-layout.js']) {
+          for (const f of ['agents.js', 'eval-server.js', 'eval-trace.js', 'hermes-attachments.js', 'hermes-gateway-client.js', 'hermes-runtime.js', 'pet-assets.js', 'pet-layout.js', 'window-lifecycle.js']) {
             copyFileSync(join('src', 'main', f), join(outMain, f))
           }
         },

@@ -4,6 +4,7 @@ node_modules/
 # Build output (electron-vite)
 out/
 dist/
+build/
 
 # Logs & debug
 *.log

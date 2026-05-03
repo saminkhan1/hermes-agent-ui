@@ -9,9 +9,19 @@ function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
+function realUserHomeDir() {
+  try {
+    const userHome = os.userInfo().homedir;
+    if (userHome) return userHome;
+  } catch {
+    // Fall through to Node's HOME-aware default.
+  }
+  return os.homedir();
+}
+
 function getAgentUIConfigDir() {
   const configured = String(process.env.AGENT_UI_CONFIG_DIR || '').trim();
-  const dir = configured ? path.resolve(configured) : path.join(os.homedir(), '.agent-ui');
+  const dir = configured ? path.resolve(configured) : path.join(realUserHomeDir(), '.agent-ui');
   ensureDir(dir);
   return dir;
 }
@@ -20,16 +30,54 @@ function defaultStatePath() {
   return path.join(getAgentUIConfigDir(), 'hermes-gateway.json');
 }
 
+function defaultGatewayEnvPath() {
+  return path.join(getAgentUIConfigDir(), 'local-desktop-gateway.env');
+}
+
+function unquoteEnvValue(value) {
+  const text = String(value || '').trim();
+  if (
+    (text.startsWith('"') && text.endsWith('"')) ||
+    (text.startsWith("'") && text.endsWith("'"))
+  ) {
+    return text.slice(1, -1);
+  }
+  return text;
+}
+
+function readGatewayEnvFile(file = defaultGatewayEnvPath()) {
+  try {
+    if (!fs.existsSync(file)) return {};
+    const out = {};
+    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const match = trimmed.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+      if (!match) continue;
+      out[match[1]] = unquoteEnvValue(match[2]);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function gatewayEnvValue(name) {
+  const direct = String(process.env[name] || '').trim();
+  if (direct) return direct;
+  return String(readGatewayEnvFile()[name] || '').trim();
+}
+
 function gatewayBaseUrlFromEnv() {
-  const direct = String(process.env.AGENT_UI_HERMES_GATEWAY_URL || '').trim();
+  const direct = gatewayEnvValue('AGENT_UI_HERMES_GATEWAY_URL');
   if (direct) return direct.replace(/\/+$/, '');
-  const host = String(process.env.LOCAL_DESKTOP_HOST || '127.0.0.1').trim() || '127.0.0.1';
-  const port = String(process.env.LOCAL_DESKTOP_PORT || '8766').trim() || '8766';
+  const host = gatewayEnvValue('LOCAL_DESKTOP_HOST') || '127.0.0.1';
+  const port = gatewayEnvValue('LOCAL_DESKTOP_PORT') || '8766';
   return `http://${host}:${port}`;
 }
 
 function gatewayKeyFromEnv() {
-  return String(process.env.AGENT_UI_HERMES_GATEWAY_KEY || process.env.LOCAL_DESKTOP_GATEWAY_KEY || '').trim();
+  return gatewayEnvValue('AGENT_UI_HERMES_GATEWAY_KEY') || gatewayEnvValue('LOCAL_DESKTOP_GATEWAY_KEY');
 }
 
 function readJsonFile(file, fallback) {
@@ -54,6 +102,12 @@ function sleep(ms) {
 function isRetryableStatus(status) {
   const code = Number(status);
   return code === 429 || (code >= 500 && code <= 599);
+}
+
+function gatewayConnectionErrorMessage(error, baseUrl) {
+  const raw = error && error.message ? error.message : String(error || 'disconnected');
+  const cause = error && error.cause && error.cause.message ? ` (${error.cause.message})` : '';
+  return `${raw}${cause}. Check that Hermes gateway is running at ${baseUrl}.`;
 }
 
 function parseSseFrame(frame) {
@@ -93,36 +147,65 @@ class HermesGatewayClient {
     this.onEvent = typeof opts.onEvent === 'function' ? opts.onEvent : () => {};
     this.onReplayExpired = typeof opts.onReplayExpired === 'function' ? opts.onReplayExpired : () => {};
     this.clientVersion = String(opts.clientVersion || 'unknown');
+    this.stateSaveDebounceMs = Math.max(0, Math.trunc(Number(opts.stateSaveDebounceMs) || 250));
+    this.sseDisconnectLogThrottleMs = Math.max(0, Math.trunc(Number(opts.sseDisconnectLogThrottleMs) || 30000));
+    const savedState = readJsonFile(this.statePath, {});
+    const savedLastSeq = Number(savedState && savedState.lastSeq);
+    const hasStaleStateKeys = !!(savedState && typeof savedState === 'object' &&
+      Object.keys(savedState).some((key) => key !== 'lastSeq'));
     this.state = {
-      lastSeq: 0,
-      conversations: {},
-      ...readJsonFile(this.statePath, {}),
+      lastSeq: Number.isFinite(savedLastSeq) && savedLastSeq > 0 ? Math.trunc(savedLastSeq) : 0,
     };
-    if (!this.state.conversations || typeof this.state.conversations !== 'object') {
-      this.state.conversations = {};
-    }
     this.abortController = null;
     this.streamPromise = null;
     this.running = false;
     this.reconnectTimer = null;
+    this.stateSaveTimer = null;
+    this.stateDirty = false;
+    this.lastSseDisconnectLogAt = 0;
+    this.lastSseDisconnectLogKey = '';
+    if (hasStaleStateKeys) this.saveState();
   }
 
   saveState() {
+    if (this.stateSaveTimer) {
+      clearTimeout(this.stateSaveTimer);
+      this.stateSaveTimer = null;
+    }
+    this.stateDirty = false;
     writeJsonFile(this.statePath, this.state);
   }
 
-  rememberConversation(catId, conversationId = catId) {
-    const id = String(catId || '').trim();
-    const cid = String(conversationId || id).trim();
-    if (!id || !cid) return cid;
-    this.state.conversations[id] = cid;
-    this.saveState();
-    return cid;
+  scheduleStateSave() {
+    this.stateDirty = true;
+    if (this.stateSaveDebounceMs === 0) {
+      this.saveState();
+      return;
+    }
+    if (this.stateSaveTimer) return;
+    this.stateSaveTimer = setTimeout(() => {
+      this.stateSaveTimer = null;
+      if (this.stateDirty) this.saveState();
+    }, this.stateSaveDebounceMs);
   }
 
-  conversationIdFor(catId) {
-    const id = String(catId || '').trim();
-    return (id && this.state.conversations[id]) || id;
+  flushState() {
+    if (this.stateDirty || this.stateSaveTimer) this.saveState();
+  }
+
+  logSseDisconnect(error) {
+    const message = gatewayConnectionErrorMessage(error, this.baseUrl);
+    const now = Date.now();
+    if (
+      this.sseDisconnectLogThrottleMs > 0 &&
+      this.lastSseDisconnectLogKey === message &&
+      now - this.lastSseDisconnectLogAt < this.sseDisconnectLogThrottleMs
+    ) {
+      return;
+    }
+    this.lastSseDisconnectLogKey = message;
+    this.lastSseDisconnectLogAt = now;
+    this.log.warn('[agent-ui] Hermes gateway SSE disconnected:', message);
   }
 
   createMessageId(prefix = 'agent-ui') {
@@ -130,7 +213,7 @@ class HermesGatewayClient {
   }
 
   authHeaders(extra = {}) {
-    if (!this.key) throw new Error('Missing LOCAL_DESKTOP_GATEWAY_KEY for Hermes gateway.');
+    if (!this.key) throw new Error('Missing LOCAL_DESKTOP_GATEWAY_KEY for Hermes gateway. Set LOCAL_DESKTOP_GATEWAY_KEY, AGENT_UI_HERMES_GATEWAY_KEY, or create ~/.agent-ui/local-desktop-gateway.env.');
     return {
       ...extra,
       authorization: `Bearer ${this.key}`,
@@ -196,7 +279,7 @@ class HermesGatewayClient {
   }
 
   start() {
-    if (!this.key) throw new Error('Missing LOCAL_DESKTOP_GATEWAY_KEY for Hermes gateway.');
+    if (!this.key) throw new Error('Missing LOCAL_DESKTOP_GATEWAY_KEY for Hermes gateway. Set LOCAL_DESKTOP_GATEWAY_KEY, AGENT_UI_HERMES_GATEWAY_KEY, or create ~/.agent-ui/local-desktop-gateway.env.');
     if (this.running) return;
     this.running = true;
     this.streamPromise = this.streamLoop();
@@ -212,6 +295,7 @@ class HermesGatewayClient {
       this.abortController.abort();
       this.abortController = null;
     }
+    this.flushState();
   }
 
   async streamLoop() {
@@ -228,7 +312,7 @@ class HermesGatewayClient {
           this.onReplayExpired(e);
           delayMs = 100;
         } else {
-          this.log.warn('[agent-ui] Hermes gateway SSE disconnected', e && e.message ? e.message : e);
+          this.logSseDisconnect(e);
         }
       }
       if (!this.running) return;
@@ -284,7 +368,7 @@ class HermesGatewayClient {
     const seq = Number(event && event.seq);
     if (Number.isFinite(seq) && seq > Number(this.state.lastSeq || 0)) {
       this.state.lastSeq = Math.trunc(seq);
-      this.saveState();
+      this.scheduleStateSave();
     }
     this.onEvent(event);
   }
@@ -293,8 +377,11 @@ class HermesGatewayClient {
 module.exports = {
   HermesGatewayClient,
   defaultStatePath,
+  defaultGatewayEnvPath,
   gatewayBaseUrlFromEnv,
   gatewayKeyFromEnv,
   getAgentUIConfigDir,
   parseSseFrame,
+  realUserHomeDir,
+  readGatewayEnvFile,
 };

@@ -96,19 +96,17 @@ textarea {
   color: rgba(255, 255, 255, 0.3);
 }
 
+#prompt:disabled {
+  opacity: 1;
+  cursor: progress;
+}
+
 .prompt-meta {
   display: flex;
   min-height: 24px;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-}
-
-.icon-action {
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.04);
-  color: rgba(255, 255, 255, 0.72);
 }
 
 .prompt-send-hint,
@@ -127,29 +125,6 @@ kbd {
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
   font-size: 10px;
-}
-
-.icon-action {
-  display: inline-flex;
-  width: 26px;
-  height: 24px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  margin: 0;
-  padding: 0;
-  cursor: pointer;
-}
-
-.icon-action:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #fff;
-}
-
-.icon-action.recording {
-  border-color: rgba(245, 78, 0, 0.65);
-  background: rgba(245, 78, 0, 0.2);
-  color: #fff;
 }
 
 .footer {
@@ -192,8 +167,14 @@ kbd {
   background: #f54e00;
 }
 
-.primary-action:focus-visible,
-.icon-action:focus-visible {
+.primary-action:disabled {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.45);
+  cursor: default;
+}
+
+.primary-action:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px rgba(245, 78, 0, 0.4);
 }

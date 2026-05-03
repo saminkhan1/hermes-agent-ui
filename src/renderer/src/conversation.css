@@ -36,11 +36,11 @@ body {
 }
 
 .header {
-  position: relative;
   flex: 0 0 auto;
   display: flex;
-  flex-direction: column;
-  padding: 12px 200px 12px 16px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px 10px 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -49,12 +49,38 @@ body {
   font-size: 11px;
   word-break: break-all;
   color: rgba(255, 255, 255, 0.4);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.header-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-pill {
+  flex: 0 0 auto;
+  min-width: 62px;
+  max-width: 92px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(237, 236, 236, 0.82);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 22px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .header-btn.dismiss-btn {
-  position: absolute;
-  right: 44px;
-  top: 10px;
+  flex: 0 0 auto;
   padding: 4px 10px;
   font-size: 12px;
   font-weight: 500;
@@ -78,9 +104,7 @@ body {
 }
 
 .close-btn {
-  position: absolute;
-  right: 12px;
-  top: 10px;
+  flex: 0 0 auto;
   width: 28px;
   height: 28px;
   line-height: 1;
@@ -168,9 +192,86 @@ body {
   color: #8ab4ff;
 }
 
+.line--attachment .line-label {
+  color: #7bd88f;
+}
+
 .line--error .line-label,
 .line--error .line-text {
   color: #ff8a7a;
+}
+
+.attachment {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.attachment-caption {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #edecec;
+  user-select: text;
+}
+
+.attachment-media {
+  display: block;
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+img.attachment-media {
+  max-height: 260px;
+  object-fit: contain;
+}
+
+video.attachment-media {
+  max-height: 260px;
+}
+
+audio.attachment-media {
+  width: 100%;
+}
+
+.attachment-file,
+.attachment-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 36px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.attachment-file-name,
+.attachment-state-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(237, 236, 236, 0.88);
+}
+
+.attachment-open {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
+  color: #edecec;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.attachment-open:hover {
+  background: rgba(255, 255, 255, 0.14);
 }
 
 footer.composer {

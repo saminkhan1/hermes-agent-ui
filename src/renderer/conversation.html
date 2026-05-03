@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self' 'unsafe-inline' ws: http://localhost:*; script-src 'self' 'unsafe-inline' http://localhost:*; style-src 'self' 'unsafe-inline'; img-src 'self' file: data: blob:; connect-src 'self' ws: http://localhost:*;"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' agent-ui-pet: agent-ui-attachment: data: blob: http: https:; media-src 'self' agent-ui-attachment: data: blob: http: https:; connect-src 'self' ws://localhost:* http://localhost:*; object-src 'none';"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Conversation</title>
@@ -14,10 +14,13 @@
     <div class="wrap">
       <div class="header">
         <p class="meta" id="meta" hidden></p>
-        <button type="button" id="btn-dismiss" class="header-btn dismiss-btn">Dismiss</button>
-        <button type="button" id="btn-close" class="close-btn" aria-label="Close">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-        </button>
+        <div class="header-actions">
+          <span id="typing-status" class="status-pill" hidden></span>
+          <button type="button" id="btn-dismiss" class="header-btn dismiss-btn">Dismiss</button>
+          <button type="button" id="btn-close" class="close-btn" aria-label="Close">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
       </div>
       <div class="main-stage" id="main-stage">
         <div id="conversation-section" class="conversation-section">

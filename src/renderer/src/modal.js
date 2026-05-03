@@ -1,10 +1,10 @@
 /* global agentUI */
 
-import goblinSpriteUrl from '../../../assets/pets/goblin/spritesheet.webp';
 import { insertNewlineAtCursor } from './insert-newline-at-cursor.js';
 
 const params = new URLSearchParams(window.location.search);
 const modalContextId = params.get('modalContextId') || '';
+const inputMode = params.get('inputMode') === 'voice' ? 'voice' : 'text';
 
 const promptEl = document.getElementById('prompt');
 const headerAppIcon = document.getElementById('header-app-icon');
@@ -12,11 +12,6 @@ const errorEl = document.getElementById('error');
 const hintEl = document.getElementById('spawn-hint');
 const promptSendHintEl = document.getElementById('prompt-send-hint');
 const btnCreateCat = document.getElementById('btn-create-cat');
-const btnDictate = document.getElementById('btn-dictate');
-
-if (headerAppIcon) {
-  headerAppIcon.style.backgroundImage = `url("${goblinSpriteUrl}")`;
-}
 
 const isApple =
   /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
@@ -33,7 +28,22 @@ if (hintEl) {
 }
 
 let promptTypedTraced = false;
-let dictationInFlight = false;
+let voiceTranscriptReady = false;
+
+async function loadHeaderAppIcon() {
+  if (!headerAppIcon || !window.agentUI || typeof window.agentUI.getPetCharacters !== 'function') return;
+  try {
+    const payload = await window.agentUI.getPetCharacters();
+    const spriteUrl = String(
+      (payload && payload.selectedSpriteUrl) ||
+      (payload && payload.selected && payload.selected.spriteUrl) ||
+      ''
+    ).trim();
+    if (spriteUrl) headerAppIcon.style.backgroundImage = `url("${spriteUrl}")`;
+  } catch {
+    // The modal can render without the decorative pet icon.
+  }
+}
 
 function traceEvalEvent(type, payload = {}) {
   if (!window.agentUI || typeof window.agentUI.traceEvalEvent !== 'function') return;
@@ -64,7 +74,6 @@ function reportEvalUiState() {
   window.agentUI.reportEvalUiState('modal', {
     modalContextId: modalContextId || null,
     promptRect: rectFor(promptEl),
-    micButtonRect: rectFor(btnDictate),
     createButtonRect: rectFor(btnCreateCat),
     activeElement: document.activeElement ? { id: document.activeElement.id || '', tag: document.activeElement.tagName || '' } : null,
     promptValueLength: promptEl && typeof promptEl.value === 'string' ? promptEl.value.length : 0,
@@ -87,11 +96,92 @@ function setError(msg) {
   reportEvalUiState();
 }
 
+function setPromptDisabled(disabled) {
+  if (!promptEl) return;
+  promptEl.disabled = !!disabled;
+  promptEl.setAttribute('aria-busy', disabled ? 'true' : 'false');
+}
+
+function setSubmitDisabled(disabled) {
+  if (!btnCreateCat) return;
+  btnCreateCat.disabled = !!disabled;
+}
+
+function setVoiceStatus(message) {
+  if (!promptSendHintEl) return;
+  promptSendHintEl.textContent = message;
+  reportEvalUiState();
+}
+
+function setVoiceProgressPlaceholder() {
+  if (!promptEl) return;
+  promptEl.placeholder = '';
+}
+
+function applyVoiceStatus(payload = {}) {
+  if (payload.modalContextId && modalContextId && payload.modalContextId !== modalContextId) return;
+  const state = String(payload.state || '').trim();
+  traceEvalEvent('voice_modal_status', { state });
+
+  if (state === 'recording') {
+    voiceTranscriptReady = false;
+    setError('');
+    setPromptDisabled(true);
+    if (promptEl) {
+      promptEl.value = '';
+      setVoiceProgressPlaceholder();
+    }
+    setVoiceStatus('Listening');
+    setSubmitDisabled(true);
+    syncPromptHeight();
+    return;
+  }
+
+  if (state === 'transcribing') {
+    setPromptDisabled(true);
+    setVoiceProgressPlaceholder();
+    setVoiceStatus('Transcribing');
+    setSubmitDisabled(true);
+    syncPromptHeight();
+    return;
+  }
+
+  if (state === 'transcript_ready') {
+    const transcript = String(payload.transcript || '').trim();
+    voiceTranscriptReady = true;
+    setPromptDisabled(false);
+    if (promptEl) {
+      promptEl.value = transcript;
+      promptEl.placeholder = 'Review or edit the transcript.';
+      promptEl.focus();
+    }
+    setVoiceStatus('Review transcript, then press Enter to start');
+    setSubmitDisabled(false);
+    syncPromptHeight();
+    return;
+  }
+
+  if (state === 'error') {
+    voiceTranscriptReady = false;
+    setPromptDisabled(false);
+    if (promptEl) {
+      promptEl.placeholder = 'Type a prompt or press Esc to cancel.';
+      promptEl.focus();
+    }
+    setVoiceStatus('Voice input failed');
+    setSubmitDisabled(false);
+    setError(payload.error || 'Could not capture voice input.');
+    syncPromptHeight();
+  }
+}
+
 function submit() {
   setError('');
   const prompt = promptEl?.value || '';
   traceEvalEvent('submit_requested_from_modal', {
     promptLength: prompt.length,
+    inputMode,
+    voiceTranscriptReady,
   });
   if (!prompt.trim()) {
     setError('Enter a prompt.');
@@ -114,43 +204,6 @@ function cancel() {
   }
 }
 
-async function startDictation() {
-  if (dictationInFlight || !window.agentUI?.startVoiceDictation || !promptEl) return;
-  dictationInFlight = true;
-  if (btnDictate) {
-    btnDictate.classList.add('recording');
-    btnDictate.setAttribute('aria-pressed', 'true');
-  }
-  setError('');
-  try {
-    const result = await window.agentUI.startVoiceDictation();
-    if (!result || !result.ok) {
-      setError((result && result.error) || 'Could not start dictation.');
-      return;
-    }
-    const transcript = String(result.transcript || '').trim();
-    if (transcript) {
-      const prefix = promptEl.value && !/\s$/.test(promptEl.value) ? ' ' : '';
-      promptEl.value = `${promptEl.value || ''}${prefix}${transcript}`;
-      promptTypedTraced = true;
-      traceEvalEvent('voice_transcript_inserted', {
-        deterministic: !!result.deterministic,
-        transcriptLength: transcript.length,
-      });
-      syncPromptHeight();
-      promptEl.focus();
-    }
-  } catch {
-    setError('Could not start dictation.');
-  } finally {
-    dictationInFlight = false;
-    if (btnDictate) {
-      btnDictate.classList.remove('recording');
-      btnDictate.setAttribute('aria-pressed', 'false');
-    }
-  }
-}
-
 function syncPromptHeight() {
   if (!promptEl) return;
   promptEl.style.height = '1px';
@@ -159,10 +212,6 @@ function syncPromptHeight() {
 }
 
 btnCreateCat?.addEventListener('click', submit);
-
-btnDictate?.addEventListener('click', () => {
-  void startDictation();
-});
 
 if (promptEl) {
   promptEl.addEventListener('input', () => {
@@ -200,7 +249,19 @@ window.addEventListener('load', () => {
 });
 
 void (async () => {
-  promptEl?.focus();
+  await loadHeaderAppIcon();
+  if (inputMode === 'voice') {
+    setPromptDisabled(true);
+    setVoiceProgressPlaceholder();
+    setVoiceStatus('Listening');
+    setSubmitDisabled(true);
+  } else {
+    promptEl?.focus();
+  }
   syncPromptHeight();
   reportEvalUiState();
 })();
+
+if (inputMode === 'voice' && window.agentUI && typeof window.agentUI.onVoiceInputStatus === 'function') {
+  window.agentUI.onVoiceInputStatus(applyVoiceStatus);
+}

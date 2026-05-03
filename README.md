@@ -2,106 +2,96 @@
 
 agent-UI is a thin desktop launcher and status surface for Hermes.
 
-It captures lightweight app/window/display context when the global shortcut fires, opens a minimal task input, sends the first tagged prompt to Hermes through the `local_desktop` gateway, then gets out of the way while the pet stack shows session status.
+It captures lightweight app/window/display context when the global shortcut fires, then starts the currently selected input mode: text mode opens a minimal task input, while voice mode records through Hermes voice capture and places the transcript in the same input for review before submission.
+
+## Manual Testing Goal
+
+For manual testers, ship a single macOS app bundle/zip that contains:
+
+- the Electron UI gateway (`agent-UI.app`);
+- Hermes Agent source/runtime bootstrap under the app resources;
+- automatic local gateway secret creation in `~/.agent-ui/local-desktop-gateway.env`;
+- automatic Hermes Gateway startup on first prompt;
+- separate text and voice input modes, follow-ups, and transcript review before submission.
+
+The first run may install Python dependencies into `~/.agent-ui/hermes-runtime-venv`. Model/provider login still belongs to Hermes; if the tester has not configured a Hermes provider yet, Hermes will surface that setup/login error through the conversation details.
 
 ## Requirements
 
+For developers building the distributable:
+
 - Node.js and npm
-- Hermes with the bundled `local_desktop` platform plugin enabled
-- A shared gateway secret in `LOCAL_DESKTOP_GATEWAY_KEY`
+- macOS for the mac app build
+- a Hermes Agent checkout to bundle; by default the build script uses `/Users/saminkhan1/Documents/jarvis/.aura/hermes-agent`
 
-The old Hermes CLI wrapper path is still available as an explicit fallback. By default, agent-UI uses the local desktop gateway instead of spawning `aura-hermes chat`.
+For manual testers using the packaged app:
 
-## Hermes Gateway Setup
+- macOS
+- network access for first-run Python dependency install if the bundled venv is not already present
+- a Hermes model/provider login or API key configured through Hermes
+- Hermes voice-mode system dependencies available on the Mac (`portaudio` for microphone input and `ffmpeg` for STT audio conversion)
+- microphone permission for voice input mode
 
-Configure Hermes with the top-level platform config:
+## Build A Downloadable macOS App
 
-```yaml
-platforms:
-  local_desktop:
-    enabled: true
-    extra:
-      host: 127.0.0.1
-      port: 8766
-      user_id: local
-      outbox_retention_days: 7
-```
-
-Set the gateway environment before starting Hermes:
+From the repo root:
 
 ```bash
-export LOCAL_DESKTOP_GATEWAY_KEY="$(openssl rand -hex 32)"
-export LOCAL_DESKTOP_ALLOWED_USERS=local
-export LOCAL_DESKTOP_ALLOW_ALL_USERS=false
-export LOCAL_DESKTOP_HOST=127.0.0.1
-export LOCAL_DESKTOP_PORT=8766
+npm install
+npm run dist:mac
 ```
 
-Start Hermes Gateway in the foreground for local development:
+The distributable zip is written to `dist/`, for example:
+
+```text
+dist/agent-UI-1.0.0-mac-arm64.zip
+```
+
+To bundle a different Hermes checkout:
 
 ```bash
-hermes gateway
+HERMES_BUNDLE_SOURCE=/path/to/hermes-agent npm run dist:mac
 ```
 
-With the local checkout used by this repo, use:
+`npm run dist:mac` performs three steps:
 
-```bash
-/Users/saminkhan1/Documents/jarvis/script/aura-hermes gateway
-```
+1. copies Hermes into `build/hermes-runtime` without `.git`, venvs, caches, sessions, or logs;
+2. builds the Electron main/preload/renderer output;
+3. packages `agent-UI.app` with `build/hermes-runtime` as app resources.
 
-`hermes gateway start` is for the background launchd/systemd service manager.
+## Runtime Gateway Behavior
+
+agent-UI uses the Hermes local desktop gateway. It does not spawn `hermes chat` or keep a local copy of conversation history.
+
+On app startup/use, agent-UI:
+
+1. creates `~/.agent-ui/local-desktop-gateway.env` if needed;
+2. enables `platforms.local_desktop` in the active Hermes `config.yaml`;
+3. reads `LOCAL_DESKTOP_GATEWAY_KEY`, host, and port from that env file;
+4. checks `GET /health` on the local gateway;
+5. starts `hermes gateway run` if the gateway is not already running;
+6. connects to `/events` and posts prompts to `/messages`.
 
 `GET /health` is unauthenticated. `POST /messages` and `GET /events` require `Authorization: Bearer <LOCAL_DESKTOP_GATEWAY_KEY>`.
 
-## agent-UI Gateway Config
-
-agent-UI reads the same gateway key by default:
+Useful overrides:
 
 ```bash
-export LOCAL_DESKTOP_GATEWAY_KEY="<same value used by Hermes>"
-```
-
-For local AURA development on this machine, the generated env file can be loaded before starting either process:
-
-```bash
-set -a
-source ~/.agent-ui/local-desktop-gateway.env
-set +a
-```
-
-You can override the desktop client side without changing Hermes:
-
-```bash
-export AGENT_UI_HERMES_GATEWAY_KEY="<gateway secret>"
+export AGENT_UI_HERMES_BIN=/path/to/hermes
+export AGENT_UI_HERMES_HOME=~/.agent-ui/hermes-home
 export AGENT_UI_HERMES_GATEWAY_URL=http://127.0.0.1:8766
-```
-
-Transport modes:
-
-```bash
-export AGENT_UI_HERMES_TRANSPORT=gateway  # default; fail if gateway is unavailable
-export AGENT_UI_HERMES_TRANSPORT=auto     # try gateway, then fall back to CLI
-export AGENT_UI_HERMES_TRANSPORT=cli      # force aura-hermes chat spawning
+export AGENT_UI_HERMES_GATEWAY_KEY="<gateway secret>"
+export AGENT_UI_HERMES_GATEWAY_AUTOSTART=0
 ```
 
 Gateway mode behavior:
 
 - Uses the current pet `catId` as the stable Hermes `conversation_id`.
-- Stores conversation mappings and last SSE sequence in `~/.agent-ui/hermes-gateway.json`.
+- Stores only the last SSE sequence in `~/.agent-ui/hermes-gateway.json` so missed gateway events can replay; conversation content stays with Hermes.
 - Sends the first prompt with the existing tagged context metadata.
+- Sends first-message slash commands such as `/background ...` without the context wrapper so Hermes can dispatch them normally.
 - Sends follow-ups as plain text while Hermes owns same-session busy behavior.
-- Sends cancel/background commands through Hermes slash commands (`/stop`, `/background <prompt>`).
 - Reconnects SSE from the last recorded sequence; if the replay window expired, it reconnects live and adds a local sync-gap error item.
-
-## CLI Fallback
-
-CLI mode shells out to Hermes through `aura-hermes chat` and keeps the old local busy-session behavior. It needs an executable wrapper at `/Users/saminkhan1/Documents/jarvis/script/aura-hermes`.
-
-To use a different wrapper in `cli` or `auto` fallback mode:
-
-```bash
-export AGENT_UI_HERMES_BIN=/path/to/aura-hermes
-```
 
 ## Clone And Install
 
@@ -118,8 +108,6 @@ Use dev mode while working on the app:
 ```bash
 npm run dev
 ```
-
-If you are using gateway mode, start Hermes Gateway before launching agent-UI.
 
 Build and preview the production bundle:
 
@@ -144,19 +132,37 @@ agent-ui
 
 If the built app is missing, run `npm run build` from the repo root.
 
-## Use
+## Manual Test Checklist
 
-- Press `Cmd+Shift+C` on macOS or `Ctrl+Shift+C` elsewhere.
-- Enter or dictate the task.
-- Submit with `Enter` or the start button.
-- Use the pet stack to open details, send follow-ups, or dismiss completed work.
-- In gateway mode, follow-ups can be sent while Hermes is still running. In CLI mode, follow-ups stay disabled until the child process finishes and a Hermes session id is available.
+1. Open `dist/mac*/agent-UI.app` or unzip/open the packaged `dist/agent-UI-*.zip`.
+2. Confirm the app starts without requiring a terminal.
+3. In the app or tray menu, choose `Settings > Input Mode > Text`.
+4. Press `Cmd+Shift+C`.
+5. Enter a short prompt and submit.
+6. Confirm a pet/session appears and streams Hermes output.
+7. Open details and send a follow-up.
+8. In the app or tray menu, choose `Settings > Input Mode > Voice`.
+9. Press `Cmd+Shift+C`, grant macOS microphone permission if prompted, and confirm the prompt window shows voice recording/transcribing state.
+10. Confirm the transcribed prompt appears in the text box, edit it if needed, then submit it to start a new session.
+11. Quit/reopen the app and confirm the selected input mode and gateway reconnect path do not show a startup error.
+
+Known first-run cases to check:
+
+- If Hermes has no provider configured, the conversation details should show the actionable Hermes setup/login error instead of a generic failure.
+- If microphone permission is missing, the UI should show a recoverable voice error.
 
 ## Verify
 
 ```bash
 npm test
 npm run build
+npm run bundle:hermes
+npm run dist:mac
 ```
 
-The gateway client is part of the Electron main process bundle. `npm run build` should emit `out/main/hermes-gateway-client.js`.
+The gateway client/runtime are part of the Electron main process bundle. `npm run build` should emit:
+
+```text
+out/main/hermes-gateway-client.js
+out/main/hermes-runtime.js
+```
