@@ -1901,6 +1901,33 @@ app.whenReady().then(() => {
       },
       listConversations: async () => ({ ok: true, conversations: listAgentConversations() }),
       getUiTargets: async () => getEvalUiTargets(),
+      start: async (payload = {}) => {
+        const catId = normalizeCatId(payload.catId);
+        return startCatRunFromPayload(payload, {
+          catId: catId || undefined,
+          closeModal: payload.closeModal !== false,
+        });
+      },
+      followup: async ({ catId, text } = {}) => {
+        const id = normalizeCatId(catId);
+        if (!id) return { ok: false, error: 'missing cat id' };
+        return sendFollowup(id, boundedText(text), { getMainWindow: () => mainWindow, log: console });
+      },
+      cancel: async ({ catId } = {}) => {
+        const id = normalizeCatId(catId);
+        if (!id) return { ok: false, error: 'missing cat id' };
+        return cancelAgent(id, { getMainWindow: () => mainWindow, log: console });
+      },
+      openConversation: async ({ catId } = {}) => {
+        const id = normalizeCatId(catId);
+        if (!id) return { ok: false, error: 'missing cat id' };
+        openConversationWindow(id);
+        return { ok: true, catId: id };
+      },
+      setInputMode: async ({ mode } = {}) => {
+        setSelectedInputMode(mode);
+        return { ok: true, inputMode: selectedInputMode };
+      },
       wait: async (payload = {}) => waitForEvalCat(payload),
       getTrace: async () => getTrace(),
       closeModal: async () => closeEvalModal(),

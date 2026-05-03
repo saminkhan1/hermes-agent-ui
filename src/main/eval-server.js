@@ -44,53 +44,77 @@ function writeEvalPortFile(port) {
   fs.writeFileSync(file, `${port}\n`, 'utf8');
 }
 
+async function handleEvalRequest(req, res, handlers) {
+  try {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    if (req.method === 'GET' && url.pathname === '/health') {
+      sendEvalJson(res, 200, { ok: true, app: 'agent-UI', eval: true });
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/conversation') {
+      sendEvalJson(res, 200, await handlers.getConversation(url.searchParams.get('catId')));
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/conversations') {
+      sendEvalJson(res, 200, await handlers.listConversations());
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/ui-targets') {
+      sendEvalJson(res, 200, await handlers.getUiTargets());
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/start') {
+      sendEvalJson(res, 200, await handlers.start(await readEvalJson(req)));
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/followup') {
+      sendEvalJson(res, 200, await handlers.followup(await readEvalJson(req)));
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/cancel') {
+      sendEvalJson(res, 200, await handlers.cancel(await readEvalJson(req)));
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/open-conversation') {
+      sendEvalJson(res, 200, await handlers.openConversation(await readEvalJson(req)));
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/set-input-mode') {
+      sendEvalJson(res, 200, await handlers.setInputMode(await readEvalJson(req)));
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/wait') {
+      sendEvalJson(res, 200, await handlers.wait(await readEvalJson(req)));
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/trace') {
+      sendEvalJson(res, 200, await handlers.getTrace());
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/close-modal') {
+      sendEvalJson(res, 200, await handlers.closeModal());
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/dismiss') {
+      sendEvalJson(res, 200, await handlers.dismiss(await readEvalJson(req)));
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/shutdown') {
+      sendEvalJson(res, 200, { ok: true });
+      setTimeout(() => handlers.shutdown(), 25);
+      return;
+    }
+    sendEvalJson(res, 404, { ok: false, error: 'not found' });
+  } catch (e) {
+    sendEvalJson(res, 500, { ok: false, error: (e && e.message) || String(e) });
+  }
+}
+
 function startAgentUIEvalServer(handlers, log = console) {
   if (process.env.AGENT_UI_EVAL !== '1') return null;
 
-  const server = http.createServer(async (req, res) => {
-    try {
-      const url = new URL(req.url || '/', 'http://127.0.0.1');
-      if (req.method === 'GET' && url.pathname === '/health') {
-        sendEvalJson(res, 200, { ok: true, app: 'agent-UI', eval: true });
-        return;
-      }
-      if (req.method === 'GET' && url.pathname === '/conversation') {
-        sendEvalJson(res, 200, await handlers.getConversation(url.searchParams.get('catId')));
-        return;
-      }
-      if (req.method === 'GET' && url.pathname === '/conversations') {
-        sendEvalJson(res, 200, await handlers.listConversations());
-        return;
-      }
-      if (req.method === 'GET' && url.pathname === '/ui-targets') {
-        sendEvalJson(res, 200, await handlers.getUiTargets());
-        return;
-      }
-      if (req.method === 'POST' && url.pathname === '/wait') {
-        sendEvalJson(res, 200, await handlers.wait(await readEvalJson(req)));
-        return;
-      }
-      if (req.method === 'GET' && url.pathname === '/trace') {
-        sendEvalJson(res, 200, await handlers.getTrace());
-        return;
-      }
-      if (req.method === 'POST' && url.pathname === '/close-modal') {
-        sendEvalJson(res, 200, await handlers.closeModal());
-        return;
-      }
-      if (req.method === 'POST' && url.pathname === '/dismiss') {
-        sendEvalJson(res, 200, await handlers.dismiss(await readEvalJson(req)));
-        return;
-      }
-      if (req.method === 'POST' && url.pathname === '/shutdown') {
-        sendEvalJson(res, 200, { ok: true });
-        setTimeout(() => handlers.shutdown(), 25);
-        return;
-      }
-      sendEvalJson(res, 404, { ok: false, error: 'not found' });
-    } catch (e) {
-      sendEvalJson(res, 500, { ok: false, error: (e && e.message) || String(e) });
-    }
+  const server = http.createServer((req, res) => {
+    void handleEvalRequest(req, res, handlers);
   });
 
   const port = Number(process.env.AGENT_UI_EVAL_PORT || 0);
@@ -114,4 +138,7 @@ function startAgentUIEvalServer(handlers, log = console) {
 
 module.exports = {
   startAgentUIEvalServer,
+  _test: {
+    handleEvalRequest,
+  },
 };
