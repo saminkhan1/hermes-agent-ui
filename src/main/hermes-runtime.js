@@ -606,7 +606,7 @@ function gatewayAutostartEnabled() {
 }
 
 function gatewayArgsFor(command) {
-  return ['gateway', 'run'];
+  return ['gateway', 'run', '--replace'];
 }
 
 async function ensureGatewayProcess(log = console) {
@@ -697,6 +697,7 @@ module.exports = {
   executableExists,
   gatewayAuthOk,
   gatewayReadyOk,
+  gatewayArgsFor,
   hermesCwd,
   nextAvailableGatewayPort,
   parseTranscriptionJson,

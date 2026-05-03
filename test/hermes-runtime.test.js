@@ -14,6 +14,7 @@ const {
   ensureGatewayEnvFile,
   ensureGatewayProcess,
   gatewayAuthOk,
+  gatewayArgsFor,
   gatewayReadyOk,
   resolveHermesCommand,
   stopGatewayProcess,
@@ -159,6 +160,10 @@ test('ensureGatewayProcess rotates the gateway port when the preferred port is o
   assert.match(result.error, /Hermes executable is missing/);
   assert.doesNotMatch(env, new RegExp(`LOCAL_DESKTOP_PORT=${blockedPort}\\b`));
   assert.match(env, /LOCAL_DESKTOP_PORT=\d+/);
+});
+
+test('gateway autostart uses replace mode for quit/reopen recovery', () => {
+  assert.deepEqual(gatewayArgsFor('/path/to/hermes'), ['gateway', 'run', '--replace']);
 });
 
 test('resolveHermesCommand prefers explicit override', (t) => {
