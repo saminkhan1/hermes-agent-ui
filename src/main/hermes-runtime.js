@@ -19,6 +19,10 @@ const GATEWAY_AUTOSTART_ENV = 'AGENT_UI_HERMES_GATEWAY_AUTOSTART';
 const LOCAL_DESKTOP_USER = 'local';
 const LOCAL_DESKTOP_PLATFORM = 'local_desktop';
 const SAFE_RUNTIME_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
+const GATEWAY_READY_ATTEMPTS = 80;
+const GATEWAY_READY_INTERVAL_MS = 250;
+const GATEWAY_READY_REQUEST_TIMEOUT_MS = 500;
+const GATEWAY_OUTPUT_TAIL_CHARS = 4000;
 
 let gatewayProcess = null;
 let gatewayStartPromise = null;
@@ -609,6 +613,26 @@ function gatewayArgsFor(command) {
   return ['gateway', 'run', '--replace'];
 }
 
+function gatewayStartupWaitBudgetMs() {
+  return GATEWAY_READY_ATTEMPTS * GATEWAY_READY_INTERVAL_MS;
+}
+
+function appendOutputTail(current, chunk) {
+  return `${current}${String(chunk || '')}`.slice(-GATEWAY_OUTPUT_TAIL_CHARS);
+}
+
+function gatewayStartupFailureMessage(baseUrl, childExit, stdoutTail, stderrTail) {
+  const parts = [`Hermes gateway did not become ready at ${baseUrl}.`];
+  if (childExit) {
+    parts.push(`Process exited with code ${childExit.code == null ? 'unknown' : childExit.code}${childExit.signal ? ` (${childExit.signal})` : ''}.`);
+  }
+  const stderr = String(stderrTail || '').trim();
+  const stdout = String(stdoutTail || '').trim();
+  if (stderr) parts.push(`Last stderr: ${stderr}`);
+  if (!stderr && stdout) parts.push(`Last stdout: ${stdout}`);
+  return parts.join(' ');
+}
+
 async function ensureGatewayProcess(log = console) {
   if (!gatewayAutostartEnabled()) return { ok: false, skipped: true, reason: 'autostart disabled' };
   let { env: gatewayEnv } = ensureGatewayEnvFile();
@@ -651,9 +675,19 @@ async function ensureGatewayProcess(log = console) {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     gatewayProcess = child;
-    child.stdout.on('data', (chunk) => log.log('[agent-ui] Hermes gateway:', String(chunk).trim()));
-    child.stderr.on('data', (chunk) => log.warn('[agent-ui] Hermes gateway:', String(chunk).trim()));
+    let stdoutTail = '';
+    let stderrTail = '';
+    let childExit = null;
+    child.stdout.on('data', (chunk) => {
+      stdoutTail = appendOutputTail(stdoutTail, chunk);
+      log.log('[agent-ui] Hermes gateway:', String(chunk).trim());
+    });
+    child.stderr.on('data', (chunk) => {
+      stderrTail = appendOutputTail(stderrTail, chunk);
+      log.warn('[agent-ui] Hermes gateway:', String(chunk).trim());
+    });
     child.once('exit', (code, signal) => {
+      childExit = { code, signal };
       if (gatewayProcess === child) gatewayProcess = null;
       log.warn('[agent-ui] Hermes gateway exited', { code, signal });
     });
@@ -662,13 +696,18 @@ async function ensureGatewayProcess(log = console) {
       log.warn('[agent-ui] Hermes gateway launch failed', error && error.message ? error.message : error);
     });
 
-    for (let i = 0; i < 20; i += 1) {
-      if (await gatewayReadyOk(baseUrl, gatewayEnv.LOCAL_DESKTOP_GATEWAY_KEY, 500)) {
+    for (let i = 0; i < GATEWAY_READY_ATTEMPTS; i += 1) {
+      if (await gatewayReadyOk(baseUrl, gatewayEnv.LOCAL_DESKTOP_GATEWAY_KEY, GATEWAY_READY_REQUEST_TIMEOUT_MS)) {
         return { ok: true, started: true, baseUrl, pid: child.pid || null };
       }
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      if (childExit) break;
+      await new Promise((resolve) => setTimeout(resolve, GATEWAY_READY_INTERVAL_MS));
     }
-    return { ok: false, error: `Hermes gateway did not become ready at ${baseUrl}.`, pid: child.pid || null };
+    return {
+      ok: false,
+      error: gatewayStartupFailureMessage(baseUrl, childExit, stdoutTail, stderrTail),
+      pid: child.pid || null,
+    };
   })();
   try {
     return await gatewayStartPromise;
@@ -698,6 +737,7 @@ module.exports = {
   gatewayAuthOk,
   gatewayReadyOk,
   gatewayArgsFor,
+  gatewayStartupWaitBudgetMs,
   hermesCwd,
   nextAvailableGatewayPort,
   parseTranscriptionJson,

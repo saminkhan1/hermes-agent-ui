@@ -87,7 +87,7 @@ On app startup/use, agent-UI:
 2. enables `platforms.local_desktop` in the active Hermes `config.yaml`;
 3. reads `LOCAL_DESKTOP_GATEWAY_KEY`, host, and port from that env file;
 4. checks unauthenticated `GET /health` plus a side-effect-free authenticated `POST /messages` schema probe on the local gateway;
-5. starts `hermes gateway run --replace` if the gateway is not already running with agent-UI's key, so quit/reopen can recover from a stale gateway lock or surviving child process;
+5. starts `hermes gateway run --replace` if the gateway is not already running with agent-UI's key, and waits through Hermes' replacement window so quit/reopen can recover from a stale gateway lock or surviving child process;
 6. connects to `/events` and posts prompts to `/messages`.
 
 If the default local port is occupied by another process or by a Hermes gateway using a different key, agent-UI automatically moves its bundled gateway to the next available loopback port and rewrites `~/.agent-ui/local-desktop-gateway.env`.

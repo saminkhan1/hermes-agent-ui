@@ -16,6 +16,7 @@ const {
   gatewayAuthOk,
   gatewayArgsFor,
   gatewayReadyOk,
+  gatewayStartupWaitBudgetMs,
   resolveHermesCommand,
   stopGatewayProcess,
 } = require('../src/main/hermes-runtime');
@@ -164,6 +165,10 @@ test('ensureGatewayProcess rotates the gateway port when the preferred port is o
 
 test('gateway autostart uses replace mode for quit/reopen recovery', () => {
   assert.deepEqual(gatewayArgsFor('/path/to/hermes'), ['gateway', 'run', '--replace']);
+});
+
+test('gateway autostart wait covers Hermes replace takeover window', () => {
+  assert.ok(gatewayStartupWaitBudgetMs() >= 20_000);
 });
 
 test('resolveHermesCommand prefers explicit override', (t) => {
