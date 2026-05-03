@@ -3,16 +3,20 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const net = require('net');
 const os = require('os');
 const path = require('path');
 
 const {
   defaultHermesHome,
+  effectiveGatewayHermesHome,
   ensureGatewayConfigFile,
   ensureGatewayEnvFile,
+  ensureGatewayProcess,
   gatewayAuthOk,
   gatewayReadyOk,
   resolveHermesCommand,
+  stopGatewayProcess,
 } = require('../src/main/hermes-runtime');
 
 const originalEnv = { ...process.env };
@@ -36,8 +40,10 @@ test('defaultHermesHome uses the real user home instead of sandbox HOME', (t) =>
   isolateEnv(t);
   const poisonedHome = path.join(os.userInfo().homedir, 'Documents', 'jarvis', '.aura', 'home');
   process.env.HOME = poisonedHome;
+  process.env.HERMES_HOME = path.join(poisonedHome, 'hermes-home');
 
   assert.equal(defaultHermesHome(), path.join(os.userInfo().homedir, '.agent-ui', 'hermes-home'));
+  assert.equal(effectiveGatewayHermesHome(), path.join(os.userInfo().homedir, '.agent-ui', 'hermes-home'));
 });
 
 test('ensureGatewayEnvFile creates a local desktop gateway env file with a stable secret', (t) => {
@@ -129,6 +135,32 @@ test('ensureGatewayConfigFile re-enables an existing local desktop block', (t) =
   assert.match(body, /local_desktop:\n    enabled: true\n    extra:\n      outbox_retention_days: 3/);
 });
 
+test('ensureGatewayProcess rotates the gateway port when the preferred port is occupied', async (t) => {
+  isolateEnv(t);
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-runtime-port-'));
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-runtime-home-'));
+  const blocker = net.createServer();
+  await new Promise((resolve) => blocker.listen({ host: '127.0.0.1', port: 0, exclusive: true }, resolve));
+  t.after(() => {
+    stopGatewayProcess();
+    blocker.close();
+  });
+
+  const blockedPort = blocker.address().port;
+  process.env.AGENT_UI_CONFIG_DIR = configDir;
+  process.env.AGENT_UI_HERMES_HOME = homeDir;
+  process.env.AGENT_UI_HERMES_BIN = path.join(configDir, 'missing-hermes');
+  ensureGatewayEnvFile({ LOCAL_DESKTOP_PORT: String(blockedPort) });
+
+  const result = await ensureGatewayProcess({ warn() {}, log() {} });
+  const env = fs.readFileSync(path.join(configDir, 'local-desktop-gateway.env'), 'utf8');
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /Hermes executable is missing/);
+  assert.doesNotMatch(env, new RegExp(`LOCAL_DESKTOP_PORT=${blockedPort}\\b`));
+  assert.match(env, /LOCAL_DESKTOP_PORT=\d+/);
+});
+
 test('resolveHermesCommand prefers explicit override', (t) => {
   isolateEnv(t);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-hermes-bin-'));
@@ -142,16 +174,53 @@ test('resolveHermesCommand prefers explicit override', (t) => {
   assert.equal(resolved.configured, true);
 });
 
-test('bundled Hermes launcher installs gateway and voice extras and repairs old venvs', () => {
+test('resolveHermesCommand does not fall back to PATH or Jarvis Hermes', (t) => {
+  isolateEnv(t);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-fake-path-'));
+  const fakeHermes = path.join(dir, 'hermes');
+  fs.writeFileSync(fakeHermes, '#!/bin/sh\necho fake\n', { mode: 0o755 });
+  process.env.PATH = dir;
+
+  const resolved = resolveHermesCommand();
+
+  assert.notEqual(resolved.command, fakeHermes);
+  assert.equal(resolved.configured, false);
+  if (resolved.command) {
+    assert.match(resolved.command, /build\/hermes-runtime\/bin\/hermes$|Resources\/hermes-runtime\/bin\/hermes$/);
+  }
+});
+
+test('bundled Hermes launcher uses only prebuilt runtime artifacts', () => {
   const bundler = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'bundle-hermes-runtime.js'), 'utf8');
 
-  assert.match(bundler, /package_spec="\$SRC_DIR\[voice,messaging\]"/);
-  assert.match(bundler, /EMBEDDED_VENV_DIR="\$ROOT_DIR\/venv"/);
-  assert.match(bundler, /buildEmbeddedVenv\(\)/);
-  assert.match(bundler, /runtime_deps_available\(\)/);
+  assert.match(bundler, /buildEmbeddedPython\(\)/);
+  assert.match(bundler, /uv', \['pip', 'install'/);
+  assert.match(bundler, /python\/bin\/python3/);
   assert.match(bundler, /"aiohttp", "yaml", "openai", "rich", "sounddevice", "numpy", "faster_whisper"/);
-  assert.match(bundler, /elif ! runtime_deps_available; then/);
-  assert.match(bundler, /PYTHONPATH="\$SRC_DIR/);
+  assert.match(bundler, /embeddedVoiceRuntimeInfo/);
+  assert.match(bundler, /libportaudio\.dylib/);
+  assert.match(bundler, /AGENT_UI_BUNDLED_PYTHON_ROOT/);
+  assert.doesNotMatch(bundler, /USER_VENV_DIR/);
+  assert.doesNotMatch(bundler, /HERMES_RUNTIME_VENV/);
+  assert.doesNotMatch(bundler, /command -v uv/);
+  assert.doesNotMatch(bundler, /\/usr\/bin\/python3 -m venv/);
+  assert.doesNotMatch(bundler, /pip install "\$package_spec"/);
+  assert.match(bundler, /PYTHONDONTWRITEBYTECODE=1/);
+  assert.match(bundler, /PYTHONPATH="\$SRC_DIR"/);
+});
+
+test('Hermes bundler overlays the app-owned local desktop platform', () => {
+  const bundler = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'bundle-hermes-runtime.js'), 'utf8');
+  const pluginDir = path.join(__dirname, '..', 'vendor', 'hermes-platforms', 'local_desktop');
+  const manifest = fs.readFileSync(path.join(pluginDir, 'plugin.yaml'), 'utf8');
+  const adapter = fs.readFileSync(path.join(pluginDir, 'adapter.py'), 'utf8');
+
+  assert.match(manifest, /^kind: platform$/m);
+  assert.match(adapter, /name="local_desktop"/);
+  assert.match(adapter, /LOCAL_DESKTOP_GATEWAY_KEY/);
+  assert.match(bundler, /vendor', 'hermes-platforms'/);
+  assert.match(bundler, /plugins', 'platforms', overlay\.name/);
+  assert.match(bundler, /hermesPlatformOverlays/);
 });
 
 test('gateway readiness requires authenticated local desktop message access', async (t) => {

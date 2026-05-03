@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
@@ -17,6 +18,11 @@ function realUserHomeDir() {
 
 const repoRoot = path.resolve(__dirname, '..');
 const outRoot = path.join(repoRoot, 'build', 'hermes-runtime');
+const buildVenvDir = path.join(repoRoot, 'build', 'hermes-runtime-build-venv');
+const pythonRoot = path.join(outRoot, 'python');
+const hermesReleaseTag = 'v2026.4.30';
+const hermesReleaseUrl = 'https://github.com/NousResearch/hermes-agent/releases/tag/v2026.4.30';
+const platformOverlayRoot = path.join(repoRoot, 'vendor', 'hermes-platforms');
 const source = path.resolve(
   process.env.HERMES_BUNDLE_SOURCE ||
   path.join(realUserHomeDir(), 'Documents', 'jarvis', '.aura', 'hermes-agent')
@@ -24,6 +30,7 @@ const source = path.resolve(
 
 const ignoredNames = new Set([
   '.git',
+  '.github',
   '.mypy_cache',
   '.pytest_cache',
   '.ruff_cache',
@@ -36,6 +43,15 @@ const ignoredNames = new Set([
   'cache',
 ]);
 
+const pythonCopyIgnoredNames = new Set([
+  '__pycache__',
+  '.mypy_cache',
+  '.pytest_cache',
+  '.ruff_cache',
+  'test',
+  'tests',
+]);
+
 function rmrf(target) {
   fs.rmSync(target, { recursive: true, force: true });
 }
@@ -44,24 +60,124 @@ function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
-function copyTree(src, dst) {
-  const st = fs.statSync(src);
+function copyTree(src, dst, opts = {}) {
+  const st = fs.lstatSync(src);
+  if (st.isSymbolicLink()) {
+    if (opts.preserveSymlinks) {
+      const link = fs.readlinkSync(src);
+      ensureDir(path.dirname(dst));
+      fs.symlinkSync(link, dst);
+      return;
+    }
+    copyTree(fs.realpathSync(src), dst, opts);
+    return;
+  }
   if (st.isDirectory()) {
-    if (ignoredNames.has(path.basename(src))) return;
+    const ignored = opts.ignoredNames || ignoredNames;
+    if (ignored.has(path.basename(src))) return;
     ensureDir(dst);
     for (const entry of fs.readdirSync(src)) {
-      copyTree(path.join(src, entry), path.join(dst, entry));
+      copyTree(path.join(src, entry), path.join(dst, entry), opts);
     }
     return;
   }
   if (!st.isFile()) return;
   ensureDir(path.dirname(dst));
   fs.copyFileSync(src, dst);
+  fs.chmodSync(dst, st.mode & 0o777);
+}
+
+function treeSha256(root) {
+  const hash = crypto.createHash('sha256');
+  const normalizedRoot = path.resolve(root);
+
+  function walk(dir) {
+    for (const entry of fs.readdirSync(dir).sort()) {
+      const full = path.join(dir, entry);
+      if (ignoredNames.has(path.basename(full))) continue;
+      const st = fs.lstatSync(full);
+      const rel = path.relative(normalizedRoot, full).split(path.sep).join('/');
+      if (st.isSymbolicLink()) {
+        hash.update(`L\0${rel}\0${fs.readlinkSync(full)}\0`);
+        continue;
+      }
+      if (st.isDirectory()) {
+        hash.update(`D\0${rel}\0`);
+        walk(full);
+        continue;
+      }
+      if (!st.isFile()) continue;
+      hash.update(`F\0${rel}\0${st.mode & 0o777}\0`);
+      hash.update(fs.readFileSync(full));
+      hash.update('\0');
+    }
+  }
+
+  walk(normalizedRoot);
+  return hash.digest('hex');
+}
+
+function vendoredPlatformOverlays() {
+  if (!fs.existsSync(platformOverlayRoot)) return [];
+  const overlays = [];
+  for (const entry of fs.readdirSync(platformOverlayRoot).sort()) {
+    const src = path.join(platformOverlayRoot, entry);
+    if (!fs.lstatSync(src).isDirectory()) continue;
+    const manifest = path.join(src, 'plugin.yaml');
+    const init = path.join(src, '__init__.py');
+    if (!fs.existsSync(manifest) || !fs.existsSync(init)) {
+      throw new Error(`Hermes platform overlay ${entry} must contain plugin.yaml and __init__.py`);
+    }
+    overlays.push({
+      name: entry,
+      source: src,
+      sha256: treeSha256(src),
+    });
+  }
+  return overlays;
+}
+
+function copyVendoredPlatformOverlays(hermesRoot) {
+  const overlays = vendoredPlatformOverlays();
+  for (const overlay of overlays) {
+    const dst = path.join(hermesRoot, 'plugins', 'platforms', overlay.name);
+    if (fs.existsSync(dst)) {
+      throw new Error(`Hermes release already contains plugins/platforms/${overlay.name}; remove the app-owned overlay before updating the pinned release.`);
+    }
+    copyTree(overlay.source, dst);
+    overlay.target = path.relative(outRoot, dst);
+  }
+  return overlays;
 }
 
 function gitHead(dir) {
   const res = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' });
   return res.status === 0 ? res.stdout.trim() : 'unknown';
+}
+
+function gitOutput(dir, args) {
+  const res = spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+  return res.status === 0 ? res.stdout.trim() : '';
+}
+
+function verifyHermesSource(dir) {
+  const head = gitHead(dir);
+  const releaseHead = gitOutput(dir, ['rev-parse', `${hermesReleaseTag}^{commit}`]);
+  const dirty = gitOutput(dir, ['status', '--porcelain']);
+  const allowNonRelease = String(process.env.HERMES_BUNDLE_ALLOW_NON_RELEASE || '').trim() === '1';
+  if (head === 'unknown' || !releaseHead) {
+    throw new Error(`Hermes source must be a git checkout with ${hermesReleaseTag}: ${dir}`);
+  }
+  if (!allowNonRelease && head !== releaseHead) {
+    throw new Error(`Hermes source must be checked out at ${hermesReleaseTag} (${releaseHead}); got ${head}. Set HERMES_BUNDLE_SOURCE to a clean release checkout.`);
+  }
+  if (!allowNonRelease && dirty) {
+    throw new Error(`Hermes source must be clean for release bundling:\n${dirty}`);
+  }
+  if (allowNonRelease) {
+    console.warn(`[agent-ui] WARNING: bundling non-release or dirty Hermes source from ${dir}`);
+  }
+  return { head, releaseHead, dirty: !!dirty };
 }
 
 function runChecked(command, args, opts = {}) {
@@ -81,24 +197,24 @@ function runtimePython(venvDir) {
   return path.join(venvDir, 'bin', 'python3');
 }
 
-function createVenv(venvDir) {
+function createBuildVenv(venvDir) {
   if (fs.existsSync(runtimePython(venvDir))) return;
+  const requestedPython = String(process.env.HERMES_BUNDLE_PYTHON || '3.13').trim();
   if (spawnSync('uv', ['--version'], { encoding: 'utf8' }).status === 0) {
-    runChecked('uv', ['venv', venvDir]);
+    runChecked('uv', ['venv', '--python', requestedPython, '--managed-python', '--link-mode', 'copy', venvDir]);
     return;
   }
-  runChecked('/usr/bin/python3', ['-m', 'venv', venvDir]);
-  runChecked(runtimePython(venvDir), ['-m', 'pip', 'install', '--upgrade', 'pip']);
+  throw new Error('uv is required to create the bundled, redistributable Python runtime. Install uv for release builds.');
 }
 
 function installRuntimeDeps(venvDir) {
   const py = runtimePython(venvDir);
   const packageSpec = `${path.join(outRoot, 'hermes-agent')}[voice,messaging]`;
   if (spawnSync('uv', ['--version'], { encoding: 'utf8' }).status === 0) {
-    runChecked('uv', ['pip', 'install', '--python', py, packageSpec]);
+    runChecked('uv', ['pip', 'install', '--python', py, '--link-mode', 'copy', '--compile-bytecode', packageSpec]);
     return;
   }
-  runChecked(py, ['-m', 'pip', 'install', packageSpec]);
+  throw new Error('uv is required to pre-resolve Hermes runtime dependencies for the distributable.');
 }
 
 function verifyRuntimeDeps(venvDir) {
@@ -109,11 +225,104 @@ function verifyRuntimeDeps(venvDir) {
   ].join('\n')]);
 }
 
-function buildEmbeddedVenv() {
-  const venvDir = path.join(outRoot, 'venv');
-  createVenv(venvDir);
-  installRuntimeDeps(venvDir);
-  verifyRuntimeDeps(venvDir);
+function embeddedVoiceRuntimeInfo(python) {
+  const code = [
+    'import json, os, pathlib, sounddevice',
+    'root = pathlib.Path(os.environ["AGENT_UI_BUNDLED_PYTHON_ROOT"]).resolve()',
+    'lib = pathlib.Path(str(getattr(sounddevice, "_libname", ""))).resolve()',
+    'inside = str(lib).startswith(str(root) + os.sep)',
+    'ok = lib.name == "libportaudio.dylib" and lib.exists() and inside',
+    'print(json.dumps({"ok": ok, "sounddevicePortAudio": str(lib), "insidePythonRoot": inside}))',
+    'raise SystemExit(0 if ok else 1)',
+  ].join('\n');
+  const res = spawnSync(python, ['-c', code], {
+    cwd: repoRoot,
+    env: { ...process.env, AGENT_UI_BUNDLED_PYTHON_ROOT: pythonRoot },
+    encoding: 'utf8',
+  });
+  if (res.status !== 0) {
+    throw new Error(`bundled voice runtime is missing bundled PortAudio:\n${res.stderr || res.stdout}`);
+  }
+  return JSON.parse(res.stdout);
+}
+
+function pythonInfo(python) {
+  const code = [
+    'import json, site, sys, sysconfig',
+    'print(json.dumps({',
+    '  "basePrefix": sys.base_prefix,',
+    '  "executable": sys.executable,',
+    '  "major": sys.version_info.major,',
+    '  "minor": sys.version_info.minor,',
+    '  "micro": sys.version_info.micro,',
+    '  "purelib": sysconfig.get_path("purelib"),',
+    '  "sitePackages": site.getsitepackages(),',
+    '}))',
+  ].join('\n');
+  const res = spawnSync(python, ['-c', code], { encoding: 'utf8' });
+  if (res.status !== 0) {
+    throw new Error(`failed to inspect Python runtime: ${res.stderr || res.stdout}`);
+  }
+  return JSON.parse(res.stdout);
+}
+
+function verifyNoEscapingSymlinks(root) {
+  const escaped = [];
+  function walk(dir) {
+    for (const entry of fs.readdirSync(dir)) {
+      const full = path.join(dir, entry);
+      const st = fs.lstatSync(full);
+      if (st.isSymbolicLink()) {
+        const target = fs.readlinkSync(full);
+        if (path.isAbsolute(target) && !path.resolve(target).startsWith(path.resolve(root) + path.sep)) {
+          escaped.push(`${path.relative(root, full)} -> ${target}`);
+        }
+        continue;
+      }
+      if (st.isDirectory()) walk(full);
+    }
+  }
+  walk(root);
+  if (escaped.length) {
+    throw new Error(`bundled runtime contains absolute symlinks that escape the bundle:\n${escaped.join('\n')}`);
+  }
+}
+
+function buildEmbeddedPython() {
+  rmrf(buildVenvDir);
+  createBuildVenv(buildVenvDir);
+  installRuntimeDeps(buildVenvDir);
+  verifyRuntimeDeps(buildVenvDir);
+
+  const py = runtimePython(buildVenvDir);
+  const info = pythonInfo(py);
+  if (info.major < 3 || (info.major === 3 && info.minor < 11)) {
+    throw new Error(`Hermes runtime requires Python >= 3.11; got ${info.major}.${info.minor}.${info.micro}`);
+  }
+  if (!info.basePrefix || !fs.existsSync(info.basePrefix)) {
+    throw new Error(`Cannot locate redistributable Python base prefix: ${info.basePrefix || '(empty)'}`);
+  }
+
+  copyTree(info.basePrefix, pythonRoot, { ignoredNames: pythonCopyIgnoredNames, preserveSymlinks: true });
+  const pythonVersionDir = `python${info.major}.${info.minor}`;
+  const embeddedSitePackages = path.join(pythonRoot, 'lib', pythonVersionDir, 'site-packages');
+  rmrf(embeddedSitePackages);
+  copyTree(info.purelib, embeddedSitePackages, { ignoredNames: pythonCopyIgnoredNames, preserveSymlinks: true });
+  verifyNoEscapingSymlinks(pythonRoot);
+  runChecked(path.join(pythonRoot, 'bin', 'python3'), ['-c', [
+    'import importlib.util, json, sys',
+    'missing = [name for name in ("aiohttp", "yaml", "openai", "rich", "sounddevice", "numpy", "faster_whisper") if importlib.util.find_spec(name) is None]',
+    'print(json.dumps({"ok": not missing, "missing": missing, "version": sys.version}))',
+    'raise SystemExit(1 if missing else 0)',
+  ].join('\n')]);
+  const voiceRuntime = embeddedVoiceRuntimeInfo(path.join(pythonRoot, 'bin', 'python3'));
+  rmrf(buildVenvDir);
+  return {
+    version: `${info.major}.${info.minor}.${info.micro}`,
+    basePrefix: info.basePrefix,
+    sitePackages: path.relative(outRoot, embeddedSitePackages),
+    voiceRuntime,
+  };
 }
 
 function writeLauncher() {
@@ -124,53 +333,15 @@ function writeLauncher() {
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"
 SRC_DIR="$ROOT_DIR/hermes-agent"
-EMBEDDED_VENV_DIR="$ROOT_DIR/venv"
-USER_VENV_DIR="$HOME/.agent-ui/hermes-runtime-venv"
-VENV_DIR="\${HERMES_RUNTIME_VENV:-}"
-if [[ -z "$VENV_DIR" ]]; then
-  if [[ -x "$EMBEDDED_VENV_DIR/bin/python3" ]]; then
-    VENV_DIR="$EMBEDDED_VENV_DIR"
-  else
-    VENV_DIR="$USER_VENV_DIR"
-  fi
-fi
-PY="$VENV_DIR/bin/python3"
-
-install_runtime() {
-  local package_spec="$SRC_DIR[voice,messaging]"
-  if command -v uv >/dev/null 2>&1; then
-    uv pip install --python "$PY" "$package_spec"
-  else
-    "$PY" -m pip install "$package_spec"
-  fi
-}
-
-runtime_deps_available() {
-  "$PY" - <<'PY' >/dev/null 2>&1
-import importlib.util
-import sys
-
-missing = [
-    name for name in ("aiohttp", "yaml", "openai", "rich", "sounddevice", "numpy", "faster_whisper")
-    if importlib.util.find_spec(name) is None
-]
-sys.exit(1 if missing else 0)
-PY
-}
-
+PY="$ROOT_DIR/python/bin/python3"
 if [[ ! -x "$PY" ]]; then
-  mkdir -p "$(dirname "$VENV_DIR")"
-  if command -v uv >/dev/null 2>&1; then
-    uv venv "$VENV_DIR"
-  else
-    /usr/bin/python3 -m venv "$VENV_DIR"
-    "$PY" -m pip install --upgrade pip
-  fi
-  install_runtime
-elif ! runtime_deps_available; then
-  install_runtime
+  echo "Bundled Hermes Python runtime is missing at $PY. Rebuild the app with npm run bundle:hermes." >&2
+  exit 127
 fi
-export PYTHONPATH="$SRC_DIR\${PYTHONPATH:+:$PYTHONPATH}"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+export PYTHONDONTWRITEBYTECODE=1
+export PYTHONNOUSERSITE=1
+export PYTHONPATH="$SRC_DIR"
 exec "$PY" -m hermes_cli.main "$@"
 `;
   fs.writeFileSync(launcher, content, { mode: 0o755 });
@@ -182,15 +353,29 @@ if (!fs.existsSync(source)) {
   process.exit(1);
 }
 
+const hermesSourceState = verifyHermesSource(source);
 rmrf(outRoot);
 ensureDir(outRoot);
-copyTree(source, path.join(outRoot, 'hermes-agent'));
-buildEmbeddedVenv();
+const hermesRoot = path.join(outRoot, 'hermes-agent');
+copyTree(source, hermesRoot);
+const hermesPlatformOverlays = copyVendoredPlatformOverlays(hermesRoot);
+const embeddedPython = buildEmbeddedPython();
 writeLauncher();
 fs.writeFileSync(path.join(outRoot, 'MANIFEST.json'), JSON.stringify({
+  version: require(path.join(repoRoot, 'package.json')).version,
   source,
-  gitHead: gitHead(source),
+  hermesReleaseTag,
+  hermesReleaseUrl,
+  gitHead: hermesSourceState.head,
+  hermesReleaseGitHead: hermesSourceState.releaseHead,
+  hermesSourceDirty: hermesSourceState.dirty,
+  hermesPlatformOverlays,
+  appGitHead: gitHead(repoRoot),
+  python: embeddedPython,
   builtAt: new Date().toISOString(),
 }, null, 2));
 console.log(`[agent-ui] Bundled Hermes runtime from ${source}`);
+if (hermesPlatformOverlays.length) {
+  console.log(`[agent-ui] Added Hermes platform overlays: ${hermesPlatformOverlays.map((overlay) => overlay.name).join(', ')}`);
+}
 console.log(`[agent-ui] Wrote ${outRoot}`);

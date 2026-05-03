@@ -843,6 +843,34 @@ async function sendFollowup(catId, text, opts = {}) {
   }
 }
 
+async function cancelAgent(catId, opts = {}) {
+  const { getMainWindow, log = console } = opts;
+  const id = String(catId);
+  const rec = conversations.get(id);
+  if (!rec) {
+    log.warn('cancelAgent: no conversation', id);
+    return { ok: false, error: 'Session is not available.' };
+  }
+  const status = String(rec.runStatus || '').toLowerCase();
+  if (status !== 'running') {
+    return { ok: false, error: 'Cancel is available while Hermes is running.' };
+  }
+
+  ensureHermesEntry(id, rec.pointerContext || null);
+  rec.items.push({ kind: 'user', text: 'Cancel requested.', at: now(), metadata: { command: '/stop' } });
+  persistConversation(id);
+  onConversationPushed({ catId: id });
+
+  const notify = getNotify(getMainWindow);
+  try {
+    await runOnGateway(id, notify, log, '/stop', { includeContext: false, getMainWindow });
+    return { ok: true };
+  } catch (e) {
+    markGatewayError(id, e, notify);
+    return { ok: false, error: e && e.message ? e.message : String(e) };
+  }
+}
+
 function cancelAllAgents() {
   active.clear();
   if (gatewayClient) {
@@ -866,6 +894,7 @@ module.exports = {
   listAgentConversations,
   setOnConversationPushed,
   deleteConversationState,
+  cancelAgent,
   dismissAgent,
   sendFollowup,
   getAgentArtifacts,

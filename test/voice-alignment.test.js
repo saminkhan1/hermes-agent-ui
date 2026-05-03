@@ -70,6 +70,7 @@ test('voice input has no legacy Apple Speech or browser MediaRecorder fallback',
 
   assert.equal(fs.existsSync(path.join(root, 'src/main/AgentUISpeech.swift')), false);
   assert.doesNotMatch(combined, /AgentUISpeech/);
+  assert.doesNotMatch(combined, /\/usr\/bin\/swift|swiftc/);
   assert.doesNotMatch(combined, /SFSpeechRecognizer|AVAudioEngine/);
   assert.doesNotMatch(combined, /AGENT_UI_LEGACY_SPEECH/);
   assert.doesNotMatch(combined, /MediaRecorder|getUserMedia|transcribe-voice-recording|captureInRenderer|start-voice-dictation/);

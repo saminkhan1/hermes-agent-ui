@@ -127,6 +127,52 @@ test('gateway follow-up is sent while session is running', async (t) => {
   assert.equal(posts[1].text, 'plain follow up');
 });
 
+test('gateway cancel sends Hermes stop command while session is running', async (t) => {
+  setupGatewayEnv(t);
+  const posts = [];
+  global.fetch = async (url, opts = {}) => {
+    const textUrl = String(url);
+    if (textUrl.endsWith('/events')) return emptySseResponse();
+    if (textUrl.endsWith('/messages')) {
+      const body = JSON.parse(opts.body);
+      if (!body.conversation_id) {
+        return new Response(JSON.stringify({ ok: false, error: 'missing_conversation_id' }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      posts.push(body);
+      return new Response(JSON.stringify({ ok: true, accepted: true }), {
+        status: 202,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ ok: true, latest_seq: 0 }), { status: 200 });
+  };
+
+  agents.startAgentForCat({
+    catId: 'cat-cancel',
+    prompt: 'Initial',
+    runtime: 'local',
+    pointerContext: null,
+  }, { getMainWindow: () => null, log: { warn() {} } });
+  await waitFor(() => posts.length === 1);
+
+  const result = await agents.cancelAgent('cat-cancel', {
+    getMainWindow: () => null,
+    log: { warn() {} },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(posts.length, 2);
+  assert.equal(posts[1].conversation_id, 'cat-cancel');
+  assert.equal(posts[1].text, '/stop');
+  assert.equal(posts[1].metadata.include_context, false);
+
+  const conversation = agents.getAgentConversation('cat-cancel');
+  assert.equal(conversation.items.some((item) => item.kind === 'user' && item.text === 'Cancel requested.'), true);
+});
+
 test('gateway first-message slash commands pass through without context wrapper', async (t) => {
   setupGatewayEnv(t);
   const posts = [];

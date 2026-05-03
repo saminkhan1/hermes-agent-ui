@@ -12,6 +12,7 @@
     "out",
     "assets",
     "src",
+    "vendor",
     "README.md",
     "electron.vite.config.mjs"
   ],
@@ -19,7 +20,16 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "bundle:hermes": "node scripts/bundle-hermes-runtime.js",
-    "dist:mac": "npm run bundle:hermes && npm run build && electron-builder --mac dir zip --publish never",
+    "dist:mac": "npm run dist:mac:bootstrap",
+    "dist:mac:bootstrap": "node scripts/assert-mac-release-env.js bootstrap && npm run bundle:hermes && npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config packaging/electron-builder.bootstrap.cjs --mac dmg zip --publish never",
+    "dist:mac:developer-id": "node scripts/assert-mac-release-env.js developer-id && npm run bundle:hermes && npm run build && electron-builder --mac dmg zip --publish never",
+    "dist:mac:local": "npm run dist:mac:bootstrap",
+    "verify": "npm test && npm run build",
+    "release:manifest": "node scripts/release-manifest.js",
+    "release:verify": "npm run release:verify:bootstrap",
+    "release:verify:bootstrap": "RELEASE_VERIFY_MODE=bootstrap node scripts/release-manifest.js",
+    "release:verify:developer-id": "RELEASE_VERIFY_MODE=developer-id node scripts/release-manifest.js",
+    "smoke:gateway": "node scripts/local-gateway-smoke.js",
     "start": "electron-vite preview",
     "test": "node --test test/*.test.js",
     "prepare": "electron-vite build"
@@ -50,6 +60,7 @@
   "build": {
     "appId": "ai.agent-ui.desktop",
     "artifactName": "agent-UI-${version}-${os}-${arch}.${ext}",
+    "afterPack": "scripts/sign-hermes-runtime.js",
     "asar": true,
     "files": [
       "out/**",
@@ -67,16 +78,33 @@
     ],
     "mac": {
       "category": "public.app-category.productivity",
+      "entitlements": "packaging/mac/entitlements.mac.plist",
+      "entitlementsInherit": "packaging/mac/entitlements.mac.inherit.plist",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "agent-UI uses the microphone to capture voice input for prompts."
       },
       "target": [
-        "dir",
+        "dmg",
         "zip"
       ],
-      "hardenedRuntime": false,
-      "gatekeeperAssess": false,
-      "identity": null
+      "hardenedRuntime": true,
+      "gatekeeperAssess": true,
+      "notarize": true
+    },
+    "dmg": {
+      "sign": false,
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
     }
   }
 }

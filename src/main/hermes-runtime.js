@@ -18,6 +18,7 @@ const HERMES_HOME_ENV = 'AGENT_UI_HERMES_HOME';
 const GATEWAY_AUTOSTART_ENV = 'AGENT_UI_HERMES_GATEWAY_AUTOSTART';
 const LOCAL_DESKTOP_USER = 'local';
 const LOCAL_DESKTOP_PLATFORM = 'local_desktop';
+const SAFE_RUNTIME_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
 
 let gatewayProcess = null;
 let gatewayStartPromise = null;
@@ -136,24 +137,9 @@ function bundledHermesCommand() {
   return '';
 }
 
-function systemHermesCommand() {
-  const pathEnv = String(process.env.PATH || '');
-  for (const dir of pathEnv.split(path.delimiter)) {
-    if (!dir) continue;
-    const candidate = path.join(dir, 'hermes');
-    if (executableExists(candidate)) return candidate;
-  }
-  return '';
-}
-
-function auraHermesCommand() {
-  const candidate = path.join(realUserHomeDir(), 'Documents', 'jarvis', 'script', 'aura-hermes');
-  return executableExists(candidate) ? candidate : '';
-}
-
 function resolveHermesCommand() {
   const configured = String(process.env[CLI_BIN_ENV] || '').trim();
-  const candidates = [configured, bundledHermesCommand(), systemHermesCommand(), auraHermesCommand()].filter(Boolean);
+  const candidates = [configured, bundledHermesCommand()].filter(Boolean);
   const requested = candidates[0] || '';
   return {
     command: requested ? (path.isAbsolute(requested) ? requested : path.resolve(process.cwd(), requested)) : '',
@@ -165,8 +151,6 @@ function resolveHermesCommand() {
 function hermesCwd(command) {
   const bundled = bundledHermesCommand();
   if (bundled && command === bundled) return path.dirname(path.dirname(bundled));
-  const aura = auraHermesCommand();
-  if (aura && command === aura) return path.dirname(path.dirname(aura));
   return process.cwd();
 }
 
@@ -180,29 +164,10 @@ function bundledHermesRootForCommand(command) {
   return root;
 }
 
-function auraHermesRuntimeForCommand(command) {
-  const aura = auraHermesCommand();
-  if (!aura || command !== aura) return null;
-  const root = path.dirname(path.dirname(aura));
-  const agentRoot = path.join(root, '.aura', 'hermes-agent');
-  const pythonCandidates = [
-    path.join(agentRoot, 'venv', 'bin', 'python3'),
-    path.join(agentRoot, 'venv', 'bin', 'python'),
-  ];
-  const python = pythonCandidates.find((candidate) => executableExists(candidate)) || '';
-  if (!python || !fs.existsSync(path.join(agentRoot, 'tools', 'voice_mode.py'))) return null;
-  return {
-    agentRoot,
-    hermesHome: path.join(root, '.aura', 'hermes-home'),
-    projectRoot: root,
-    python,
-  };
-}
-
 async function bundledHermesRuntimeForCommand(command, opts = {}) {
   const root = bundledHermesRootForCommand(command);
   if (!root) return null;
-  const python = await ensureBundledHermesVenv(command, opts);
+  const python = await bundledHermesPython(command, opts);
   if (!python) return null;
   const agentRoot = path.join(root, 'hermes-agent');
   return {
@@ -214,7 +179,7 @@ async function bundledHermesRuntimeForCommand(command, opts = {}) {
 }
 
 async function hermesPythonRuntimeForCommand(command, opts = {}) {
-  return auraHermesRuntimeForCommand(command) || await bundledHermesRuntimeForCommand(command, opts);
+  return await bundledHermesRuntimeForCommand(command, opts);
 }
 
 function parseTranscriptionJson(stdout) {
@@ -230,22 +195,12 @@ function parseTranscriptionJson(stdout) {
   return null;
 }
 
-async function ensureBundledHermesVenv(command, { timeoutMs = 180000 } = {}) {
+async function bundledHermesPython(command, _opts = {}) {
   const root = bundledHermesRootForCommand(command);
   if (!root) return '';
-  const embeddedPython = path.join(root, 'venv', 'bin', 'python3');
-  if (!process.env.HERMES_RUNTIME_VENV && executableExists(embeddedPython) && await bundledVoiceDependenciesAvailable(embeddedPython)) {
-    return embeddedPython;
-  }
-  const venvDir = process.env.HERMES_RUNTIME_VENV || path.join(realUserHomeDir(), '.agent-ui', 'hermes-runtime-venv');
-  const python = path.join(venvDir, 'bin', 'python3');
+  const python = path.join(root, 'python', 'bin', 'python3');
   if (executableExists(python) && await bundledVoiceDependenciesAvailable(python)) return python;
-  await execFileText(command, ['version'], {
-    cwd: hermesCwd(command),
-    env: { ...process.env, HOME: realUserHomeDir() },
-    timeout: timeoutMs,
-  });
-  return executableExists(python) && await bundledVoiceDependenciesAvailable(python) ? python : '';
+  return '';
 }
 
 async function bundledVoiceDependenciesAvailable(python) {
@@ -337,8 +292,10 @@ async function captureAndTranscribeVoice(opts = {}) {
       env: {
         ...process.env,
         HOME: realUserHomeDir(),
-        HERMES_HOME: process.env.HERMES_HOME || runtime.hermesHome,
-        PYTHONPATH: [runtime.agentRoot, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+        HERMES_HOME: runtime.hermesHome,
+        PATH: SAFE_RUNTIME_PATH,
+        PYTHONNOUSERSITE: '1',
+        PYTHONPATH: runtime.agentRoot,
         AGENT_UI_HERMES_PROJECT_ROOT: runtime.projectRoot,
       },
       timeout: opts.timeoutMs || 180000,
@@ -368,8 +325,7 @@ function defaultHermesHome() {
 }
 
 function effectiveGatewayHermesHome() {
-  const inherited = String(process.env.HERMES_HOME || '').trim();
-  return inherited ? path.resolve(inherited) : defaultHermesHome();
+  return defaultHermesHome();
 }
 
 function defaultGatewayConfigYaml() {
@@ -672,6 +628,8 @@ async function ensureGatewayProcess(log = console) {
       ...gatewayEnv,
       HERMES_HOME: hermesHome,
       HOME: realUserHomeDir(),
+      PATH: SAFE_RUNTIME_PATH,
+      PYTHONNOUSERSITE: '1',
     };
     const child = spawn(command, gatewayArgsFor(command), {
       cwd: hermesCwd(command),

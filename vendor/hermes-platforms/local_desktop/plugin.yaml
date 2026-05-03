@@ -1,0 +1,10 @@
+name: local-desktop-platform
+kind: platform
+version: 1.0.0
+description: >
+  Local authenticated desktop gateway adapter for Hermes Agent.
+  Exposes a loopback HTTP/SSE API for native desktop clients and routes
+  messages through the normal Hermes gateway platform flow.
+author: Nous Research
+requires_env:
+  - LOCAL_DESKTOP_GATEWAY_KEY

@@ -165,6 +165,9 @@ contextBridge.exposeInMainWorld('agentUI', {
   sendFollowup: (value, body) => {
     return ipcRenderer.invoke('agent-followup', { catId: catId(value), text: text(body) });
   },
+  cancelAgent: (value) => {
+    return ipcRenderer.invoke('agent-cancel', { catId: catId(value) });
+  },
   openAgentAttachment: (url) => {
     return ipcRenderer.invoke('open-agent-attachment', { url: text(url, 4096) });
   },

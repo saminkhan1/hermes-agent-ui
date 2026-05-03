@@ -30,6 +30,7 @@ const {
   getAgentConversation,
   listAgentConversations,
   setOnConversationPushed,
+  cancelAgent,
   dismissAgent,
   sendFollowup,
   getAgentArtifacts,
@@ -1673,6 +1674,12 @@ ipcMain.handle('agent-followup', (_e, { catId, text } = {}) => {
   const id = normalizeCatId(catId);
   if (!id) return { ok: false, error: 'Missing session id.' };
   return sendFollowup(id, boundedText(text), { getMainWindow: () => mainWindow, log: console });
+});
+
+ipcMain.handle('agent-cancel', (_e, { catId } = {}) => {
+  const id = normalizeCatId(catId);
+  if (!id) return { ok: false, error: 'Missing session id.' };
+  return cancelAgent(id, { getMainWindow: () => mainWindow, log: console });
 });
 
 ipcMain.handle('open-agent-attachment', async (_e, { url } = {}) => {

@@ -8,6 +8,7 @@ const logEl = document.getElementById('log');
 const metaEl = document.getElementById('meta');
 const statusEl = document.getElementById('typing-status');
 const closeBtn = document.getElementById('btn-close');
+const cancelBtn = document.getElementById('btn-cancel');
 const dismissBtn = document.getElementById('btn-dismiss');
 const followupInput = document.getElementById('followup-input');
 const sendBtn = document.getElementById('btn-send');
@@ -203,11 +204,20 @@ function isDismissibleConversation(data) {
   return status === 'completed' || status === 'error' || status === 'failed' || status === 'cancelled' || status === 'canceled';
 }
 
+function isCancelableConversation(data) {
+  return String((data && data.runStatus) || '').toLowerCase() === 'running';
+}
+
 function updateComposerFromData(data) {
   if (!followupInput || !sendBtn) return;
   const ok = data && data.found;
   followupInput.disabled = !ok;
   sendBtn.disabled = !ok;
+  if (cancelBtn) {
+    const canCancel = ok && isCancelableConversation(data);
+    cancelBtn.disabled = !canCancel;
+    cancelBtn.title = canCancel ? 'Cancel Hermes run' : 'Cancel is available while Hermes is running';
+  }
   if (dismissBtn) {
     const canDismiss = ok && isDismissibleConversation(data);
     dismissBtn.disabled = !canDismiss;
@@ -300,6 +310,26 @@ async function sendFollowup() {
   }
 }
 
+async function cancelRun() {
+  if (!catId) return;
+  if (!isCancelableConversation(lastData)) return;
+  if (typeof window.agentUI.cancelAgent !== 'function') return;
+  setComposerError('');
+  if (cancelBtn) cancelBtn.disabled = true;
+  try {
+    const result = await window.agentUI.cancelAgent(catId);
+    if (result && result.ok === false) {
+      setComposerError(result.error || 'Unable to cancel session.');
+      updateComposerFromData(lastData);
+      return;
+    }
+    await render();
+  } catch {
+    setComposerError('Unable to cancel session.');
+    updateComposerFromData(lastData);
+  }
+}
+
 if (catId) {
   void render();
   if (typeof window.agentUI.onConversationUpdated === 'function') {
@@ -334,6 +364,12 @@ closeBtn.addEventListener('click', () => {
 if (dismissBtn) {
   dismissBtn.addEventListener('click', () => {
     dismiss();
+  });
+}
+
+if (cancelBtn) {
+  cancelBtn.addEventListener('click', () => {
+    void cancelRun();
   });
 }
 

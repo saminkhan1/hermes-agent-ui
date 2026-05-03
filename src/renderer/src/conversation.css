@@ -79,6 +79,7 @@ body {
   text-overflow: ellipsis;
 }
 
+.header-btn.cancel-btn,
 .header-btn.dismiss-btn {
   flex: 0 0 auto;
   padding: 4px 10px;
@@ -92,12 +93,14 @@ body {
   transition: color 0.1s, background 0.1s, border-color 0.1s;
 }
 
+.header-btn.cancel-btn:hover,
 .header-btn.dismiss-btn:hover {
   color: #fff;
   background: rgba(255, 255, 255, 0.12);
   border-color: rgba(255, 255, 255, 0.22);
 }
 
+.header-btn.cancel-btn:disabled,
 .header-btn.dismiss-btn:disabled {
   cursor: not-allowed;
   opacity: 0.45;
