@@ -218,6 +218,19 @@ async function bundledVoiceDependenciesAvailable(python) {
   }
 }
 
+function formatVoiceCaptureErrorForUser(value) {
+  const raw = String(value && value.message ? value.message : value || 'Could not capture voice input.').trim();
+  const lower = raw.toLowerCase();
+  if (/permission|denied|microphone|inputstream|portaudio|input device|no default input/.test(lower)) {
+    if (/privacy & security|system settings|microphone/.test(lower) && /agent-ui/.test(lower)) return raw;
+    return `${raw} Check macOS System Settings > Privacy & Security > Microphone for agent-UI, confirm an input device is selected, then retry voice input.`;
+  }
+  if (/no speech|silence|no transcript/.test(lower)) {
+    return `${raw} Check that the microphone is selected and not muted, then try again.`;
+  }
+  return raw;
+}
+
 async function captureAndTranscribeVoice(opts = {}) {
   const { command } = resolveHermesCommand();
   if (!command || !executableExists(command)) {
@@ -306,7 +319,7 @@ async function captureAndTranscribeVoice(opts = {}) {
     if (!result) return { ok: false, error: 'Hermes returned no voice result.' };
     const transcript = String(result.transcript || '').trim();
     if (!result.success || !transcript) {
-      return { ok: false, error: String(result.error || 'No speech was detected.').trim() };
+      return { ok: false, error: formatVoiceCaptureErrorForUser(result.error || 'No speech was detected.') };
     }
     return {
       ok: true,
@@ -315,7 +328,7 @@ async function captureAndTranscribeVoice(opts = {}) {
       raw: result,
     };
   } catch (e) {
-    return { ok: false, error: (e && (e.stderr || e.message)) || String(e) };
+    return { ok: false, error: formatVoiceCaptureErrorForUser((e && (e.stderr || e.message)) || String(e)) };
   }
 }
 
@@ -691,4 +704,5 @@ module.exports = {
   resolveHermesCommand,
   stopGatewayProcess,
   captureAndTranscribeVoice,
+  formatVoiceCaptureErrorForUser,
 };

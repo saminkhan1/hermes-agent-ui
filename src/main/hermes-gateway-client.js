@@ -110,6 +110,12 @@ function gatewayConnectionErrorMessage(error, baseUrl) {
   return `${raw}${cause}. Check that Hermes gateway is running at ${baseUrl}.`;
 }
 
+function gatewayConnectionError(error, baseUrl) {
+  const wrapped = new Error(gatewayConnectionErrorMessage(error, baseUrl));
+  wrapped.cause = error;
+  return wrapped;
+}
+
 function parseSseFrame(frame) {
   const event = { event: 'message', data: '', id: '' };
   for (const rawLine of String(frame || '').split(/\r?\n/)) {
@@ -270,8 +276,9 @@ class HermesGatewayClient {
         lastError = error;
       } catch (e) {
         if (e && e.status && !isRetryableStatus(e.status)) throw e;
-        if (attempt === attempts - 1) throw e;
-        lastError = e;
+        const actionable = e && e.status ? e : gatewayConnectionError(e, this.baseUrl);
+        if (attempt === attempts - 1) throw actionable;
+        lastError = actionable;
       }
       await sleep(Math.min(250, 50 * (attempt + 1)));
     }

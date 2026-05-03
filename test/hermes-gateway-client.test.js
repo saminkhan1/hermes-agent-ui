@@ -118,6 +118,27 @@ test('postMessage retries retryable failures with the same idempotency payload',
   assert.equal(calls[1].message_id, 'msg-1');
 });
 
+test('postMessage reports gateway transport failures with the target URL', async () => {
+  const error = new TypeError('fetch failed');
+  error.cause = new Error('connect ECONNREFUSED 127.0.0.1:8766');
+  const client = new HermesGatewayClient({
+    baseUrl: 'http://127.0.0.1:8766',
+    key: 'secret',
+    statePath: tempStatePath(),
+    fetchImpl: async () => { throw error; },
+  });
+
+  await assert.rejects(
+    client.postMessage({
+      conversationId: 'cat-1',
+      messageId: 'msg-1',
+      text: 'hello',
+      retries: 0,
+    }),
+    /fetch failed \(connect ECONNREFUSED 127\.0\.0\.1:8766\)\. Check that Hermes gateway is running at http:\/\/127\.0\.0\.1:8766\./
+  );
+});
+
 test('gateway config falls back to local desktop env file', (t) => {
   isolateEnv(t);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-gateway-env-'));

@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { formatVoiceCaptureErrorForUser } = require('../src/main/hermes-runtime');
 
 const root = path.resolve(__dirname, '..');
 
@@ -74,4 +75,12 @@ test('voice input has no legacy Apple Speech or browser MediaRecorder fallback',
   assert.doesNotMatch(combined, /SFSpeechRecognizer|AVAudioEngine/);
   assert.doesNotMatch(combined, /AGENT_UI_LEGACY_SPEECH/);
   assert.doesNotMatch(combined, /MediaRecorder|getUserMedia|transcribe-voice-recording|captureInRenderer|start-voice-dictation/);
+});
+
+test('voice input permission failures are actionable for manual testers', () => {
+  const message = formatVoiceCaptureErrorForUser('PortAudioError: Error opening InputStream: Internal PortAudio error');
+
+  assert.match(message, /System Settings > Privacy & Security > Microphone/);
+  assert.match(message, /agent-UI/);
+  assert.match(message, /input device/);
 });
