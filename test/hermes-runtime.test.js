@@ -10,10 +10,13 @@ const {
   defaultHermesHome,
   ensureGatewayConfigFile,
   ensureGatewayEnvFile,
+  gatewayAuthOk,
+  gatewayReadyOk,
   resolveHermesCommand,
 } = require('../src/main/hermes-runtime');
 
 const originalEnv = { ...process.env };
+const originalFetch = global.fetch;
 
 function isolateEnv(t) {
   process.env = { ...originalEnv };
@@ -53,6 +56,19 @@ test('ensureGatewayEnvFile creates a local desktop gateway env file with a stabl
   assert.equal(first.env.LOCAL_DESKTOP_PORT, '8766');
   assert.match(first.env.LOCAL_DESKTOP_GATEWAY_KEY, /^[a-f0-9]{64}$/);
   assert.equal(second.env.LOCAL_DESKTOP_GATEWAY_KEY, first.env.LOCAL_DESKTOP_GATEWAY_KEY);
+});
+
+test('ensureGatewayEnvFile can rotate the local desktop port without changing the secret', (t) => {
+  isolateEnv(t);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-runtime-env-'));
+  process.env.AGENT_UI_CONFIG_DIR = dir;
+
+  const first = ensureGatewayEnvFile();
+  const second = ensureGatewayEnvFile({ LOCAL_DESKTOP_PORT: '8777' });
+
+  assert.equal(second.env.LOCAL_DESKTOP_GATEWAY_KEY, first.env.LOCAL_DESKTOP_GATEWAY_KEY);
+  assert.equal(second.env.LOCAL_DESKTOP_PORT, '8777');
+  assert.match(fs.readFileSync(second.file, 'utf8'), /LOCAL_DESKTOP_PORT=8777/);
 });
 
 test('ensureGatewayConfigFile creates local desktop platform config', (t) => {
@@ -130,7 +146,50 @@ test('bundled Hermes launcher installs gateway and voice extras and repairs old 
   const bundler = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'bundle-hermes-runtime.js'), 'utf8');
 
   assert.match(bundler, /package_spec="\$SRC_DIR\[voice,messaging\]"/);
+  assert.match(bundler, /EMBEDDED_VENV_DIR="\$ROOT_DIR\/venv"/);
+  assert.match(bundler, /buildEmbeddedVenv\(\)/);
   assert.match(bundler, /runtime_deps_available\(\)/);
-  assert.match(bundler, /"aiohttp", "sounddevice", "numpy", "faster_whisper"/);
+  assert.match(bundler, /"aiohttp", "yaml", "openai", "rich", "sounddevice", "numpy", "faster_whisper"/);
   assert.match(bundler, /elif ! runtime_deps_available; then/);
+  assert.match(bundler, /PYTHONPATH="\$SRC_DIR/);
+});
+
+test('gateway readiness requires authenticated local desktop message access', async (t) => {
+  isolateEnv(t);
+  const calls = [];
+  global.fetch = async (url, opts = {}) => {
+    calls.push({
+      url: String(url),
+      method: opts.method || 'GET',
+      auth: opts.headers && opts.headers.authorization,
+      body: opts.body,
+    });
+    if (String(url).endsWith('/health')) {
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ ok: false, error: 'missing_conversation_id' }), { status: 400 });
+  };
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  assert.equal(await gatewayAuthOk('http://127.0.0.1:8766', 'secret'), true);
+  assert.equal(await gatewayReadyOk('http://127.0.0.1:8766', 'secret'), true);
+  assert.equal(calls.some((call) => call.method === 'POST' && call.auth === 'Bearer secret' && call.body === '{}'), true);
+});
+
+test('gateway readiness rejects unauthenticated local desktop message access', async (t) => {
+  isolateEnv(t);
+  global.fetch = async (url) => {
+    if (String(url).endsWith('/health')) {
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ ok: false, error: 'unauthorized' }), { status: 401 });
+  };
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  assert.equal(await gatewayAuthOk('http://127.0.0.1:8766', 'secret'), false);
+  assert.equal(await gatewayReadyOk('http://127.0.0.1:8766', 'secret'), false);
 });

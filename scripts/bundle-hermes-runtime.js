@@ -64,6 +64,58 @@ function gitHead(dir) {
   return res.status === 0 ? res.stdout.trim() : 'unknown';
 }
 
+function runChecked(command, args, opts = {}) {
+  const res = spawnSync(command, args, {
+    cwd: opts.cwd || repoRoot,
+    env: opts.env || process.env,
+    encoding: 'utf8',
+    stdio: opts.stdio || 'inherit',
+  });
+  if (res.status !== 0) {
+    const rendered = [command, ...args].join(' ');
+    throw new Error(`${rendered} failed with status ${res.status}`);
+  }
+}
+
+function runtimePython(venvDir) {
+  return path.join(venvDir, 'bin', 'python3');
+}
+
+function createVenv(venvDir) {
+  if (fs.existsSync(runtimePython(venvDir))) return;
+  if (spawnSync('uv', ['--version'], { encoding: 'utf8' }).status === 0) {
+    runChecked('uv', ['venv', venvDir]);
+    return;
+  }
+  runChecked('/usr/bin/python3', ['-m', 'venv', venvDir]);
+  runChecked(runtimePython(venvDir), ['-m', 'pip', 'install', '--upgrade', 'pip']);
+}
+
+function installRuntimeDeps(venvDir) {
+  const py = runtimePython(venvDir);
+  const packageSpec = `${path.join(outRoot, 'hermes-agent')}[voice,messaging]`;
+  if (spawnSync('uv', ['--version'], { encoding: 'utf8' }).status === 0) {
+    runChecked('uv', ['pip', 'install', '--python', py, packageSpec]);
+    return;
+  }
+  runChecked(py, ['-m', 'pip', 'install', packageSpec]);
+}
+
+function verifyRuntimeDeps(venvDir) {
+  runChecked(runtimePython(venvDir), ['-c', [
+    'import importlib.util',
+    'missing = [name for name in ("aiohttp", "yaml", "openai", "rich", "sounddevice", "numpy", "faster_whisper") if importlib.util.find_spec(name) is None]',
+    'raise SystemExit("missing runtime deps: " + ", ".join(missing) if missing else 0)',
+  ].join('\n')]);
+}
+
+function buildEmbeddedVenv() {
+  const venvDir = path.join(outRoot, 'venv');
+  createVenv(venvDir);
+  installRuntimeDeps(venvDir);
+  verifyRuntimeDeps(venvDir);
+}
+
 function writeLauncher() {
   const binDir = path.join(outRoot, 'bin');
   ensureDir(binDir);
@@ -72,15 +124,24 @@ function writeLauncher() {
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"
 SRC_DIR="$ROOT_DIR/hermes-agent"
-VENV_DIR="\${HERMES_RUNTIME_VENV:-$HOME/.agent-ui/hermes-runtime-venv}"
+EMBEDDED_VENV_DIR="$ROOT_DIR/venv"
+USER_VENV_DIR="$HOME/.agent-ui/hermes-runtime-venv"
+VENV_DIR="\${HERMES_RUNTIME_VENV:-}"
+if [[ -z "$VENV_DIR" ]]; then
+  if [[ -x "$EMBEDDED_VENV_DIR/bin/python3" ]]; then
+    VENV_DIR="$EMBEDDED_VENV_DIR"
+  else
+    VENV_DIR="$USER_VENV_DIR"
+  fi
+fi
 PY="$VENV_DIR/bin/python3"
 
 install_runtime() {
   local package_spec="$SRC_DIR[voice,messaging]"
   if command -v uv >/dev/null 2>&1; then
-    uv pip install --python "$PY" -e "$package_spec"
+    uv pip install --python "$PY" "$package_spec"
   else
-    "$PY" -m pip install -e "$package_spec"
+    "$PY" -m pip install "$package_spec"
   fi
 }
 
@@ -90,7 +151,7 @@ import importlib.util
 import sys
 
 missing = [
-    name for name in ("aiohttp", "sounddevice", "numpy", "faster_whisper")
+    name for name in ("aiohttp", "yaml", "openai", "rich", "sounddevice", "numpy", "faster_whisper")
     if importlib.util.find_spec(name) is None
 ]
 sys.exit(1 if missing else 0)
@@ -109,6 +170,7 @@ if [[ ! -x "$PY" ]]; then
 elif ! runtime_deps_available; then
   install_runtime
 fi
+export PYTHONPATH="$SRC_DIR\${PYTHONPATH:+:$PYTHONPATH}"
 exec "$PY" -m hermes_cli.main "$@"
 `;
   fs.writeFileSync(launcher, content, { mode: 0o755 });
@@ -123,6 +185,7 @@ if (!fs.existsSync(source)) {
 rmrf(outRoot);
 ensureDir(outRoot);
 copyTree(source, path.join(outRoot, 'hermes-agent'));
+buildEmbeddedVenv();
 writeLauncher();
 fs.writeFileSync(path.join(outRoot, 'MANIFEST.json'), JSON.stringify({
   source,

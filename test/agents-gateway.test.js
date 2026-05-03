@@ -46,7 +46,14 @@ test('gateway start posts tagged first prompt with stable conversation id', asyn
     const textUrl = String(url);
     if (textUrl.endsWith('/events')) return emptySseResponse();
     if (textUrl.endsWith('/messages')) {
-      posts.push(JSON.parse(opts.body));
+      const body = JSON.parse(opts.body);
+      if (!body.conversation_id) {
+        return new Response(JSON.stringify({ ok: false, error: 'missing_conversation_id' }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      posts.push(body);
       return new Response(JSON.stringify({ ok: true, accepted: true }), {
         status: 202,
         headers: { 'content-type': 'application/json' },
@@ -82,7 +89,14 @@ test('gateway follow-up is sent while session is running', async (t) => {
     const textUrl = String(url);
     if (textUrl.endsWith('/events')) return emptySseResponse();
     if (textUrl.endsWith('/messages')) {
-      posts.push(JSON.parse(opts.body));
+      const body = JSON.parse(opts.body);
+      if (!body.conversation_id) {
+        return new Response(JSON.stringify({ ok: false, error: 'missing_conversation_id' }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      posts.push(body);
       return new Response(JSON.stringify({ ok: true, accepted: true }), {
         status: 202,
         headers: { 'content-type': 'application/json' },
@@ -120,7 +134,14 @@ test('gateway first-message slash commands pass through without context wrapper'
     const textUrl = String(url);
     if (textUrl.endsWith('/events')) return emptySseResponse();
     if (textUrl.endsWith('/messages')) {
-      posts.push(JSON.parse(opts.body));
+      const body = JSON.parse(opts.body);
+      if (!body.conversation_id) {
+        return new Response(JSON.stringify({ ok: false, error: 'missing_conversation_id' }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      posts.push(body);
       return new Response(JSON.stringify({ ok: true, accepted: true }), {
         status: 202,
         headers: { 'content-type': 'application/json' },
@@ -149,7 +170,11 @@ test('multiple gateway pets use separate conversations', async (t) => {
     const textUrl = String(url);
     if (textUrl.endsWith('/events')) return emptySseResponse();
     if (textUrl.endsWith('/messages')) {
-      posts.push(JSON.parse(opts.body));
+      const body = JSON.parse(opts.body);
+      if (!body.conversation_id) {
+        return new Response(JSON.stringify({ ok: false, error: 'missing_conversation_id' }), { status: 400 });
+      }
+      posts.push(body);
       return new Response(JSON.stringify({ ok: true, accepted: true }), { status: 202 });
     }
     return new Response(JSON.stringify({ ok: true }), { status: 200 });
@@ -166,7 +191,13 @@ test('gateway SSE events update local conversation state', async (t) => {
   setupGatewayEnv(t);
   global.fetch = async (url, opts = {}) => {
     if (String(url).endsWith('/events')) return emptySseResponse();
-    if (String(url).endsWith('/messages')) return new Response(JSON.stringify({ ok: true }), { status: 202 });
+    if (String(url).endsWith('/messages')) {
+      const body = JSON.parse(opts.body);
+      if (!body.conversation_id) {
+        return new Response(JSON.stringify({ ok: false, error: 'missing_conversation_id' }), { status: 400 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 202 });
+    }
     return new Response(JSON.stringify({ ok: true }), { status: 200 });
   };
 

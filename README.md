@@ -10,11 +10,12 @@ For manual testers, ship a single macOS app bundle/zip that contains:
 
 - the Electron UI gateway (`agent-UI.app`);
 - Hermes Agent source/runtime bootstrap under the app resources;
+- a prewarmed minimal Hermes Python environment for local desktop gateway, messaging, and voice dependencies;
 - automatic local gateway secret creation in `~/.agent-ui/local-desktop-gateway.env`;
 - automatic Hermes Gateway startup on first prompt;
 - separate text and voice input modes, follow-ups, and transcript review before submission.
 
-The first run may install Python dependencies into `~/.agent-ui/hermes-runtime-venv`. Model/provider login still belongs to Hermes; if the tester has not configured a Hermes provider yet, Hermes will surface that setup/login error through the conversation details.
+The packaged app should not require gateway setup after install. Model/provider login still belongs to Hermes; if the tester has not configured a Hermes provider yet, Hermes will surface that setup/login error through the conversation details.
 
 ## Requirements
 
@@ -27,7 +28,6 @@ For developers building the distributable:
 For manual testers using the packaged app:
 
 - macOS
-- network access for first-run Python dependency install if the bundled venv is not already present
 - a Hermes model/provider login or API key configured through Hermes
 - Hermes voice-mode system dependencies available on the Mac (`portaudio` for microphone input and `ffmpeg` for STT audio conversion)
 - microphone permission for voice input mode
@@ -55,9 +55,10 @@ HERMES_BUNDLE_SOURCE=/path/to/hermes-agent npm run dist:mac
 
 `npm run dist:mac` performs three steps:
 
-1. copies Hermes into `build/hermes-runtime` without `.git`, venvs, caches, sessions, or logs;
-2. builds the Electron main/preload/renderer output;
-3. packages `agent-UI.app` with `build/hermes-runtime` as app resources.
+1. copies Hermes into `build/hermes-runtime` without `.git`, source venvs, caches, sessions, or logs;
+2. creates `build/hermes-runtime/venv` with the lean `[voice,messaging]` runtime needed by local desktop gateway and voice input;
+3. builds the Electron main/preload/renderer output;
+4. packages `agent-UI.app` with `build/hermes-runtime` as app resources.
 
 ## Runtime Gateway Behavior
 
@@ -68,9 +69,11 @@ On app startup/use, agent-UI:
 1. creates `~/.agent-ui/local-desktop-gateway.env` if needed;
 2. enables `platforms.local_desktop` in the active Hermes `config.yaml`;
 3. reads `LOCAL_DESKTOP_GATEWAY_KEY`, host, and port from that env file;
-4. checks `GET /health` on the local gateway;
-5. starts `hermes gateway run` if the gateway is not already running;
+4. checks unauthenticated `GET /health` plus a side-effect-free authenticated `POST /messages` schema probe on the local gateway;
+5. starts `hermes gateway run` if the gateway is not already running with agent-UI's key;
 6. connects to `/events` and posts prompts to `/messages`.
+
+If the default local port is occupied by another process or by a Hermes gateway using a different key, agent-UI automatically moves its bundled gateway to the next available loopback port and rewrites `~/.agent-ui/local-desktop-gateway.env`.
 
 `GET /health` is unauthenticated. `POST /messages` and `GET /events` require `Authorization: Bearer <LOCAL_DESKTOP_GATEWAY_KEY>`.
 

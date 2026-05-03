@@ -3,6 +3,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const net = require('net');
 const { spawn, execFile } = require('child_process');
 const { randomBytes } = require('crypto');
 const {
@@ -232,6 +233,10 @@ function parseTranscriptionJson(stdout) {
 async function ensureBundledHermesVenv(command, { timeoutMs = 180000 } = {}) {
   const root = bundledHermesRootForCommand(command);
   if (!root) return '';
+  const embeddedPython = path.join(root, 'venv', 'bin', 'python3');
+  if (!process.env.HERMES_RUNTIME_VENV && executableExists(embeddedPython) && await bundledVoiceDependenciesAvailable(embeddedPython)) {
+    return embeddedPython;
+  }
   const venvDir = process.env.HERMES_RUNTIME_VENV || path.join(realUserHomeDir(), '.agent-ui', 'hermes-runtime-venv');
   const python = path.join(venvDir, 'bin', 'python3');
   if (executableExists(python) && await bundledVoiceDependenciesAvailable(python)) return python;
@@ -504,15 +509,16 @@ function ensureGatewayConfigFile(hermesHome = effectiveGatewayHermesHome()) {
   };
 }
 
-function ensureGatewayEnvFile() {
+function ensureGatewayEnvFile(overrides = {}) {
   const file = defaultGatewayEnvPath();
   const current = readGatewayEnvFile(file);
+  const nextPort = overrides.LOCAL_DESKTOP_PORT || overrides.port || current.LOCAL_DESKTOP_PORT || '8766';
   const merged = {
     LOCAL_DESKTOP_GATEWAY_KEY: current.LOCAL_DESKTOP_GATEWAY_KEY || current.AGENT_UI_HERMES_GATEWAY_KEY || randomBytes(32).toString('hex'),
     LOCAL_DESKTOP_ALLOWED_USERS: current.LOCAL_DESKTOP_ALLOWED_USERS || LOCAL_DESKTOP_USER,
     LOCAL_DESKTOP_ALLOW_ALL_USERS: current.LOCAL_DESKTOP_ALLOW_ALL_USERS || 'false',
     LOCAL_DESKTOP_HOST: current.LOCAL_DESKTOP_HOST || '127.0.0.1',
-    LOCAL_DESKTOP_PORT: current.LOCAL_DESKTOP_PORT || '8766',
+    LOCAL_DESKTOP_PORT: String(nextPort),
     AGENT_UI_HERMES_GATEWAY_URL: current.AGENT_UI_HERMES_GATEWAY_URL || '',
   };
   ensureDir(path.dirname(file));
@@ -544,6 +550,87 @@ async function healthOk(baseUrl, timeoutMs = 900) {
   }
 }
 
+async function gatewayAuthOk(baseUrl, key, timeoutMs = 900) {
+  const secret = String(key || '').trim();
+  if (!global.fetch || !secret) return false;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const url = `${String(baseUrl).replace(/\/+$/, '')}/messages`;
+    const res = await global.fetch(url, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${secret}`,
+        'content-type': 'application/json',
+      },
+      body: '{}',
+      signal: controller.signal,
+    });
+    let body = null;
+    try {
+      body = await res.json();
+    } catch {
+      body = null;
+    }
+    return !!(
+      res &&
+      res.status === 400 &&
+      body &&
+      body.ok === false &&
+      body.error === 'missing_conversation_id'
+    );
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function gatewayReadyOk(baseUrl, key, timeoutMs = 900) {
+  return await healthOk(baseUrl, timeoutMs) && await gatewayAuthOk(baseUrl, key, timeoutMs);
+}
+
+function parseGatewayBaseUrl(baseUrl) {
+  try {
+    const parsed = new URL(String(baseUrl || ''));
+    return {
+      host: parsed.hostname || '127.0.0.1',
+      port: Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80)),
+    };
+  } catch {
+    return { host: '127.0.0.1', port: 8766 };
+  }
+}
+
+function portAvailable(host, port, timeoutMs = 300) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    let settled = false;
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        server.close();
+      } catch {
+        // ignore
+      }
+      resolve(ok);
+    };
+    const timer = setTimeout(() => done(false), timeoutMs);
+    server.once('error', () => done(false));
+    server.listen({ host, port, exclusive: true }, () => done(true));
+  });
+}
+
+async function nextAvailableGatewayPort(host, preferredPort) {
+  const start = Math.max(1024, Math.min(65535, Math.trunc(Number(preferredPort) || 8766)));
+  for (let port = start; port <= Math.min(65535, start + 100); port += 1) {
+    if (await portAvailable(host, port)) return port;
+  }
+  throw new Error(`No available local Hermes gateway port near ${start}.`);
+}
+
 function gatewayAutostartEnabled() {
   const raw = String(process.env[GATEWAY_AUTOSTART_ENV] || '1').trim().toLowerCase();
   return raw !== '0' && raw !== 'false' && raw !== 'off';
@@ -555,10 +642,21 @@ function gatewayArgsFor(command) {
 
 async function ensureGatewayProcess(log = console) {
   if (!gatewayAutostartEnabled()) return { ok: false, skipped: true, reason: 'autostart disabled' };
-  const { env: gatewayEnv } = ensureGatewayEnvFile();
-  const baseUrl = gatewayBaseUrlFromEnv();
+  let { env: gatewayEnv } = ensureGatewayEnvFile();
+  let baseUrl = gatewayBaseUrlFromEnv();
   const hermesHome = effectiveGatewayHermesHome();
-  if (await healthOk(baseUrl)) return { ok: true, alreadyRunning: true, baseUrl };
+  if (await gatewayReadyOk(baseUrl, gatewayEnv.LOCAL_DESKTOP_GATEWAY_KEY)) {
+    return { ok: true, alreadyRunning: true, baseUrl };
+  }
+
+  const endpoint = parseGatewayBaseUrl(baseUrl);
+  if (!await portAvailable(endpoint.host, endpoint.port)) {
+    const replacementPort = await nextAvailableGatewayPort(endpoint.host, endpoint.port + 1);
+    ({ env: gatewayEnv } = ensureGatewayEnvFile({ LOCAL_DESKTOP_PORT: String(replacementPort) }));
+    baseUrl = gatewayBaseUrlFromEnv();
+    log.warn('[agent-ui] Hermes gateway port was occupied; using', baseUrl);
+  }
+
   ensureGatewayConfigFile(hermesHome);
   if (gatewayProcess && !gatewayProcess.killed) return { ok: true, starting: true, baseUrl };
   if (gatewayStartPromise) return gatewayStartPromise;
@@ -594,7 +692,9 @@ async function ensureGatewayProcess(log = console) {
     });
 
     for (let i = 0; i < 20; i += 1) {
-      if (await healthOk(baseUrl, 500)) return { ok: true, started: true, baseUrl, pid: child.pid || null };
+      if (await gatewayReadyOk(baseUrl, gatewayEnv.LOCAL_DESKTOP_GATEWAY_KEY, 500)) {
+        return { ok: true, started: true, baseUrl, pid: child.pid || null };
+      }
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     return { ok: false, error: `Hermes gateway did not become ready at ${baseUrl}.`, pid: child.pid || null };
@@ -624,8 +724,12 @@ module.exports = {
   ensureGatewayConfigFile,
   ensureGatewayProcess,
   executableExists,
+  gatewayAuthOk,
+  gatewayReadyOk,
   hermesCwd,
+  nextAvailableGatewayPort,
   parseTranscriptionJson,
+  portAvailable,
   resolveHermesCommand,
   stopGatewayProcess,
   captureAndTranscribeVoice,
