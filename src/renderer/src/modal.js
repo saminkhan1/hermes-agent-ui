@@ -1,6 +1,6 @@
 /* global agentUI */
 
-import catSpriteUrl from '../../../assets/cats/cat.png';
+import goblinSpriteUrl from '../../../assets/pets/goblin/spritesheet.webp';
 import { insertNewlineAtCursor } from './insert-newline-at-cursor.js';
 
 const params = new URLSearchParams(window.location.search);
@@ -15,7 +15,7 @@ const btnCreateCat = document.getElementById('btn-create-cat');
 const btnDictate = document.getElementById('btn-dictate');
 
 if (headerAppIcon) {
-  headerAppIcon.style.backgroundImage = `url("${catSpriteUrl}")`;
+  headerAppIcon.style.backgroundImage = `url("${goblinSpriteUrl}")`;
 }
 
 const isApple =

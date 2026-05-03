@@ -7,6 +7,7 @@ const {
   nativeImage,
   ipcMain,
   screen,
+  shell,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -41,6 +42,26 @@ const {
   pointForRectCenter,
 } = require('./pet-layout');
 
+const IS_MAC = process.platform === 'darwin';
+const MAC_FULL_SCREEN_WORKSPACE_OPTIONS = {
+  visibleOnFullScreen: true,
+  skipTransformProcessType: true,
+};
+const PET_OVERLAY_WINDOW_LEVEL = 'floating';
+const FOCUSED_OVERLAY_WINDOW_LEVEL = 'modal-panel';
+const CUSTOM_PET_PREFIX = 'custom:';
+const PET_MANIFEST_FILE = 'pet.json';
+const LEGACY_AVATAR_MANIFEST_FILE = 'avatar.json';
+const PET_DEFAULT_SPRITESHEET = 'spritesheet.webp';
+const PET_SPRITESHEET_WIDTH = 1536;
+const PET_SPRITESHEET_HEIGHT = 1872;
+const PET_DRAG_DISPLAY_HYSTERESIS = 24;
+const PET_MOMENTUM_INTERVAL_MS = 16;
+const PET_MOMENTUM_DECAY = 0.88;
+const PET_MOMENTUM_STOP_SPEED = 65;
+const PET_MOMENTUM_MAX_DURATION_MS = 900;
+const FALLBACK_PET_CHARACTER_ID = `${CUSTOM_PET_PREFIX}goblin`;
+
 let getWindowsModulePromise = null;
 
 function loadGetWindowsModule() {
@@ -61,6 +82,200 @@ function loadGetWindowsModule() {
  */
 function getPackageRoot() {
   return path.resolve(__dirname, '..', '..');
+}
+
+function getCodexHomeDir() {
+  const configured = String(process.env.CODEX_HOME || '').trim();
+  return configured ? path.resolve(configured) : path.join(os.homedir(), '.codex');
+}
+
+function ensureDir(dir) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+function primaryCodexPetsDir() {
+  const dir = path.join(getCodexHomeDir(), 'pets');
+  ensureDir(dir);
+  return dir;
+}
+
+function bufferToDataUrl(buffer, mimeType) {
+  return `data:${mimeType};base64,${buffer.toString('base64')}`;
+}
+
+function readJsonFile(file) {
+  const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  return data && typeof data === 'object' ? data : {};
+}
+
+function safeManifestString(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function pathInsideDirectory(file, dir) {
+  const relative = path.relative(dir, file);
+  return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function resolvePetSpritesheetPath(packageDir, manifest) {
+  const rel = safeManifestString(manifest.spritesheetPath) || PET_DEFAULT_SPRITESHEET;
+  const resolved = path.resolve(packageDir, rel);
+  return pathInsideDirectory(resolved, packageDir) ? resolved : null;
+}
+
+function readPngDimensions(buffer) {
+  if (
+    buffer.length < 24 ||
+    buffer[0] !== 0x89 ||
+    buffer.toString('ascii', 1, 4) !== 'PNG' ||
+    buffer.toString('ascii', 12, 16) !== 'IHDR'
+  ) return null;
+  return {
+    width: buffer.readUInt32BE(16),
+    height: buffer.readUInt32BE(20),
+  };
+}
+
+function readUint24LE(buffer, offset) {
+  return buffer[offset] | (buffer[offset + 1] << 8) | (buffer[offset + 2] << 16);
+}
+
+function readWebpDimensions(buffer) {
+  if (
+    buffer.length < 16 ||
+    buffer.toString('ascii', 0, 4) !== 'RIFF' ||
+    buffer.toString('ascii', 8, 12) !== 'WEBP'
+  ) return null;
+  let offset = 12;
+  while (offset + 8 <= buffer.length) {
+    const type = buffer.toString('ascii', offset, offset + 4);
+    const size = buffer.readUInt32LE(offset + 4);
+    const data = offset + 8;
+    if (data + size > buffer.length) return null;
+    if (type === 'VP8X' && size >= 10) {
+      return {
+        width: readUint24LE(buffer, data + 4) + 1,
+        height: readUint24LE(buffer, data + 7) + 1,
+      };
+    }
+    if (type === 'VP8L' && size >= 5 && buffer[data] === 0x2f) {
+      const b1 = buffer[data + 1];
+      const b2 = buffer[data + 2];
+      const b3 = buffer[data + 3];
+      const b4 = buffer[data + 4];
+      return {
+        width: 1 + b1 + ((b2 & 0x3f) << 8),
+        height: 1 + ((b2 & 0xc0) >> 6) + (b3 << 2) + ((b4 & 0x0f) << 10),
+      };
+    }
+    if (
+      type === 'VP8 ' &&
+      size >= 10 &&
+      buffer[data + 3] === 0x9d &&
+      buffer[data + 4] === 0x01 &&
+      buffer[data + 5] === 0x2a
+    ) {
+      return {
+        width: buffer.readUInt16LE(data + 6) & 0x3fff,
+        height: buffer.readUInt16LE(data + 8) & 0x3fff,
+      };
+    }
+    offset = data + size + (size % 2);
+  }
+  return null;
+}
+
+function spritesheetMimeType(file) {
+  const ext = path.extname(file).toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.webp') return 'image/webp';
+  return '';
+}
+
+function readSpritesheetDimensions(file, buffer) {
+  const mimeType = spritesheetMimeType(file);
+  if (mimeType === 'image/png') return readPngDimensions(buffer);
+  if (mimeType === 'image/webp') return readWebpDimensions(buffer);
+  return null;
+}
+
+function loadPetPackage(packageDir, manifestFile) {
+  const manifestPath = path.join(packageDir, manifestFile);
+  if (!fs.existsSync(manifestPath)) return null;
+  const manifest = readJsonFile(manifestPath);
+  const spritesheetPath = resolvePetSpritesheetPath(packageDir, manifest);
+  if (!spritesheetPath || !fs.existsSync(spritesheetPath)) return null;
+  const buffer = fs.readFileSync(spritesheetPath);
+  const dimensions = readSpritesheetDimensions(spritesheetPath, buffer);
+  if (
+    !dimensions ||
+    dimensions.width !== PET_SPRITESHEET_WIDTH ||
+    dimensions.height !== PET_SPRITESHEET_HEIGHT
+  ) return null;
+  const directoryId = path.basename(packageDir);
+  const id = `${CUSTOM_PET_PREFIX}${directoryId}`;
+  const displayName = safeManifestString(manifest.displayName) || safeManifestString(manifest.id) || directoryId;
+  const description = manifest.description == null ? '' : safeManifestString(manifest.description);
+  return {
+    assetRef: 'codex',
+    description,
+    displayName,
+    id,
+    label: displayName,
+    sourceDirectory: packageDir,
+    spriteUrl: bufferToDataUrl(buffer, spritesheetMimeType(spritesheetPath)),
+  };
+}
+
+function scanPetPackageRoot(rootDir, manifestFile, { create = false } = {}) {
+  try {
+    if (create) ensureDir(rootDir);
+    if (!fs.existsSync(rootDir)) return [];
+    return fs.readdirSync(rootDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => {
+        try {
+          return loadPetPackage(path.join(rootDir, entry.name), manifestFile);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  } catch (e) {
+    console.warn('[agent-ui] pet package scan failed', rootDir, e && e.message ? e.message : e);
+    return [];
+  }
+}
+
+function loadPetCharacterOptions() {
+  const codexHome = getCodexHomeDir();
+  const packageRoot = getPackageRoot();
+  const byId = new Map();
+  const roots = [
+    { dir: path.join(packageRoot, 'assets', 'pets'), manifestFile: PET_MANIFEST_FILE, create: false },
+    { dir: path.join(codexHome, 'avatars'), manifestFile: LEGACY_AVATAR_MANIFEST_FILE, create: false },
+    { dir: path.join(codexHome, 'pets'), manifestFile: PET_MANIFEST_FILE, create: true },
+  ];
+  for (const root of roots) {
+    for (const pet of scanPetPackageRoot(root.dir, root.manifestFile, { create: root.create })) {
+      byId.set(pet.id, pet);
+    }
+  }
+  return [...byId.values()].sort((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+function petCharactersPayload() {
+  return {
+    id: selectedPetCharacterId,
+    options: petCharacterOptions.map((pet) => ({
+      assetRef: pet.assetRef,
+      description: pet.description,
+      displayName: pet.displayName,
+      id: pet.id,
+      label: pet.label,
+      spriteUrl: pet.spriteUrl,
+    })),
+  };
 }
 
 function execFileText(command, args, opts = {}) {
@@ -86,8 +301,6 @@ const CONVERSATION_WINDOW_SIDE = 800;
 let mainWindowMouseable = false;
 let tray;
 let closeEvalServer = null;
-/** Opening a child window temporarily clears `setVisibleOnAllWorkspaces` on the overlay (stacking/focus on macOS); restore when the child closes. */
-let mainWindowWasVisibleOnAllWorkspaces = false;
 /** Latest overlay session counts from renderer (dock / tray menu). */
 let catCounts = { active: 0, inReview: 0 };
 let overlayReady = false;
@@ -101,12 +314,15 @@ let petOverlayOpenRequested = false;
 let petWindowMovePersistTimer = null;
 let applyingPetWindowBounds = false;
 let petPointerInteractive = false;
-let petKeyboardInteractive = false;
 let petAnchor = null;
+let petDragState = null;
 let petLayout = null;
 let petMascotSize = { ...PET_DEFAULT_MASCOT_SIZE };
+let petMomentumTimer = null;
 let petTraySize = null;
 let petPlacement = 'top-end';
+let petCharacterOptions = [];
+let selectedPetCharacterId = FALLBACK_PET_CHARACTER_ID;
 
 function getPetOverlayStatePath() {
   return path.join(getAgentUIConfigDir(), 'pet-overlay.json');
@@ -133,9 +349,101 @@ function writePetOverlayState(patch = {}) {
   }
 }
 
+function normalizePetCharacterId(id) {
+  const value = String(id || '').trim();
+  const aliases = [
+    value,
+    value.startsWith(CUSTOM_PET_PREFIX) ? value.slice(CUSTOM_PET_PREFIX.length) : `${CUSTOM_PET_PREFIX}${value}`,
+  ];
+  const match = aliases.find((candidate) => petCharacterOptions.some((pet) => pet.id === candidate));
+  return match || (petCharacterOptions[0] ? petCharacterOptions[0].id : FALLBACK_PET_CHARACTER_ID);
+}
+
+function sendPetCharacterToRenderer() {
+  if (!mainWindow || mainWindow.isDestroyed() || !overlayReady) return;
+  mainWindow.webContents.send('pet-character-changed', petCharactersPayload());
+}
+
+function refreshPetCharacterOptions({ notify = false } = {}) {
+  petCharacterOptions = loadPetCharacterOptions();
+  selectedPetCharacterId = normalizePetCharacterId(selectedPetCharacterId);
+  if (notify) sendPetCharacterToRenderer();
+  rebuildAppMenus();
+}
+
+function setSelectedPetCharacter(id, { persist = true } = {}) {
+  const next = normalizePetCharacterId(id);
+  const changed = selectedPetCharacterId !== next;
+  selectedPetCharacterId = next;
+  if (persist) writePetOverlayState({ petCharacter: next });
+  if (changed) sendPetCharacterToRenderer();
+  rebuildAppMenus();
+}
+
 function safeInteger(value) {
   const n = Number(value);
   return Number.isFinite(n) ? Math.trunc(n) : null;
+}
+
+function macPanelWindowOptions() {
+  return IS_MAC ? { type: 'panel' } : {};
+}
+
+function applyOverlayWindowPolicy(win, { level = PET_OVERLAY_WINDOW_LEVEL } = {}) {
+  if (!win || win.isDestroyed()) return;
+  if (IS_MAC) {
+    win.setVisibleOnAllWorkspaces(true, MAC_FULL_SCREEN_WORKSPACE_OPTIONS);
+    win.setAlwaysOnTop(true, level);
+    return;
+  }
+  win.setAlwaysOnTop(true);
+}
+
+function usableBounds(rect) {
+  if (!rect || typeof rect !== 'object') return null;
+  const x = Number(rect.x);
+  const y = Number(rect.y);
+  const width = Number(rect.width);
+  const height = Number(rect.height);
+  if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+  return { x, y, width, height };
+}
+
+function displayPlacementBounds(displayLike) {
+  const direct = displayLike && typeof displayLike === 'object' ? displayLike : null;
+  const bounds = usableBounds(direct && (direct.workArea || direct.bounds));
+  if (bounds) return bounds;
+  const fallbackDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  return usableBounds(fallbackDisplay.workArea) || usableBounds(fallbackDisplay.bounds);
+}
+
+function centeredWindowBounds(width, height, displayLike) {
+  const windowWidth = Math.max(1, Math.round(Number(width) || 1));
+  const windowHeight = Math.max(1, Math.round(Number(height) || 1));
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const displayBounds =
+    displayPlacementBounds(displayLike) ||
+    usableBounds(primaryDisplay.workArea) ||
+    usableBounds(primaryDisplay.bounds) ||
+    { x: 0, y: 0, width: windowWidth, height: windowHeight };
+  return {
+    x: Math.round(displayBounds.x + Math.max(0, (displayBounds.width - windowWidth) / 2)),
+    y: Math.round(displayBounds.y + Math.max(0, (displayBounds.height - windowHeight) / 2)),
+    width: windowWidth,
+    height: windowHeight,
+  };
+}
+
+function launchDisplayForModal(modalContextId) {
+  const launchContext = modalContextId ? (modalContexts.get(modalContextId) || null) : null;
+  if (launchContext && launchContext.display) return launchContext.display;
+  if (launchContext && launchContext.cursor) return screen.getDisplayNearestPoint(launchContext.cursor);
+  return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+}
+
+function displayForPetOrCursor() {
+  if (petAnchor) return screen.getDisplayNearestPoint(pointForRectCenter(petAnchor));
+  return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
 }
 
 function defaultPetAnchor(display = screen.getPrimaryDisplay()) {
@@ -249,6 +557,134 @@ function applyPetLayout(displayBounds = displayBoundsForPetAnchor(), { persist =
   if (persist) persistPetWindowBounds();
 }
 
+function rectEquals(a, b) {
+  return !!(
+    a &&
+    b &&
+    a.x === b.x &&
+    a.y === b.y &&
+    a.width === b.width &&
+    a.height === b.height
+  );
+}
+
+function expandRect(rect, amount) {
+  return {
+    x: rect.x - amount,
+    y: rect.y - amount,
+    width: rect.width + amount * 2,
+    height: rect.height + amount * 2,
+  };
+}
+
+function pointInRect(point, rect) {
+  return (
+    point.x >= rect.x &&
+    point.x < rect.x + rect.width &&
+    point.y >= rect.y &&
+    point.y < rect.y + rect.height
+  );
+}
+
+function displayBoundsForDragPoint(point, previousDisplayBounds) {
+  const nearestBounds = screen.getDisplayNearestPoint(point).bounds;
+  if (rectEquals(nearestBounds, previousDisplayBounds)) return nearestBounds;
+  if (previousDisplayBounds && pointInRect(point, expandRect(previousDisplayBounds, PET_DRAG_DISPLAY_HYSTERESIS))) {
+    return previousDisplayBounds;
+  }
+  return nearestBounds;
+}
+
+function cancelPetMomentum() {
+  if (petMomentumTimer != null) {
+    clearTimeout(petMomentumTimer);
+    petMomentumTimer = null;
+  }
+}
+
+function movePetDragToCurrentCursor() {
+  if (!petDragState) return;
+  const cursor = screen.getCursorScreenPoint();
+  const displayBounds = displayBoundsForDragPoint(cursor, petDragState.displayBounds);
+  petDragState.displayBounds = displayBounds;
+  petAnchor = {
+    ...(petAnchor || defaultPetAnchor()),
+    x: cursor.x - petDragState.pointerAnchorX,
+    y: cursor.y - petDragState.pointerAnchorY,
+  };
+  applyPetLayout(displayBounds, { persist: false });
+}
+
+function startPetDrag({ pointerWindowX, pointerWindowY } = {}) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const x = Number(pointerWindowX);
+  const y = Number(pointerWindowY);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  cancelPetMomentum();
+  const currentLayout = petLayout || computePetLayout({
+    anchor: petAnchor || defaultPetAnchor(),
+    displayBounds: displayBoundsForPetAnchor(),
+    mascotSize: petMascotSize,
+    previousPlacement: petPlacement,
+    traySize: petTraySize || PET_DEFAULT_TRAY_SIZE,
+  });
+  petDragState = {
+    displayBounds: screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).bounds,
+    hasMoved: false,
+    pointerAnchorX: x - currentLayout.mascot.left,
+    pointerAnchorY: y - currentLayout.mascot.top,
+  };
+}
+
+function movePetDrag() {
+  if (!mainWindow || mainWindow.isDestroyed() || !petDragState) return;
+  cancelPetMomentum();
+  petDragState.hasMoved = true;
+  movePetDragToCurrentCursor();
+}
+
+function endPetDrag() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (petDragState && petDragState.hasMoved) movePetDragToCurrentCursor();
+  petDragState = null;
+  applyPetLayout(undefined, { persist: true });
+}
+
+function throwPetWithVelocity(velocityX, velocityY) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  let vx = Number(velocityX);
+  let vy = Number(velocityY);
+  if (!Number.isFinite(vx) || !Number.isFinite(vy) || (vx === 0 && vy === 0)) return;
+  cancelPetMomentum();
+  let elapsed = 0;
+  const step = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      cancelPetMomentum();
+      return;
+    }
+    petMomentumTimer = null;
+    elapsed += PET_MOMENTUM_INTERVAL_MS;
+    const intended = {
+      ...(petAnchor || defaultPetAnchor()),
+      x: (petAnchor || defaultPetAnchor()).x + (vx * PET_MOMENTUM_INTERVAL_MS) / 1000,
+      y: (petAnchor || defaultPetAnchor()).y + (vy * PET_MOMENTUM_INTERVAL_MS) / 1000,
+    };
+    const displayBounds = screen.getDisplayNearestPoint(pointForRectCenter(intended)).bounds;
+    petAnchor = intended;
+    applyPetLayout(displayBounds, { persist: false });
+    if (petAnchor.x !== Math.round(intended.x)) vx = 0;
+    if (petAnchor.y !== Math.round(intended.y)) vy = 0;
+    vx *= PET_MOMENTUM_DECAY;
+    vy *= PET_MOMENTUM_DECAY;
+    if (elapsed >= PET_MOMENTUM_MAX_DURATION_MS || Math.hypot(vx, vy) < PET_MOMENTUM_STOP_SPEED) {
+      persistPetWindowBounds();
+      return;
+    }
+    petMomentumTimer = setTimeout(step, PET_MOMENTUM_INTERVAL_MS);
+  };
+  petMomentumTimer = setTimeout(step, PET_MOMENTUM_INTERVAL_MS);
+}
+
 function syncPetAnchorFromWindowBounds() {
   if (!mainWindow || mainWindow.isDestroyed() || !petLayout) return;
   const bounds = mainWindow.getBounds();
@@ -306,41 +742,19 @@ function setPetWindowMouseable(enabled, { refreshCursor = false } = {}) {
 
 function applyPetMouseInteractivityPolicy() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  const shouldAcceptMouse =
-    petKeyboardInteractive ||
-    petPointerInteractive;
-  setPetWindowMouseable(shouldAcceptMouse, { refreshCursor: shouldAcceptMouse });
+  setPetWindowMouseable(petPointerInteractive, { refreshCursor: petPointerInteractive });
 }
 
 function openPetOverlay({ persist = true } = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   petOverlayOpenRequested = true;
   petPointerInteractive = false;
-  restoreMainWindowAllWorkspaces();
+  applyOverlayWindowPolicy(mainWindow, { level: PET_OVERLAY_WINDOW_LEVEL });
   applyPetLayout(undefined, { persist: false });
   if (!mainWindow.isVisible()) mainWindow.showInactive();
   mainWindow.moveTop();
   if (persist) writePetOverlayState({ open: true });
   rebuildAppMenus();
-}
-
-function setPetKeyboardInteraction(enabled) {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  petKeyboardInteractive = !!enabled;
-  if (!petKeyboardInteractive) {
-    mainWindow.setFocusable(false);
-    applyPetMouseInteractivityPolicy();
-    return;
-  }
-  mainWindow.setFocusable(true);
-  setPetWindowMouseable(true, { refreshCursor: true });
-  if (!mainWindow.isVisible()) mainWindow.show();
-  if (process.platform === 'darwin') {
-    app.focus({ steal: true });
-  }
-  mainWindow.focus();
-  mainWindow.webContents.focus();
-  mainWindow.webContents.send('pet-keyboard-interaction-ready', {});
 }
 
 function setPetPointerInteraction(enabled) {
@@ -351,9 +765,10 @@ function setPetPointerInteraction(enabled) {
 function closePetOverlay({ persist = true } = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   petOverlayOpenRequested = false;
+  petDragState = null;
+  cancelPetMomentum();
   cancelPetWindowMovePersist();
   setPetPointerInteraction(false);
-  setPetKeyboardInteraction(false);
   if (mainWindow.isVisible()) mainWindow.hide();
   if (persist) writePetOverlayState({ open: false });
   rebuildAppMenus();
@@ -370,6 +785,7 @@ function togglePetOverlay() {
 function createWindow() {
   const saved = readPetOverlayState();
   petOverlayOpenRequested = saved.open === true;
+  selectedPetCharacterId = normalizePetCharacterId(saved.petCharacter);
   const { x, y, width, height } = initialPetWindowBounds();
 
   mainWindow = new BrowserWindow({
@@ -387,6 +803,7 @@ function createWindow() {
     focusable: false,
     show: false,
     backgroundColor: '#00000000',
+    ...macPanelWindowOptions(),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -395,8 +812,7 @@ function createWindow() {
   });
 
   mainWindow.setIgnoreMouseEvents(true, { forward: true });
-  mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
-  mainWindow.setAlwaysOnTop(true, 'floating');
+  applyOverlayWindowPolicy(mainWindow, { level: PET_OVERLAY_WINDOW_LEVEL });
 
   mainWindow.on('show', () => rebuildAppMenus());
   mainWindow.on('hide', () => rebuildAppMenus());
@@ -416,13 +832,6 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
-}
-
-function restoreMainWindowAllWorkspaces() {
-  if (process.platform !== 'darwin') return;
-  if (!mainWindow || mainWindow.isDestroyed() || !mainWindowWasVisibleOnAllWorkspaces) return;
-  mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
-  mainWindowWasVisibleOnAllWorkspaces = false;
 }
 
 function ensureOverlayVisibleForSpawn() {
@@ -469,14 +878,13 @@ function openNewCatModal(modalContextId) {
     modalWindow.close();
   }
 
-  if (process.platform === 'darwin' && mainWindow && !mainWindow.isDestroyed()) {
-    mainWindowWasVisibleOnAllWorkspaces = true;
-    mainWindow.setVisibleOnAllWorkspaces(false);
-  }
+  const modalBounds = centeredWindowBounds(680, 240, launchDisplayForModal(modalContextId));
 
   modalWindow = new BrowserWindow({
-    width: 680,
-    height: 240,
+    width: modalBounds.width,
+    height: modalBounds.height,
+    x: modalBounds.x,
+    y: modalBounds.y,
     useContentSize: true,
     frame: false,
     transparent: true,
@@ -489,12 +897,14 @@ function openNewCatModal(modalContextId) {
     alwaysOnTop: true,
     skipTaskbar: true,
     show: false,
+    ...macPanelWindowOptions(),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
   });
+  applyOverlayWindowPolicy(modalWindow, { level: FOCUSED_OVERLAY_WINDOW_LEVEL });
 
   closeWindowOnEscape(modalWindow, () => {
     if (modalWindow && !modalWindow.isDestroyed()) {
@@ -508,9 +918,6 @@ function openNewCatModal(modalContextId) {
 
   modalWindow.once('ready-to-show', () => {
     modalWindow.show();
-    if (process.platform === 'darwin') {
-      app.focus({ steal: true });
-    }
     modalWindow.moveTop();
     modalWindow.focus();
     modalWindow.webContents.focus();
@@ -526,7 +933,6 @@ function openNewCatModal(modalContextId) {
     if (activeModalContextId === modalContextId) {
       activeModalContextId = null;
     }
-    restoreMainWindowAllWorkspaces();
   });
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -559,22 +965,28 @@ function openConversationWindow(catId) {
       });
     }
     conversationWindow.setContentSize(CONVERSATION_WINDOW_SIDE, CONVERSATION_WINDOW_SIDE);
+    conversationWindow.setBounds(
+      centeredWindowBounds(CONVERSATION_WINDOW_SIDE, CONVERSATION_WINDOW_SIDE, displayForPetOrCursor()),
+      false
+    );
+    applyOverlayWindowPolicy(conversationWindow, { level: FOCUSED_OVERLAY_WINDOW_LEVEL });
     conversationWindow.show();
     conversationWindow.focus();
-    if (process.platform === 'darwin') {
-      app.focus({ steal: true });
-    }
+    conversationWindow.webContents.focus();
     return;
   }
 
-  if (process.platform === 'darwin' && mainWindow && !mainWindow.isDestroyed()) {
-    mainWindowWasVisibleOnAllWorkspaces = true;
-    mainWindow.setVisibleOnAllWorkspaces(false);
-  }
+  const conversationBounds = centeredWindowBounds(
+    CONVERSATION_WINDOW_SIDE,
+    CONVERSATION_WINDOW_SIDE,
+    displayForPetOrCursor()
+  );
 
   conversationWindow = new BrowserWindow({
-    width: CONVERSATION_WINDOW_SIDE,
-    height: CONVERSATION_WINDOW_SIDE,
+    width: conversationBounds.width,
+    height: conversationBounds.height,
+    x: conversationBounds.x,
+    y: conversationBounds.y,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -586,6 +998,7 @@ function openConversationWindow(catId) {
     alwaysOnTop: true,
     skipTaskbar: true,
     show: false,
+    ...macPanelWindowOptions(),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -593,6 +1006,7 @@ function openConversationWindow(catId) {
       webSecurity: false,
     },
   });
+  applyOverlayWindowPolicy(conversationWindow, { level: FOCUSED_OVERLAY_WINDOW_LEVEL });
 
   closeWindowOnEscape(conversationWindow, () => {
     if (conversationWindow && !conversationWindow.isDestroyed()) {
@@ -602,9 +1016,6 @@ function openConversationWindow(catId) {
 
   conversationWindow.once('ready-to-show', () => {
     conversationWindow.show();
-    if (process.platform === 'darwin') {
-      app.focus({ steal: true });
-    }
     conversationWindow.moveTop();
     conversationWindow.focus();
     conversationWindow.webContents.focus();
@@ -612,7 +1023,6 @@ function openConversationWindow(catId) {
 
   conversationWindow.on('closed', () => {
     conversationWindow = null;
-    restoreMainWindowAllWorkspaces();
   });
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -637,6 +1047,37 @@ function setCatsVisible(visible) {
   rebuildAppMenus();
 }
 
+function petCharacterMenuItem() {
+  return {
+    label: 'Pet Character',
+    submenu: petCharacterOptions.length === 0 ? [{
+      label: 'No Codex pets found',
+      enabled: false,
+    }] : petCharacterOptions.map((pet) => ({
+      label: pet.label,
+      type: 'radio',
+      checked: selectedPetCharacterId === pet.id,
+      click: () => setSelectedPetCharacter(pet.id),
+    })),
+  };
+}
+
+function refreshPetMenuItem() {
+  return {
+    label: 'Refresh Pets',
+    click: () => refreshPetCharacterOptions({ notify: true }),
+  };
+}
+
+function openPetFolderMenuItem() {
+  return {
+    label: 'Open Pet Folder',
+    click: () => {
+      void shell.openPath(primaryCodexPetsDir());
+    },
+  };
+}
+
 function buildAppMenu() {
   const catsVisible = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible());
   const accelerator = process.platform === 'darwin' ? 'Command+Shift+C' : 'Control+Shift+C';
@@ -655,6 +1096,9 @@ function buildAppMenu() {
         setCatsVisible(!catsVisible);
       },
     },
+    petCharacterMenuItem(),
+    refreshPetMenuItem(),
+    openPetFolderMenuItem(),
     { type: 'separator' },
     {
       label: 'Quit',
@@ -686,6 +1130,9 @@ function buildApplicationMenu() {
             setCatsVisible(!catsVisible);
           },
         },
+        petCharacterMenuItem(),
+        refreshPetMenuItem(),
+        openPetFolderMenuItem(),
         { type: 'separator' },
         {
           label: 'Quit',
@@ -964,6 +1411,7 @@ async function handleNewCatShortcut(source = 'shortcut') {
 
 ipcMain.on('overlay-ready', () => {
   overlayReady = true;
+  sendPetCharacterToRenderer();
   flushPendingSpawnCats();
 });
 
@@ -1051,6 +1499,14 @@ ipcMain.on('pet-overlay-toggle', () => {
   togglePetOverlay();
 });
 
+ipcMain.handle('get-pet-characters', () => {
+  return petCharactersPayload();
+});
+
+ipcMain.on('pet-characters-refresh', () => {
+  refreshPetCharacterOptions({ notify: true });
+});
+
 ipcMain.on('pet-context-menu', () => {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   Menu.buildFromTemplate([
@@ -1058,19 +1514,36 @@ ipcMain.on('pet-context-menu', () => {
       label: 'Close pet',
       click: () => closePetOverlay({ persist: true }),
     },
+    { type: 'separator' },
+    petCharacterMenuItem(),
+    refreshPetMenuItem(),
+    openPetFolderMenuItem(),
   ]).popup({ window: mainWindow });
-});
-
-ipcMain.on('pet-keyboard-interaction-changed', (_event, payload = {}) => {
-  setPetKeyboardInteraction(!!payload.active);
 });
 
 ipcMain.on('pet-pointer-interaction-changed', (_event, payload = {}) => {
   setPetPointerInteraction(!!payload.active);
 });
 
+ipcMain.on('pet-drag-start', (_event, payload = {}) => {
+  startPetDrag(payload);
+});
+
+ipcMain.on('pet-drag-move', () => {
+  movePetDrag();
+});
+
+ipcMain.on('pet-drag-end', () => {
+  endPetDrag();
+});
+
+ipcMain.on('pet-drag-release', (_event, payload = {}) => {
+  throwPetWithVelocity(payload.velocityX, payload.velocityY);
+});
+
 ipcMain.on('pet-element-size-changed', (_event, payload = {}) => {
   if (!payload || typeof payload !== 'object') return;
+  cancelPetMomentum();
   const mascot = payload.mascot && typeof payload.mascot === 'object' ? payload.mascot : null;
   const trayPayload = payload.tray && typeof payload.tray === 'object' ? payload.tray : null;
   const mascotWidth = mascot ? Number(mascot.width) : NaN;
@@ -1255,6 +1728,7 @@ ipcMain.on('eval-ui-state', (_event, payload = {}) => {
 
 app.whenReady().then(() => {
   app.setName('agent-UI');
+  refreshPetCharacterOptions();
   void loadGetWindowsModule();
   if (process.platform === 'darwin' && app.dock && process.env.AGENT_UI_EVAL !== '1') {
     app.dock.hide();
@@ -1326,6 +1800,12 @@ app.whenReady().then(() => {
   const reclampPetOverlay = () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     cancelPetWindowMovePersist();
+    if (petDragState) {
+      petDragState.displayBounds = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).bounds;
+      movePetDrag();
+      return;
+    }
+    cancelPetMomentum();
     applyPetLayout(undefined, { persist: true });
   };
   screen.on('display-added', reclampPetOverlay);
@@ -1369,6 +1849,7 @@ app.on('will-quit', () => {
     closeEvalServer = null;
   }
   cancelAllAgents();
+  cancelPetMomentum();
   if (activeWindowPollTimer != null) {
     clearInterval(activeWindowPollTimer);
     activeWindowPollTimer = null;

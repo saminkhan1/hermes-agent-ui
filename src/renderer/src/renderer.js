@@ -1,7 +1,5 @@
 /* global agentUI */
 
-import catSpriteUrl from '../../../assets/cats/cat.png';
-
 const root = document.getElementById('pet-root');
 const shell = document.getElementById('pet-shell');
 const mascot = document.getElementById('pet-mascot');
@@ -17,11 +15,10 @@ const DEFAULT_LAYOUT = {
 };
 
 const STATUS_PRIORITY = {
-  waiting: 0,
-  failed: 1,
-  review: 2,
-  running: 3,
-  idle: 4,
+  failed: 0,
+  review: 1,
+  running: 2,
+  idle: 3,
 };
 
 const STATUS_META = {
@@ -32,14 +29,6 @@ const STATUS_META = {
     icon: 'spinner',
     label: 'Running',
     mascotState: 'running',
-  },
-  waiting: {
-    badgeBackgroundColor: 'var(--color-token-editor-warning-foreground)',
-    badgeForegroundColor: 'var(--color-token-bg-primary)',
-    defaultBody: 'Needs input',
-    icon: 'clock',
-    label: 'Needs input',
-    mascotState: 'waiting',
   },
   failed: {
     badgeBackgroundColor: 'var(--color-token-error-foreground)',
@@ -67,8 +56,10 @@ const STATUS_META = {
   },
 };
 
-const AVATAR_COLUMNS = 12;
-const AVATAR_ROWS = 7;
+const DEFAULT_PET_OPTIONS = [];
+const DEFAULT_PET_ID = 'custom:goblin';
+const AVATAR_COLUMNS = 8;
+const AVATAR_ROWS = 9;
 const IDLE_FRAMES = [
   { rowIndex: 0, columnIndex: 0, frameDurationMs: 280 },
   { rowIndex: 0, columnIndex: 1, frameDurationMs: 110 },
@@ -79,49 +70,46 @@ const IDLE_FRAMES = [
 ];
 const LONG_IDLE_FRAMES = IDLE_FRAMES.map((frame) => ({ ...frame, frameDurationMs: frame.frameDurationMs * 6 }));
 const AVATAR_FRAMES = {
-  failed: linearFrames(6, 4, 140, 240),
+  failed: linearFrames(5, 8, 140, 240),
   idle: IDLE_FRAMES,
-  jumping: linearFrames(4, 3, 140, 280),
-  review: linearFrames(3, 3, 150, 280),
-  running: linearFrames(2, 8, 120, 220),
+  jumping: linearFrames(4, 5, 140, 280),
+  review: linearFrames(8, 6, 150, 280),
+  running: linearFrames(7, 6, 120, 220),
   'running-left': linearFrames(2, 8, 120, 220),
-  'running-right': linearFrames(2, 8, 120, 220),
-  waiting: linearFrames(5, 8, 150, 260),
+  'running-right': linearFrames(1, 8, 120, 220),
+  waving: linearFrames(3, 4, 140, 280),
 };
 
 const VISIBLE_SCROLL_STEP = 2;
 const SCROLL_EDGE_SLOP = 2;
 const COLLAPSED_BODY_MAX_HEIGHT = 32;
 const EXPANDED_BODY_MAX_HEIGHT = 512;
+const DRAG_THRESHOLD_PX = 4;
+const DRAG_MAX_SAMPLE_AGE_MS = 100;
+const DRAG_MIN_FLING_SPEED = 320;
+const DRAG_MAX_FLING_SPEED = 1600;
 const POINTER_HIT_REGION_SELECTOR = '[data-avatar-overlay-hit-region], [data-avatar-mascot="true"]';
 const pendingFinishes = new Map();
 const pendingStreams = new Map();
-const replyDrafts = new Map();
-const replyErrors = new Map();
-const submittingReplies = new Set();
 const sessions = new Map();
 const expandedRows = new Set();
+const expandableRows = new Map();
 const avatarTimers = new WeakMap();
 
 let layout = DEFAULT_LAYOUT;
 let trayOpen = true;
 let mascotHover = false;
-let replyingTo = null;
-let pendingReplyFocus = null;
 let petPointerInteractionActive = false;
-let petKeyboardInteractionActive = false;
 let pointerInteractionPoint = null;
 let pointerInteractionFrame = null;
 let pointerInteractionObserver = null;
 let scrollState = { hasLatestNotificationsAbove: false, hiddenOlderNotificationCount: 0 };
 let lastElementSizePayload = '';
-
-const assetsReady = new Promise((resolve) => {
-  const img = new Image();
-  img.onload = () => resolve(true);
-  img.onerror = () => resolve(false);
-  img.src = catSpriteUrl;
-});
+let rowMeasureFrame = null;
+let petDrag = null;
+let petDragAvatarState = null;
+let petOptions = DEFAULT_PET_OPTIONS.slice();
+let selectedPetId = DEFAULT_PET_ID;
 
 function traceEvalEvent(type, payload = {}) {
   if (!window.agentUI || typeof window.agentUI.traceEvalEvent !== 'function') return;
@@ -175,6 +163,69 @@ function linearFrames(rowIndex, count, frameDurationMs, finalFrameDurationMs) {
   }));
 }
 
+function normalizePetOption(option) {
+  if (!option || typeof option !== 'object') return null;
+  const id = String(option.id || '').trim();
+  const spriteUrl = String(option.spriteUrl || option.spritesheetUrl || option.spritesheetDataUrl || '').trim();
+  if (!id || !spriteUrl) return null;
+  return {
+    assetRef: String(option.assetRef || 'codex'),
+    description: String(option.description || '').trim(),
+    displayName: String(option.displayName || option.label || id).trim() || id,
+    id,
+    spriteUrl,
+  };
+}
+
+function setPetOptions(options, selectedId = selectedPetId) {
+  const nextOptions = Array.isArray(options) ? options.map(normalizePetOption).filter(Boolean) : [];
+  if (nextOptions.length > 0) petOptions = nextOptions;
+  const candidate = String(selectedId || '').trim();
+  selectedPetId = petOptionById(candidate).id;
+}
+
+function preloadPetAssets(options = petOptions) {
+  return Promise.all(options.map((pet) => new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(true);
+    img.onerror = () => resolve(false);
+    img.src = pet.spriteUrl;
+  })));
+}
+
+async function loadPetOptionsFromBridge() {
+  if (!window.agentUI || typeof window.agentUI.getPetCharacters !== 'function') return;
+  try {
+    const payload = await window.agentUI.getPetCharacters();
+    setPetOptions(payload && payload.options, payload && payload.id);
+    await preloadPetAssets();
+  } catch {
+    // Keep rendering with the last known pet options.
+  }
+}
+
+function petOptionById(id) {
+  const value = String(id || '').trim();
+  return petOptions.find((pet) => pet.id === value) || petOptions[0] || {
+    assetRef: 'codex',
+    description: '',
+    displayName: 'Codex pet',
+    id: DEFAULT_PET_ID,
+    spriteUrl: '',
+  };
+}
+
+function currentPetOption() {
+  return petOptionById(selectedPetId);
+}
+
+function setSelectedPet(id) {
+  const next = petOptionById(id);
+  if (selectedPetId === next.id) return;
+  selectedPetId = next.id;
+  renderAll();
+}
+
 function framePosition(frame) {
   return `${(frame.columnIndex / (AVATAR_COLUMNS - 1)) * 100}% ${(frame.rowIndex / (AVATAR_ROWS - 1)) * 100}%`;
 }
@@ -190,12 +241,14 @@ function framesForState(state, prefersReducedMotion) {
 function animateAvatar(el, state) {
   if (!el) return;
   const nextState = state || 'idle';
-  if (el.dataset.avatarState === nextState && avatarTimers.has(el)) return;
+  const pet = currentPetOption();
+  if (el.dataset.avatarState === nextState && el.dataset.avatarPetId === pet.id && avatarTimers.has(el)) return;
   const cancel = avatarTimers.get(el);
   if (cancel) cancel();
+  el.dataset.avatarAssetRef = pet.assetRef || 'codex';
   el.dataset.avatarState = nextState;
-  el.dataset.avatarDirection = nextState === 'running-left' ? 'left' : 'right';
-  el.style.backgroundImage = `url("${catSpriteUrl}")`;
+  el.dataset.avatarPetId = pet.id;
+  el.style.backgroundImage = `url("${pet.spriteUrl}")`;
 
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const animation = framesForState(nextState, prefersReducedMotion);
@@ -229,18 +282,6 @@ function animateAvatar(el, state) {
   });
 }
 
-function ensureAvatarFrame(rootEl) {
-  if (!rootEl) return null;
-  let frame = rootEl.querySelector('.pet-avatar-frame');
-  if (!frame) {
-    frame = document.createElement('span');
-    frame.className = 'pet-avatar-frame';
-    frame.setAttribute('aria-hidden', 'true');
-    rootEl.appendChild(frame);
-  }
-  return frame;
-}
-
 function iconMarkup(type) {
   switch (type) {
     case 'check-circle':
@@ -270,7 +311,6 @@ function normalizeStatus(status) {
   if (s === 'running' || s === 'in_progress' || s === 'resuming') return 'running';
   if (s === 'review' || s === 'completed' || s === 'complete') return 'review';
   if (s === 'failed' || s === 'error' || s === 'cancelled' || s === 'canceled') return 'failed';
-  if (s === 'waiting' || s === 'needs_input' || s === 'needs-input') return 'waiting';
   return 'idle';
 }
 
@@ -298,8 +338,10 @@ function sessionTitle(session) {
 }
 
 function sessionBody(session) {
-  if (session.streamBubble) return String(session.streamBubble);
+  const state = normalizeStatus(session && session.status);
+  if (state === 'running' && session.streamBubble) return String(session.streamBubble);
   if (session.finishLine) return String(session.finishLine);
+  if (session.streamBubble) return String(session.streamBubble);
   return '';
 }
 
@@ -322,7 +364,6 @@ function notificationForSession(session) {
     isLoading: state === 'running',
     level: state,
     canDismiss: canDismissSession(session),
-    replyTarget: canReplyToSession(session) ? { catId: id } : null,
     source: 'local',
     title: sessionTitle(session),
     updatedAtMs: Number(session.updatedAt || 0),
@@ -349,23 +390,6 @@ function visibleSessionCount(list = notifications()) {
     else review += 1;
   }
   return { active, review };
-}
-
-function canReplyToSession(session) {
-  return !!(
-    session &&
-    normalizeStatus(session.status) === 'waiting' &&
-    window.agentUI &&
-    typeof window.agentUI.sendFollowup === 'function'
-  );
-}
-
-function setPetKeyboardInteraction(active) {
-  if (petKeyboardInteractionActive === !!active) return;
-  petKeyboardInteractionActive = !!active;
-  if (window.agentUI && typeof window.agentUI.setPetKeyboardInteraction === 'function') {
-    window.agentUI.setPetKeyboardInteraction(petKeyboardInteractionActive);
-  }
 }
 
 function reportPetPointerInteraction(active, { force = false } = {}) {
@@ -433,9 +457,7 @@ function installPetPointerInteractivity() {
   window.addEventListener('mousemove', rememberPoint, { passive: true });
   window.addEventListener('pointermove', rememberPoint, { passive: true });
   window.addEventListener('mouseleave', () => clearPetPointerInteraction(), { passive: true });
-  window.addEventListener('blur', () => {
-    if (!petKeyboardInteractionActive) clearPetPointerInteraction();
-  });
+  window.addEventListener('blur', () => clearPetPointerInteraction());
   window.addEventListener('resize', () => schedulePetPointerInteraction(), { passive: true });
   window.addEventListener('scroll', () => schedulePetPointerInteraction(), { passive: true, capture: true });
   if (typeof MutationObserver === 'function') {
@@ -451,38 +473,112 @@ function installPetPointerInteractivity() {
   petPointerInteractionActive = false;
 }
 
+function dragSample(e) {
+  return {
+    screenX: e.screenX,
+    screenY: e.screenY,
+    timeMs: e.timeStamp,
+  };
+}
+
+function recentDragSamples(samples) {
+  const last = samples.at(-1);
+  if (!last) return samples;
+  return samples.filter((sample) => last.timeMs - sample.timeMs <= DRAG_MAX_SAMPLE_AGE_MS);
+}
+
+function flingVelocity(samples) {
+  const last = samples.at(-1);
+  if (!last) return null;
+  const baseline = samples.find((sample) => last.timeMs - sample.timeMs > 16);
+  if (!baseline) return null;
+  const seconds = (last.timeMs - baseline.timeMs) / 1000;
+  if (seconds <= 0) return null;
+  const velocity = {
+    x: (last.screenX - baseline.screenX) / seconds,
+    y: (last.screenY - baseline.screenY) / seconds,
+  };
+  const speed = Math.hypot(velocity.x, velocity.y);
+  if (speed < DRAG_MIN_FLING_SPEED) return null;
+  if (speed <= DRAG_MAX_FLING_SPEED) return velocity;
+  const scale = DRAG_MAX_FLING_SPEED / speed;
+  return { x: velocity.x * scale, y: velocity.y * scale };
+}
+
+function dragReleaseVelocity(startState, releaseSample) {
+  if (!startState || !startState.hasMoved || !releaseSample) return null;
+  return flingVelocity(recentDragSamples([...startState.samples, releaseSample]));
+}
+
+function dragStateForDelta(currentDragState, deltaX) {
+  if (deltaX >= DRAG_THRESHOLD_PX) return 'running-right';
+  if (deltaX <= -DRAG_THRESHOLD_PX) return 'running-left';
+  return currentDragState;
+}
+
+function finishPetDrag(pointerId, { releaseSample = null, shouldOpenMainWindow = false } = {}) {
+  if (!petDrag || petDrag.pointerId !== pointerId) return;
+  const currentDrag = petDrag;
+  petDrag = null;
+  petDragAvatarState = null;
+  shell?.releasePointerCapture?.(pointerId);
+  if (shouldOpenMainWindow && currentDrag.startedOnMascot && !currentDrag.hasMoved) {
+    const top = notifications()[0] || null;
+    if (top && top.action) openSessionConversation(top.action.catId);
+  }
+  if (window.agentUI && typeof window.agentUI.endPetDrag === 'function') {
+    window.agentUI.endPetDrag();
+  }
+  const velocity = dragReleaseVelocity(currentDrag, releaseSample);
+  if (velocity && window.agentUI && typeof window.agentUI.releasePetDrag === 'function') {
+    window.agentUI.releasePetDrag({ velocityX: velocity.x, velocityY: velocity.y });
+  }
+  renderAll();
+}
+
+function onPetPointerDown(e) {
+  if (
+    e.button !== 0 ||
+    !(e.target instanceof Element) ||
+    e.target.closest('.no-drag') != null
+  ) return;
+  e.preventDefault();
+  shell?.setPointerCapture?.(e.pointerId);
+  petDrag = {
+    startedOnMascot: e.target.closest('[data-avatar-mascot="true"]') != null,
+    hasMoved: false,
+    pointerId: e.pointerId,
+    samples: [dragSample(e)],
+    screenX: e.screenX,
+    screenY: e.screenY,
+  };
+  if (window.agentUI && typeof window.agentUI.startPetDrag === 'function') {
+    window.agentUI.startPetDrag({ pointerWindowX: e.clientX, pointerWindowY: e.clientY });
+  }
+  petDragAvatarState = null;
+  renderMascot(notifications());
+}
+
+function onPetPointerMove(e) {
+  if (!petDrag || petDrag.pointerId !== e.pointerId) return;
+  const sample = dragSample(e);
+  petDrag.samples = recentDragSamples([...petDrag.samples, sample]);
+  const deltaX = sample.screenX - petDrag.screenX;
+  const deltaY = sample.screenY - petDrag.screenY;
+  if (Math.abs(deltaX) < DRAG_THRESHOLD_PX && Math.abs(deltaY) < DRAG_THRESHOLD_PX) return;
+  petDrag.hasMoved = true;
+  petDrag.screenX = sample.screenX;
+  petDrag.screenY = sample.screenY;
+  petDragAvatarState = dragStateForDelta(petDragAvatarState, deltaX);
+  if (window.agentUI && typeof window.agentUI.movePetDrag === 'function') {
+    window.agentUI.movePetDrag();
+  }
+  renderMascot(notifications());
+}
+
 function openSessionConversation(catId) {
   if (window.agentUI && typeof window.agentUI.openCatConversation === 'function') {
     window.agentUI.openCatConversation(String(catId));
-  }
-}
-
-async function submitInlineReply(notification, input) {
-  const text = input && typeof input.value === 'string' ? input.value.trim() : '';
-  if (!text || !notification.replyTarget) return;
-  if (window.agentUI && typeof window.agentUI.sendFollowup === 'function') {
-    const id = String(notification.id);
-    replyDrafts.set(id, text);
-    replyErrors.delete(id);
-    submittingReplies.add(id);
-    renderAll();
-    try {
-      const result = await window.agentUI.sendFollowup(String(notification.replyTarget.catId), text);
-      if (result && result.ok === false) {
-        replyErrors.set(id, result.error || 'Unable to send reply');
-        return;
-      }
-      replyDrafts.delete(id);
-      if (input) input.value = '';
-      replyingTo = null;
-      pendingReplyFocus = null;
-    } catch {
-      replyErrors.set(id, 'Unable to send reply');
-    } finally {
-      submittingReplies.delete(id);
-      renderAll();
-    }
-    return;
   }
 }
 
@@ -490,7 +586,6 @@ function dismissNotification(notification) {
   if (!notification || !notification.canDismiss) return;
   const id = String(notification.catId || notification.id || '').trim();
   if (!id) return;
-  if (replyingTo === id) replyingTo = null;
   expandedRows.delete(id);
   if (window.agentUI && typeof window.agentUI.dismissCat === 'function') {
     window.agentUI.dismissCat(id);
@@ -512,19 +607,20 @@ function ensureMascotAvatar() {
   let avatar = mascot.querySelector('.codex-avatar-root');
   if (!avatar) {
     mascot.textContent = '';
-    avatar = document.createElement('span');
+    avatar = document.createElement('div');
     avatar.className = 'codex-avatar-root pet-mascot-avatar';
     avatar.setAttribute('aria-hidden', 'true');
     avatar.dataset.testid = 'codex-avatar';
     mascot.appendChild(avatar);
   }
-  return ensureAvatarFrame(avatar);
+  return avatar;
 }
 
 function renderMascot(list) {
   const top = list[0] || null;
   const meta = statusMeta(top ? top.level : 'idle');
-  const state = mascotHover ? 'jumping' : meta.mascotState;
+  const state = petDragAvatarState || (mascotHover ? 'jumping' : meta.mascotState);
+  const pet = currentPetOption();
   const stage = mascot ? mascot.closest('.pet-stage') : null;
   styleBox(stage, layout.mascot);
   if (stage) {
@@ -535,7 +631,7 @@ function renderMascot(list) {
     mascot.dataset.avatarMascot = 'true';
     mascot.dataset.testid = 'avatar-mascot-button';
     mascot.setAttribute('role', list.length > 0 ? 'group' : 'img');
-    mascot.setAttribute('aria-label', 'Codex pet');
+    mascot.setAttribute('aria-label', `${pet.displayName} pet`);
   }
   animateAvatar(ensureMascotAvatar(), state);
 
@@ -557,7 +653,7 @@ function renderMascot(list) {
 }
 
 function notificationCanExpand(notification) {
-  return String(notification.body || '').replace(/\s+/g, ' ').trim().length > 80;
+  return expandableRows.get(String(notification.id)) === true;
 }
 
 function rowBody(notification) {
@@ -614,8 +710,13 @@ function makeRow(notification, index) {
   body.style.maxHeight = `${isExpanded ? EXPANDED_BODY_MAX_HEIGHT : COLLAPSED_BODY_MAX_HEIGHT}px`;
   if (isExpanded) body.dataset.expanded = 'true';
 
+  const measure = document.createElement('div');
+  measure.className = 'pet-row-measure';
+  measure.setAttribute('aria-hidden', 'true');
+  measure.textContent = rowBody(notification);
+
   action.append(titleWrap, body);
-  card.append(action, makeStatusIcon(notification));
+  card.append(action, measure, makeStatusIcon(notification));
 
   if (canExpand) {
     const expandWrap = document.createElement('div');
@@ -636,80 +737,6 @@ function makeRow(notification, index) {
     });
     expandWrap.appendChild(expand);
     card.appendChild(expandWrap);
-  }
-
-  if (notification.replyTarget && replyingTo !== notification.id) {
-    const replyWrap = document.createElement('div');
-    replyWrap.className = 'pet-row-control-wrap pet-row-reply-wrap';
-    replyWrap.dataset.avatarOverlayControl = 'reply';
-    const reply = document.createElement('button');
-    reply.type = 'button';
-    reply.className = 'pet-row-control pet-row-reply no-drag';
-    reply.setAttribute('aria-label', `Reply to ${notification.title}`);
-    reply.textContent = 'Reply';
-    reply.addEventListener('pointerdown', (e) => e.stopPropagation());
-    reply.addEventListener('click', (e) => {
-      e.stopPropagation();
-      replyingTo = notification.id;
-      pendingReplyFocus = notification.id;
-      replyDrafts.set(notification.id, '');
-      replyErrors.delete(notification.id);
-      renderAll();
-    });
-    replyWrap.appendChild(reply);
-    card.appendChild(replyWrap);
-  }
-
-  if (replyingTo === notification.id && notification.replyTarget) {
-    const form = document.createElement('form');
-    form.className = 'pet-row-reply-form no-drag';
-    form.addEventListener('click', (e) => e.stopPropagation());
-    form.addEventListener('pointerdown', (e) => e.stopPropagation());
-    const input = document.createElement('input');
-    input.className = 'pet-row-reply-input';
-    input.type = 'text';
-    input.placeholder = 'Reply';
-    input.setAttribute('aria-label', `Reply to ${notification.title}`);
-    input.value = replyDrafts.get(notification.id) || '';
-    input.disabled = submittingReplies.has(notification.id);
-    const send = document.createElement('button');
-    send.type = 'submit';
-    send.className = 'pet-row-control pet-row-reply-send';
-    send.disabled = input.value.trim().length === 0 || submittingReplies.has(notification.id);
-    send.setAttribute('aria-label', `Send reply to ${notification.title}`);
-    send.textContent = 'Reply';
-    form.append(input, send);
-    form.addEventListener('submit', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      submitInlineReply(notification, input);
-    });
-    input.addEventListener('keydown', (e) => {
-      if (e.key !== 'Escape') return;
-      e.stopPropagation();
-      replyDrafts.delete(notification.id);
-      replyErrors.delete(notification.id);
-      replyingTo = null;
-      pendingReplyFocus = null;
-      renderAll();
-    });
-    input.addEventListener('input', () => {
-      replyDrafts.set(notification.id, input.value);
-      replyErrors.delete(notification.id);
-      send.disabled = input.value.trim().length === 0 || submittingReplies.has(notification.id);
-    });
-    const error = replyErrors.get(notification.id);
-    if (error) {
-      const message = document.createElement('div');
-      message.className = 'pet-row-reply-error';
-      message.role = 'alert';
-      message.textContent = error;
-      form.appendChild(message);
-    }
-    card.appendChild(form);
-    if (pendingReplyFocus === notification.id) {
-      requestAnimationFrame(() => input.focus());
-    }
   }
 
   if (notification.canDismiss) {
@@ -738,6 +765,36 @@ function makeRow(notification, index) {
 function trayRows() {
   if (!trayList) return [];
   return Array.from(trayList.children).filter((child) => child instanceof HTMLElement);
+}
+
+function pruneExpandableRows(list) {
+  const ids = new Set(list.map((notification) => String(notification.id)));
+  for (const id of expandableRows.keys()) {
+    if (!ids.has(id)) expandableRows.delete(id);
+  }
+}
+
+function scheduleRowOverflowMeasurement(list) {
+  if (!trayList || rowMeasureFrame != null) return;
+  rowMeasureFrame = window.requestAnimationFrame(() => {
+    rowMeasureFrame = null;
+    pruneExpandableRows(list);
+    let changed = false;
+    for (const row of trayRows()) {
+      const id = String(row.dataset.notificationId || '');
+      if (!id) continue;
+      const measure = row.querySelector('.pet-row-measure');
+      const canExpand = measure instanceof HTMLElement
+        ? measure.scrollHeight > COLLAPSED_BODY_MAX_HEIGHT + 1
+        : false;
+      if (expandableRows.get(id) !== canExpand) {
+        expandableRows.set(id, canExpand);
+        changed = true;
+      }
+      row.dataset.canExpand = canExpand ? 'true' : 'false';
+    }
+    if (changed) renderAll();
+  });
 }
 
 function isTrayScrollable() {
@@ -837,6 +894,7 @@ function renderTray(list) {
   trayList.dataset.avatarOverlaySize = 'notification-tray-list';
   trayList.setAttribute('aria-label', 'Activity notifications');
   list.forEach((notification, index) => trayList.appendChild(makeRow(notification, index)));
+  scheduleRowOverflowMeasurement(list);
   updateScrollState();
 
   const existingControls = tray.querySelectorAll('.pet-scroll-control');
@@ -887,7 +945,6 @@ function renderAll() {
   if (shell) shell.hidden = false;
   renderMascot(list);
   renderTray(list);
-  setPetKeyboardInteraction(replyingTo != null && list.some((notification) => notification.id === replyingTo));
   updateCounts(list);
   reportElementSize(list);
   schedulePetPointerInteraction();
@@ -940,6 +997,7 @@ function applyFinish(ev = {}) {
   session.status = ev.status != null ? String(ev.status) : session.status;
   if (ev.result != null && String(ev.result).trim()) session.finishLine = String(ev.result).trim();
   if (ev.finishBubbleLine != null && String(ev.finishBubbleLine).trim()) session.finishLine = String(ev.finishBubbleLine).trim();
+  session.streamBubble = '';
   session.updatedAt = Date.now();
   sessions.set(catId, session);
   pendingFinishes.delete(catId);
@@ -970,15 +1028,12 @@ function removeSession(catId) {
   pendingFinishes.delete(id);
   pendingStreams.delete(id);
   expandedRows.delete(id);
-  replyDrafts.delete(id);
-  replyErrors.delete(id);
-  submittingReplies.delete(id);
-  if (replyingTo === id) replyingTo = null;
+  expandableRows.delete(id);
   renderAll();
 }
 
 async function boot() {
-  await assetsReady;
+  await loadPetOptionsFromBridge();
   if (!window.agentUI) {
     renderAll();
     return;
@@ -998,10 +1053,10 @@ async function boot() {
     });
   }
 
-  if (typeof window.agentUI.onPetKeyboardInteractionReady === 'function') {
-    window.agentUI.onPetKeyboardInteractionReady(() => {
-      const input = trayList?.querySelector('.pet-row-reply-input');
-      if (input instanceof HTMLElement) input.focus();
+  if (typeof window.agentUI.onPetCharacterChanged === 'function') {
+    window.agentUI.onPetCharacterChanged((payload) => {
+      if (payload && Array.isArray(payload.options)) setPetOptions(payload.options, payload.id);
+      setSelectedPet(payload && payload.id);
     });
   }
 
@@ -1059,6 +1114,17 @@ async function boot() {
   }
 
   installPetPointerInteractivity();
+  shell?.addEventListener('pointerdown', onPetPointerDown);
+  shell?.addEventListener('pointermove', onPetPointerMove);
+  shell?.addEventListener('lostpointercapture', (e) => {
+    finishPetDrag(e.pointerId, { shouldOpenMainWindow: false });
+  });
+  window.addEventListener('pointerup', (e) => {
+    finishPetDrag(e.pointerId, { releaseSample: dragSample(e), shouldOpenMainWindow: true });
+  });
+  window.addEventListener('pointercancel', (e) => {
+    finishPetDrag(e.pointerId, { shouldOpenMainWindow: false });
+  });
   if (badgeEl) {
     badgeEl.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
@@ -1096,8 +1162,8 @@ async function boot() {
     reportEvalUiState();
   });
   window.addEventListener('beforeunload', () => {
+    if (petDrag) finishPetDrag(petDrag.pointerId, { shouldOpenMainWindow: false });
     clearPetPointerInteraction({ force: true });
-    setPetKeyboardInteraction(false);
     if (pointerInteractionObserver) pointerInteractionObserver.disconnect();
   });
 

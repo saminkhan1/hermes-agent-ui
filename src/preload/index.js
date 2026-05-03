@@ -8,10 +8,15 @@ contextBridge.exposeInMainWorld('agentUI', {
   cancelNewCat: () => ipcRenderer.send('new-cat-cancel'),
   overlayReady: () => ipcRenderer.send('overlay-ready'),
   togglePetOverlay: () => ipcRenderer.send('pet-overlay-toggle'),
+  getPetCharacters: () => ipcRenderer.invoke('get-pet-characters'),
+  refreshPetCharacters: () => ipcRenderer.send('pet-characters-refresh'),
   showPetContextMenu: () => ipcRenderer.send('pet-context-menu'),
+  startPetDrag: (payload) => ipcRenderer.send('pet-drag-start', payload),
+  movePetDrag: () => ipcRenderer.send('pet-drag-move'),
+  endPetDrag: () => ipcRenderer.send('pet-drag-end'),
+  releasePetDrag: (payload) => ipcRenderer.send('pet-drag-release', payload),
   reportPetElementSize: (payload) => ipcRenderer.send('pet-element-size-changed', payload),
   setPetPointerInteraction: (active) => ipcRenderer.send('pet-pointer-interaction-changed', { active: !!active }),
-  setPetKeyboardInteraction: (active) => ipcRenderer.send('pet-keyboard-interaction-changed', { active: !!active }),
   onPetLayoutChanged: (callback) => {
     const listener = (_event, payload) => {
       try {
@@ -23,7 +28,7 @@ contextBridge.exposeInMainWorld('agentUI', {
     ipcRenderer.on('pet-layout-changed', listener);
     return () => ipcRenderer.removeListener('pet-layout-changed', listener);
   },
-  onPetKeyboardInteractionReady: (callback) => {
+  onPetCharacterChanged: (callback) => {
     const listener = (_event, payload) => {
       try {
         callback(payload);
@@ -31,8 +36,8 @@ contextBridge.exposeInMainWorld('agentUI', {
         // ignore
       }
     };
-    ipcRenderer.on('pet-keyboard-interaction-ready', listener);
-    return () => ipcRenderer.removeListener('pet-keyboard-interaction-ready', listener);
+    ipcRenderer.on('pet-character-changed', listener);
+    return () => ipcRenderer.removeListener('pet-character-changed', listener);
   },
   onSpawnCat: (callback) => {
     const listener = (_event, payload) => {

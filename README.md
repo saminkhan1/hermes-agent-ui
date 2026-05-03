@@ -59,4 +59,4 @@ If the built app is missing, run `npm run build` from the repo root.
 - Press `Cmd+Shift+C` on macOS or `Ctrl+Shift+C` elsewhere.
 - Enter or dictate the task.
 - Submit with `Enter` or the start button.
-- Use the pet stack to open details, dismiss completed work, or reply when a session is waiting for input.
+- Use the pet stack to open details, continue non-running sessions from detail, or dismiss completed work.

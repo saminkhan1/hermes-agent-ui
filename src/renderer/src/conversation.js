@@ -60,10 +60,6 @@ function kindToLabel(k) {
     {
       user: 'You',
       assistant: 'Agent',
-      thinking: 'Thinking',
-      tool: 'Tool',
-      task: 'Task',
-      system: 'System',
       error: 'Error',
     }[k] || k
   );
@@ -77,7 +73,7 @@ function kindClass(k) {
 function renderLogItems(items) {
   logEl.replaceChildren();
   for (const item of items || []) {
-    if (!item || item.kind === 'status') continue;
+    if (!item || !['user', 'assistant', 'error'].includes(item.kind)) continue;
 
     const line = document.createElement('div');
     line.className = `line ${kindClass(item.kind)}`;

@@ -121,12 +121,22 @@ function leadAssistantBubbleText(fullText) {
   return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
 }
 
+function finishAssistantBubbleText(fullText) {
+  const lines = String(fullText || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const lastLine = lines.at(-1);
+  if (!lastLine) return null;
+  return lastLine.length > 120 ? `${lastLine.slice(0, 117)}...` : lastLine;
+}
+
 function finishBubbleLineFromConversation(rec) {
   if (!rec || !Array.isArray(rec.items)) return undefined;
   for (let i = rec.items.length - 1; i >= 0; i--) {
     const it = rec.items[i];
     if (it && it.kind === 'assistant' && it.text) {
-      const line = leadAssistantBubbleText(it.text);
+      const line = finishAssistantBubbleText(it.text);
       if (line) return line;
     }
   }
@@ -659,11 +669,12 @@ function runOnHermes(catId, notify, log, prompt, opts = {}) {
         const endedAt = now();
         const durationMs = entry.startedAt ? endedAt - entry.startedAt : undefined;
         const rec = conversations.get(id);
-        const stdoutText = String(entry.stdout || '').trim();
-        const stderrText = String(entry.stderr || '').trim();
+        const stdoutText = entry.stdout.trim();
+        const stderrText = entry.stderr.trim();
         const launchErrorText = launchError ? ((launchError && launchError.message) || String(launchError)) : '';
         const hermesSessionId = extractHermesSessionId(`${stderrText}\n${stdoutText}`);
 
+        // Hermes does not currently document an agent-ui status event protocol.
         const status = launchError
           ? 'error'
           : entry.terminating

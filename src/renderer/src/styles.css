@@ -94,24 +94,23 @@ button svg,
   cursor: grab;
 }
 
+.pet-shell:active {
+  cursor: grabbing;
+}
+
 .pet-stage {
-  app-region: drag;
   position: absolute;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   pointer-events: auto;
   cursor: inherit;
   touch-action: none;
   transition: transform 160ms ease-out;
-  -webkit-app-region: drag;
 }
 
 .pet-mascot {
   position: relative;
   display: flex;
-  width: 100%;
-  height: 100%;
+  width: 80px;
+  height: 80px;
   align-items: center;
   justify-content: center;
   margin: 0;
@@ -135,25 +134,12 @@ button svg,
 .codex-avatar-root {
   position: relative;
   overflow: visible;
-  flex: 0 0 auto;
   aspect-ratio: 192 / 208;
   width: 7.04rem;
-  -webkit-user-drag: none;
-}
-
-.pet-avatar-frame {
-  position: absolute;
-  inset: 0;
   image-rendering: pixelated;
   background-repeat: no-repeat;
-  background-size: 1200% 700%;
-  transform: scale(2.05, 1.87);
-  transform-origin: center center;
+  background-size: 800% 900%;
   -webkit-user-drag: none;
-}
-
-.pet-avatar-frame[data-avatar-direction='left'] {
-  transform: scale(-2.05, 1.87);
 }
 
 .pet-mascot-avatar {
@@ -194,6 +180,7 @@ button svg,
   position: absolute;
   z-index: 5;
   overflow: hidden;
+  corner-shape: superellipse(1.5);
   color: var(--color-token-foreground);
   pointer-events: auto;
   transform-origin: bottom right;
@@ -261,13 +248,15 @@ button svg,
   background: var(--color-token-main-surface-primary);
   box-shadow: var(--pet-shadow-inset);
   backdrop-filter: blur(18px);
+  transition: background-color 200ms cubic-bezier(0.16, 1, 0.3, 1), border-color 200ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1);
   -webkit-backdrop-filter: blur(18px);
 }
 
 .pet-row-card:hover,
 .pet-row:focus-within .pet-row-card {
   border-color: color-mix(in srgb, var(--color-token-border) 80%, transparent);
-  background: color-mix(in srgb, var(--color-token-main-surface-primary) 94%, var(--color-token-foreground));
+  background: var(--color-token-main-surface-primary);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.52), inset 0 -1px 0 rgba(0, 0, 0, 0.1);
 }
 
 .pet-row-action {
@@ -277,6 +266,11 @@ button svg,
   padding: 6px 12px;
   text-align: left;
   cursor: pointer;
+  transition: transform 120ms ease-out;
+}
+
+.pet-row-action:active {
+  transform: scale(0.995);
 }
 
 .pet-row-title-wrap {
@@ -307,7 +301,7 @@ button svg,
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   white-space: normal;
-  transition: max-height 180ms ease;
+  transition: max-height 180ms ease-out;
 }
 
 .pet-row-body[data-expanded='true'] {
@@ -331,12 +325,23 @@ button svg,
   transition: opacity 150ms ease;
 }
 
-.pet-row-status-review {
-  color: var(--color-token-charts-green);
+.pet-row-measure {
+  position: absolute;
+  top: 0;
+  right: 12px;
+  left: 12px;
+  z-index: -1;
+  overflow: hidden;
+  color: transparent;
+  font-size: 12px;
+  line-height: 16px;
+  pointer-events: none;
+  visibility: hidden;
+  white-space: pre-wrap;
 }
 
-.pet-row-status-waiting {
-  color: var(--color-token-editor-warning-foreground);
+.pet-row-status-review {
+  color: var(--color-token-charts-green);
 }
 
 .pet-row-status-failed {
@@ -357,7 +362,7 @@ button svg,
   z-index: 10;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 150ms ease, transform 150ms ease;
+  transition: opacity 280ms cubic-bezier(0.16, 1, 0.3, 1), transform 280ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .pet-row:hover .pet-row-control-wrap,
@@ -384,12 +389,6 @@ button svg,
   transform: translateX(-6px);
 }
 
-.pet-row-reply-wrap {
-  right: 8px;
-  bottom: 4px;
-  transform: translateX(6px);
-}
-
 .pet-row-control {
   display: inline-flex;
   min-width: 24px;
@@ -399,7 +398,7 @@ button svg,
   margin: 0;
   padding: 0 8px;
   border: 1px solid var(--color-token-border);
-  border-radius: 7px;
+  border-radius: 6px;
   background: var(--color-token-main-surface-primary);
   color: var(--color-token-foreground);
   box-shadow: 0 5px 10px -7px rgba(0, 0, 0, 0.22);
@@ -441,65 +440,6 @@ button svg,
 .pet-row-dismiss svg {
   width: 13px;
   height: 13px;
-}
-
-.pet-row-reply {
-  height: 20px;
-  padding: 0 8px;
-  font-size: 12px;
-}
-
-.pet-row-reply-form {
-  margin: 0 12px 8px;
-  padding-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--color-token-border) 60%, transparent);
-  animation: petReplyIn 160ms ease-out both;
-}
-
-.pet-row-reply-form > div,
-.pet-row-reply-form {
-  min-width: 0;
-}
-
-.pet-row-reply-form {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.pet-row-reply-input {
-  min-width: 0;
-  flex: 1;
-  height: 26px;
-  padding: 0 8px;
-  border: 1px solid var(--color-token-border);
-  border-radius: 7px;
-  background: var(--color-token-main-surface-primary);
-  color: var(--color-token-foreground);
-  font-size: 12px;
-  outline: none;
-}
-
-.pet-row-reply-input::placeholder {
-  color: var(--color-token-text-tertiary);
-}
-
-.pet-row-reply-input:focus {
-  border-color: var(--color-token-focus-border);
-}
-
-.pet-row-reply-send {
-  height: 26px;
-  color: #fff;
-  background: #f54e00;
-  border-color: #f54e00;
-}
-
-.pet-row-reply-error {
-  flex: 1 0 100%;
-  color: var(--color-token-error-foreground);
-  font-size: 11px;
-  line-height: 15px;
 }
 
 .pet-scroll-control {
@@ -580,17 +520,6 @@ button svg,
   from {
     opacity: 0;
     transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes petReplyIn {
-  from {
-    opacity: 0;
-    transform: translateY(-2px);
   }
   to {
     opacity: 1;

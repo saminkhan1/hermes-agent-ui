@@ -152,7 +152,6 @@ body {
   opacity: 0.9;
 }
 
-.line--thinking .line-label,
 .line--user .line-label,
 .line--assistant .line-label {
   opacity: 0.85;

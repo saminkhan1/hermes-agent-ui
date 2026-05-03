@@ -22,8 +22,8 @@ Hermes owns agent reasoning, tool use, computer use, terminal access, orchestrat
 6. User submits.
 7. The launcher disappears.
 8. A pet appears and persists on the user's desktop.
-9. The pet stack shows running, completed, failed, or explicit needs-input state.
-10. User can open details, continue non-running sessions from detail, reply inline only when Hermes explicitly needs input, or dismiss finished work.
+9. The pet stack shows running, completed, or failed state.
+10. User can open details, continue non-running sessions from detail, or dismiss finished work.
 
 The default experience must return the user to the original workflow immediately after submit. The product must not force the user into a chatbot or dashboard.
 
@@ -160,6 +160,7 @@ Hermes output handling:
 - Parse and store `session_id:` or `Session:` from Hermes output. Prefer stderr, with stdout as fallback.
 - For follow-ups, call Hermes with `--resume <session_id>`.
 - Do not replace this flow with `hermes -z` while agent-UI needs resumable sessions. `hermes -z` is cleaner for scripts, but it intentionally omits session metadata.
+- Current Hermes source/docs do not define an `agent-ui` status-event protocol for `chat --quiet --query`; do not add parser aliases for undocumented status lines.
 
 Hermes transcript boundary:
 
@@ -175,11 +176,11 @@ Status derivation:
 - `completed` / review: Hermes exits with code `0`.
 - `error` / failed: Hermes fails to launch or exits nonzero.
 - `cancelled` / failed: user or app terminates the Hermes child process.
-- `needs-input`: only when a Hermes integration provides an explicit machine-readable waiting signal. Do not infer needs-input by parsing assistant prose, stderr text, or phrases such as "I need input".
+- `needs-input`: reserved for a future documented Hermes machine-readable waiting signal. Do not infer needs-input by parsing assistant prose, stderr text, or phrases such as "I need input".
 
 Failure handling:
 
-- Follow the Hermes/process failure result. agent-UI must show the session as failed when Hermes exits nonzero, is cancelled, or returns an explicit failure status.
+- Follow the Hermes/process failure result. agent-UI must show the session as failed when Hermes exits nonzero or is cancelled.
 - Preserve and show any visible Hermes stdout in the detail window.
 - Show stderr, launch errors, or exit information as failure detail, not as assistant output.
 - Do not add retry orchestration, recovery wizards, diagnostics dashboards, alternate runtimes, or Hermes troubleshooting flows to agent-UI.
@@ -197,14 +198,13 @@ In stack mode, the pet/tray behavior should follow Codex-like status stack behav
 - every submitted session enters the stack immediately after submit
 - every submitted session remains in the stack until the user explicitly dismisses it
 - running state
-- needs-input state
 - completed/review state
 - failed state
 - click row to open session detail
-- inline reply only when the session has an explicit needs-input status
+- inline reply remains unavailable until Hermes documents a machine-readable needs-input status
 - dismiss finished items
 
-The pet/tray surface is a persistent session surface, not a temporary notification feed. Do not auto-expire, TTL-hide, or silently remove running, completed, failed, or needs-input sessions. Closing or waking the pet shell may change whether the shell is visible; it must not delete or auto-dismiss sessions.
+The pet/tray surface is a persistent session surface, not a temporary notification feed. Do not auto-expire, TTL-hide, or silently remove running, completed, or failed sessions. Closing or waking the pet shell may change whether the shell is visible; it must not delete or auto-dismiss sessions.
 
 The pet/tray surface must not become a dashboard.
 
@@ -338,7 +338,7 @@ All coding sessions must preserve these requirements:
 - Keep submitted sessions visible in the stack until explicit user dismiss.
 - Treat Hermes output as final response plus session metadata unless Hermes provides an explicit structured event protocol.
 - Treat Hermes transcript categories as internal Hermes data, not agent-UI display categories.
-- Keep inline pet reply gated to explicit needs-input status.
+- Keep inline pet reply unavailable until Hermes documents a machine-readable needs-input status.
 - Keep detail follow-up available for existing non-running sessions.
 - Keep E2E/manual validation aligned with the real-Hermes flow.
 
@@ -367,7 +367,7 @@ Technical acceptance:
 - Follow-up Hermes args include `--resume <session_id>`.
 - Tagged prompt contains `<user_message source="agent-ui">`.
 - Tagged prompt contains `<aura_meta type="context_snapshot" version="1">` when context is available.
-- Inline pet reply is unavailable unless the session status is explicit needs-input.
+- Inline pet reply is unavailable until Hermes documents a machine-readable needs-input status.
 - Detail follow-up is disabled while running and enabled for existing non-running sessions.
 - No session-state TTL, auto-expiry, or notification-style dismissal removes stack rows.
 - Build passes.
