@@ -34,4 +34,4 @@ runs/
 
 # Packaging
 *.tgz
-release/
+/release/

@@ -72,3 +72,12 @@ test('Tart clean-room smoke uses vanilla images and password SSH isolation', () 
   assert.match(smoke, /ssh_ready=false/);
   assert.match(smoke, /command -v brew/);
 });
+
+test('manual customer pass documents bootstrap Gatekeeper expectations', () => {
+  const checklist = read('docs/release/MANUAL_CUSTOMER_PASS.md');
+
+  assert.match(checklist, /right-click Open approval/);
+  assert.match(checklist, /expected only for future Developer ID-notarized artifacts/);
+  assert.match(checklist, /spctl.*stapler rejection is expected evidence/);
+  assert.doesNotMatch(checklist, /without override steps/);
+});
