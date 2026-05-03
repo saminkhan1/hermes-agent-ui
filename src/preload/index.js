@@ -96,6 +96,12 @@ contextBridge.exposeInMainWorld('agentUI', {
   sendFollowup: (catId, text) => {
     return ipcRenderer.invoke('agent-followup', { catId, text });
   },
+  cancelAgent: (catId) => {
+    return ipcRenderer.invoke('agent-cancel', { catId });
+  },
+  sendBackgroundWork: (catId, text) => {
+    return ipcRenderer.invoke('agent-background', { catId, text });
+  },
   onAgentRestarted: (callback) => {
     const listener = (_event, payload) => {
       try {

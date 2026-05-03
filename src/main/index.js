@@ -29,6 +29,7 @@ const {
   setOnConversationPushed,
   dismissAgent,
   sendFollowup,
+  sendGatewayCommand,
   getAgentArtifacts,
 } = require('./agents');
 const { startAgentUIEvalServer } = require('./eval-server');
@@ -1003,7 +1004,6 @@ function openConversationWindow(catId) {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      webSecurity: false,
     },
   });
   applyOverlayWindowPolicy(conversationWindow, { level: FOCUSED_OVERLAY_WINDOW_LEVEL });
@@ -1583,6 +1583,18 @@ ipcMain.on('dismiss-cat', async (_e, { catId } = {}) => {
 ipcMain.handle('agent-followup', (_e, { catId, text } = {}) => {
   if (!catId) return { ok: false, error: 'Missing session id.' };
   return sendFollowup(String(catId), text, { getMainWindow: () => mainWindow, log: console });
+});
+
+ipcMain.handle('agent-cancel', (_e, { catId } = {}) => {
+  if (!catId) return { ok: false, error: 'Missing session id.' };
+  return sendGatewayCommand(String(catId), '/stop', { getMainWindow: () => mainWindow, log: console });
+});
+
+ipcMain.handle('agent-background', (_e, { catId, text } = {}) => {
+  if (!catId) return { ok: false, error: 'Missing session id.' };
+  const prompt = String(text || '').trim();
+  if (!prompt) return { ok: false, error: 'Missing background prompt.' };
+  return sendGatewayCommand(String(catId), `/background ${prompt}`, { getMainWindow: () => mainWindow, log: console });
 });
 
 ipcMain.handle('get-agent-conversation', (_e, catId) => getAgentConversation(catId));

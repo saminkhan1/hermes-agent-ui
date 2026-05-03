@@ -103,9 +103,10 @@ function isDismissibleConversation(data) {
 function updateComposerFromData(data) {
   if (!followupInput || !sendBtn) return;
   const running = isRunningConversation(data);
+  const cliTransport = data && String(data.transport || '').toLowerCase() === 'cli';
   const ok = data && data.found;
-  followupInput.disabled = !ok || running;
-  sendBtn.disabled = !ok || running;
+  followupInput.disabled = !ok || (running && cliTransport);
+  sendBtn.disabled = !ok || (running && cliTransport);
   if (dismissBtn) {
     const canDismiss = ok && isDismissibleConversation(data);
     dismissBtn.disabled = !canDismiss;
@@ -153,7 +154,8 @@ async function sendFollowup() {
   if (!catId || !followupInput) return;
   const text = followupInput.value;
   if (!text.trim()) return;
-  if (lastData && String(lastData.runStatus || '').toLowerCase() === 'running') return;
+  const cliTransport = lastData && String(lastData.transport || '').toLowerCase() === 'cli';
+  if (cliTransport && lastData && String(lastData.runStatus || '').toLowerCase() === 'running') return;
   if (typeof window.agentUI.sendFollowup !== 'function') return;
   setComposerError('');
   if (sendBtn) sendBtn.disabled = true;
