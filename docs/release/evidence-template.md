@@ -2,11 +2,17 @@
 
 Use this template for each release candidate. Keep it next to the final artifact hashes and manual Ring 3 notes.
 
+Reference docs:
+
+- [Testing And Verification](../TESTING_AND_VERIFICATION.md)
+- [Manual Customer Pass](MANUAL_CUSTOMER_PASS.md)
+
 ## Candidate
 
 - App commit:
 - Branches aligned:
 - GitHub Actions run:
+- GitHub Actions URL:
 - Artifact directory:
 - Release mode: bootstrap
 - macOS target architecture:
@@ -43,7 +49,9 @@ Use this template for each release candidate. Keep it next to the final artifact
 ## Ring 2 - Tart Clean-Room VM Gate
 
 - Image:
+- DMG command:
 - DMG smoke:
+- Zip command:
 - Zip smoke:
 - Bundled Hermes version output:
 - Poisoned `PATH` / fake Jarvis result:

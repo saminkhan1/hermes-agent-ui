@@ -4,6 +4,14 @@ agent-UI is a thin desktop launcher and status surface for Hermes.
 
 It captures lightweight app/window/display context when the global shortcut fires, then starts the currently selected input mode: text mode opens a minimal task input, while voice mode records through Hermes voice capture and places the transcript in the same input for review before submission.
 
+## Documentation Map
+
+- New contributors: [Developer Onboarding](docs/DEVELOPER_ONBOARDING.md)
+- Contribution workflow: [Contributing](CONTRIBUTING.md)
+- Test and release gates: [Testing And Verification](docs/TESTING_AND_VERIFICATION.md)
+- Manual customer release pass: [Manual Customer Pass](docs/release/MANUAL_CUSTOMER_PASS.md)
+- Release evidence notes: [Release Evidence Template](docs/release/evidence-template.md)
+
 ## Manual Testing Goal
 
 For manual testers, ship a single macOS app bundle/zip that contains:
@@ -121,7 +129,10 @@ Gateway mode behavior:
 git clone https://github.com/saminkhan1/agent-UI.git agent-UI
 cd agent-UI
 npm install
+npm run verify
 ```
+
+For the full setup path, see [Developer Onboarding](docs/DEVELOPER_ONBOARDING.md).
 
 ## Run From Source
 
@@ -200,6 +211,8 @@ npm run release:verify
 ```
 
 This writes `dist/release-manifest.json` with app version, git SHA, app source dirty status, Hermes release/tag/SHA, bundled Python version, signing identity, notarization status, and SHA-256 hashes for every DMG/zip artifact. In bootstrap mode, `notarizationStatus` is recorded as `not_applicable_bootstrap`; `spctl` and stapler results are still captured as evidence but are not required to pass.
+
+For the full command-by-command release verification path, see [Testing And Verification](docs/TESTING_AND_VERIFICATION.md).
 
 ## Verify
 
