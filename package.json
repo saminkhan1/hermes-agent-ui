@@ -30,6 +30,7 @@
     "release:verify:bootstrap": "RELEASE_VERIFY_MODE=bootstrap node scripts/release-manifest.js",
     "release:verify:developer-id": "RELEASE_VERIFY_MODE=developer-id node scripts/release-manifest.js",
     "smoke:gateway": "node scripts/local-gateway-smoke.js",
+    "smoke:installed-release": "node scripts/installed-app-release-smoke.js",
     "start": "electron-vite preview",
     "test": "node --test test/*.test.js",
     "prepare": "electron-vite build"

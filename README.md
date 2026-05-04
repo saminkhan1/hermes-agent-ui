@@ -185,6 +185,14 @@ Use the four-ring release workflow for user-downloadable macOS artifacts:
 3. Ring 2, Tart clean-room gate: run `scripts/tart-clean-room-smoke.sh dist/<artifact>` against a Cirrus `*-vanilla` image, for example `ghcr.io/cirruslabs/macos-sequoia-vanilla:latest`. The script refuses `base` images, installs the artifact into `/Applications`, poisons `PATH` and fake Jarvis locations, verifies the bundled Hermes runtime, starts the local gateway on `127.0.0.1:8766`, and launches the app.
 4. Ring 3, manual customer pass: mount the DMG, drag to `/Applications`, launch from Finder, approve the bootstrap Gatekeeper prompt with right-click Open if needed, confirm TCC microphone prompts, tray/menu behavior, text/voice sessions, follow-up, cancel, background mode, quit/reopen, and clear first-run errors for missing credentials, offline mode, port conflicts, and denied permissions.
 
+After installing a release candidate into `/Applications`, run the installed-app automation before the human Ring 3 pass:
+
+```bash
+npm run smoke:installed-release -- /Applications/agent-UI.app
+```
+
+The smoke launches the installed app in eval mode with isolated config/Hermes home directories, blocks the default gateway port to exercise port-conflict recovery, drives background mode, follow-up, cancel, conversation-window, and quit/reopen checks, then writes JSON evidence to `/private/tmp/agent-ui-installed-release-smoke-*`.
+
 After Ring 1 packaging, run:
 
 ```bash

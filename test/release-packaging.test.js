@@ -81,3 +81,27 @@ test('manual customer pass documents bootstrap Gatekeeper expectations', () => {
   assert.match(checklist, /spctl.*stapler rejection is expected evidence/);
   assert.doesNotMatch(checklist, /without override steps/);
 });
+
+test('installed app release smoke is a committed repeatable gate', () => {
+  const pkg = JSON.parse(read('package.json'));
+  const smoke = read('scripts/installed-app-release-smoke.js');
+  const readme = read('README.md');
+  const evidenceTemplate = read('docs/release/evidence-template.md');
+
+  assert.equal(pkg.scripts['smoke:installed-release'], 'node scripts/installed-app-release-smoke.js');
+  assert.match(smoke, /AGENT_UI_EVAL/);
+  assert.match(smoke, /AGENT_UI_CONFIG_DIR/);
+  assert.match(smoke, /AGENT_UI_HERMES_HOME/);
+  assert.match(smoke, /createPortBlocker/);
+  assert.match(smoke, /\/set-input-mode/);
+  assert.match(smoke, /\/background Release background smoke/);
+  assert.match(smoke, /\/followup/);
+  assert.match(smoke, /\/cancel/);
+  assert.match(smoke, /\/open-conversation/);
+  assert.match(smoke, /reopen-smoke/);
+  assert.match(smoke, /assertNoErrorItems/);
+  assert.match(smoke, /installed-release-smoke-summary\.json/);
+  assert.match(readme, /npm run smoke:installed-release -- \/Applications\/agent-UI\.app/);
+  assert.match(evidenceTemplate, /Installed-App Automation/);
+  assert.match(evidenceTemplate, /Ring 3 - Manual Customer Pass/);
+});
