@@ -171,6 +171,60 @@ contextBridge.exposeInMainWorld('agentUI', {
   openAgentAttachment: (url) => {
     return ipcRenderer.invoke('open-agent-attachment', { url: text(url, 4096) });
   },
+  openExternalUrl: (url) => {
+    return ipcRenderer.invoke('open-external-url', { url: text(url, 4096) });
+  },
+  copyText: (value) => {
+    return ipcRenderer.invoke('clipboard-write-text', { text: text(value, 20000) });
+  },
+  getHermesAuthStatus: () => ipcRenderer.invoke('hermes-auth-status'),
+  addHermesApiKey: (payload = {}) => ipcRenderer.invoke('hermes-auth-add-api-key', {
+    provider: text(payload.provider, 96),
+    apiKey: text(payload.apiKey, 20000),
+    label: text(payload.label, 80),
+  }),
+  saveHermesModel: (payload = {}) => ipcRenderer.invoke('hermes-auth-save-model', {
+    provider: text(payload.provider, 96),
+    model: text(payload.model, 256),
+  }),
+  startHermesOAuth: (payload = {}) => ipcRenderer.invoke('hermes-auth-oauth-start', {
+    provider: text(payload.provider, 96),
+    retry: !!payload.retry,
+  }),
+  sendHermesOAuthInput: (payload = {}) => ipcRenderer.invoke('hermes-auth-oauth-input', {
+    sessionId: text(payload.sessionId, 128),
+    input: text(payload.input, 10000),
+  }),
+  cancelHermesOAuth: (payload = {}) => ipcRenderer.invoke('hermes-auth-oauth-cancel', {
+    sessionId: text(payload.sessionId, 128),
+  }),
+  finishHermesAuth: () => ipcRenderer.invoke('hermes-auth-finish'),
+  dismissHermesAuth: () => ipcRenderer.invoke('hermes-auth-dismiss'),
+  checkHermesAuthNow: () => ipcRenderer.invoke('hermes-auth-check-now'),
+  closeHermesAuth: () => ipcRenderer.send('hermes-auth-close'),
+  openHermesAuth: () => ipcRenderer.send('hermes-auth-open'),
+  onHermesAuthEvent: (callback) => {
+    const listener = (_event, payload) => {
+      try {
+        callback(payload);
+      } catch {
+        // ignore
+      }
+    };
+    ipcRenderer.on('hermes-auth-event', listener);
+    return () => ipcRenderer.removeListener('hermes-auth-event', listener);
+  },
+  onHermesAuthContext: (callback) => {
+    const listener = (_event, payload) => {
+      try {
+        callback(payload);
+      } catch {
+        // ignore
+      }
+    };
+    ipcRenderer.on('hermes-auth-context', listener);
+    return () => ipcRenderer.removeListener('hermes-auth-context', listener);
+  },
   onAgentRestarted: (callback) => {
     const listener = (_event, payload) => {
       try {

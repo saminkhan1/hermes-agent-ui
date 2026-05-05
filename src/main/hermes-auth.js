@@ -1,0 +1,503 @@
+'use strict';
+
+const { EventEmitter } = require('events');
+const fs = require('fs');
+const path = require('path');
+const { randomUUID } = require('crypto');
+const { spawn } = require('child_process');
+const {
+  defaultHermesHome,
+  executableExists,
+  hermesCwd,
+  parseTranscriptionJson,
+  resolveHermesCommand,
+} = require('./hermes-runtime');
+const { realUserHomeDir } = require('./hermes-gateway-client');
+
+const SAFE_RUNTIME_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
+const MAX_PROVIDER_CHARS = 96;
+const MAX_LABEL_CHARS = 80;
+const MAX_API_KEY_CHARS = 20000;
+const MAX_MODEL_CHARS = 256;
+const MAX_OUTPUT_CHARS = 120000;
+
+const events = new EventEmitter();
+const sessions = new Map();
+
+function boundedText(value, max = 4096) {
+  const out = value == null ? '' : String(value);
+  return out.length > max ? out.slice(0, max) : out;
+}
+
+function normalizeProvider(value) {
+  const provider = boundedText(value, MAX_PROVIDER_CHARS).trim().toLowerCase();
+  if (!provider) return '';
+  if (!/^[a-z0-9_.:-]+$/.test(provider)) return '';
+  return provider;
+}
+
+function normalizeLabel(value) {
+  return boundedText(value, MAX_LABEL_CHARS).trim();
+}
+
+function normalizeModel(value) {
+  return boundedText(value, MAX_MODEL_CHARS).trim();
+}
+
+function appendOutput(current, chunk) {
+  return `${current}${String(chunk || '')}`.slice(-MAX_OUTPUT_CHARS);
+}
+
+function stripAnsi(value) {
+  return String(value || '').replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
+}
+
+function cleanHermesOutput(value) {
+  return stripAnsi(value).replace(/\r/g, '');
+}
+
+function commandRoot(command) {
+  const resolved = path.resolve(String(command || ''));
+  if (path.basename(resolved) !== 'hermes') return '';
+  const binDir = path.dirname(resolved);
+  if (path.basename(binDir) !== 'bin') return '';
+  return path.dirname(binDir);
+}
+
+function pythonRuntimeForHermes(command) {
+  const root = commandRoot(command);
+  if (!root) return null;
+  const python = path.join(root, 'python', 'bin', 'python3');
+  const agentRoot = path.join(root, 'hermes-agent');
+  if (!executableExists(python)) return null;
+  if (!fs.existsSync(path.join(agentRoot, 'hermes_cli', 'main.py'))) return null;
+  return { python, agentRoot, root };
+}
+
+function hermesEnv(extra = {}) {
+  return {
+    ...process.env,
+    ...extra,
+    HOME: realUserHomeDir(),
+    HERMES_HOME: defaultHermesHome(),
+    PATH: SAFE_RUNTIME_PATH,
+    PYTHONNOUSERSITE: '1',
+    PYTHONDONTWRITEBYTECODE: '1',
+    PYTHONUNBUFFERED: '1',
+  };
+}
+
+function hermesCommandOrThrow() {
+  const { command } = resolveHermesCommand();
+  if (!command || !executableExists(command)) {
+    throw new Error('Hermes executable is missing. Rebuild the bundled runtime or set AGENT_UI_HERMES_BIN.');
+  }
+  return command;
+}
+
+function pythonRuntimeOrThrow() {
+  const command = hermesCommandOrThrow();
+  const runtime = pythonRuntimeForHermes(command);
+  if (!runtime) {
+    throw new Error('Hermes Python runtime is missing. Rebuild the bundled runtime with npm run bundle:hermes.');
+  }
+  return { command, ...runtime };
+}
+
+function redact(value) {
+  return cleanHermesOutput(value)
+    .replace(/(sk-[A-Za-z0-9_-]{8})[A-Za-z0-9_-]+/g, '$1...')
+    .replace(/([A-Za-z0-9_-]{12})[A-Za-z0-9_-]{28,}/g, '$1...');
+}
+
+function runHermesPythonJson(code, payload = {}, opts = {}) {
+  return new Promise((resolve, reject) => {
+    let runtime;
+    try {
+      runtime = pythonRuntimeOrThrow();
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    const child = spawn(runtime.python, ['-c', code], {
+      cwd: runtime.agentRoot,
+      env: hermesEnv({ PYTHONPATH: runtime.agentRoot }),
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    const timeoutMs = Number(opts.timeoutMs || 15000);
+    const timer = timeoutMs > 0 ? setTimeout(() => {
+      child.kill('SIGTERM');
+    }, timeoutMs) : null;
+
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      stdout = appendOutput(stdout, chunk);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr = appendOutput(stderr, chunk);
+    });
+    child.on('error', (error) => {
+      if (timer) clearTimeout(timer);
+      reject(error);
+    });
+    child.on('close', (codeNum, signal) => {
+      if (timer) clearTimeout(timer);
+      if (codeNum !== 0) {
+        const err = new Error(redact(stderr.trim() || stdout.trim() || `Hermes exited with code ${codeNum}${signal ? ` (${signal})` : ''}.`));
+        err.stdout = redact(stdout);
+        err.stderr = redact(stderr);
+        reject(err);
+        return;
+      }
+      const parsed = parseTranscriptionJson(stdout);
+      if (!parsed || typeof parsed !== 'object') {
+        reject(new Error('Hermes returned no JSON result.'));
+        return;
+      }
+      resolve(parsed);
+    });
+
+    child.stdin.end(`${JSON.stringify(payload || {})}\n`);
+  });
+}
+
+const STATUS_SCRIPT = String.raw`
+import json
+import sys
+
+payload = json.loads(sys.stdin.read() or "{}")
+
+from hermes_cli.auth import PROVIDER_REGISTRY, _load_auth_store
+from hermes_cli.auth_commands import _OAUTH_CAPABLE_PROVIDERS
+from hermes_cli.config import load_config, get_config_path, get_env_path
+from hermes_cli.model_switch import list_authenticated_providers
+
+cfg = load_config()
+model_cfg = cfg.get("model", {})
+if isinstance(model_cfg, dict):
+    current_model = str(model_cfg.get("default", model_cfg.get("name", "")) or "")
+    current_provider = str(model_cfg.get("provider", "") or "")
+    current_base_url = str(model_cfg.get("base_url", "") or "")
+else:
+    current_model = str(model_cfg or "")
+    current_provider = ""
+    current_base_url = ""
+
+user_providers = cfg.get("providers") if isinstance(cfg.get("providers"), dict) else {}
+custom_providers = cfg.get("custom_providers") if isinstance(cfg.get("custom_providers"), list) else []
+providers = list_authenticated_providers(
+    current_provider=current_provider,
+    current_base_url=current_base_url,
+    current_model=current_model,
+    user_providers=user_providers,
+    custom_providers=custom_providers,
+    max_models=50,
+)
+
+catalog = []
+for provider_id, pconfig in sorted(PROVIDER_REGISTRY.items()):
+    env_vars = list(getattr(pconfig, "api_key_env_vars", ()) or ())
+    catalog.append({
+        "id": provider_id,
+        "name": getattr(pconfig, "name", provider_id) or provider_id,
+        "auth_type": getattr(pconfig, "auth_type", "api_key") or "api_key",
+        "oauth_capable": provider_id in _OAUTH_CAPABLE_PROVIDERS,
+        "api_key_env_vars": env_vars,
+    })
+if not any(p["id"] == "openrouter" for p in catalog):
+    catalog.append({
+        "id": "openrouter",
+        "name": "OpenRouter",
+        "auth_type": "api_key",
+        "oauth_capable": False,
+        "api_key_env_vars": ["OPENROUTER_API_KEY"],
+    })
+
+auth_store = _load_auth_store()
+pool = auth_store.get("credential_pool") if isinstance(auth_store, dict) else {}
+if not isinstance(pool, dict):
+    pool = {}
+pool_counts = {
+    str(provider): len(entries) if isinstance(entries, list) else 0
+    for provider, entries in pool.items()
+}
+authenticated_ids = {str(p.get("slug") or "").strip() for p in providers if isinstance(p, dict)}
+ready = bool(current_provider and current_model and current_provider in authenticated_ids)
+
+print(json.dumps({
+    "ok": True,
+    "ready": ready,
+    "needs_auth": not bool(providers),
+    "needs_model": bool(providers) and not ready,
+    "current_provider": current_provider,
+    "current_model": current_model,
+    "providers": providers,
+    "provider_catalog": catalog,
+    "pool_counts": pool_counts,
+    "config_path": str(get_config_path()),
+    "env_path": str(get_env_path()),
+}, separators=(",", ":"), sort_keys=True))
+`;
+
+const ADD_API_KEY_SCRIPT = String.raw`
+import contextlib
+import io
+import json
+import sys
+from types import SimpleNamespace
+
+payload = json.loads(sys.stdin.read() or "{}")
+provider = str(payload.get("provider") or "").strip()
+api_key = str(payload.get("api_key") or "").strip()
+label = str(payload.get("label") or "").strip()
+if not provider:
+    raise SystemExit("provider is required")
+if not api_key:
+    raise SystemExit("api key is required")
+
+from hermes_cli.auth_commands import auth_add_command
+
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    auth_add_command(SimpleNamespace(
+        provider=provider,
+        auth_type="api_key",
+        label=label or None,
+        api_key=api_key,
+        portal_url=None,
+        inference_url=None,
+        client_id=None,
+        scope=None,
+        no_browser=True,
+        timeout=None,
+        insecure=False,
+        ca_bundle=None,
+    ))
+
+print(json.dumps({
+    "ok": True,
+    "provider": provider,
+    "output": buf.getvalue().strip(),
+}, separators=(",", ":"), sort_keys=True))
+`;
+
+const SAVE_MODEL_SCRIPT = String.raw`
+import json
+import sys
+
+payload = json.loads(sys.stdin.read() or "{}")
+provider = str(payload.get("provider") or "").strip()
+model = str(payload.get("model") or "").strip()
+if not provider:
+    raise SystemExit("provider is required")
+if not model:
+    raise SystemExit("model is required")
+
+from hermes_cli.config import load_config, save_config, get_config_path
+
+cfg = load_config()
+model_cfg = cfg.get("model", {})
+if not isinstance(model_cfg, dict):
+    model_cfg = {}
+model_cfg["provider"] = provider
+model_cfg["default"] = model
+if "base_url" in model_cfg:
+    model_cfg["base_url"] = ""
+model_cfg.pop("context_length", None)
+cfg["model"] = model_cfg
+save_config(cfg)
+
+print(json.dumps({
+    "ok": True,
+    "provider": provider,
+    "model": model,
+    "config_path": str(get_config_path()),
+}, separators=(",", ":"), sort_keys=True))
+`;
+
+function readinessFromSnapshot(snapshot = {}) {
+  if (!snapshot || snapshot.ok === false) return { ready: false, reason: 'status_error' };
+  if (snapshot.ready) return { ready: true, reason: 'ready' };
+  if (snapshot.needs_auth) return { ready: false, reason: 'needs_auth' };
+  if (snapshot.needs_model) return { ready: false, reason: 'needs_model' };
+  return { ready: false, reason: 'not_configured' };
+}
+
+function isAuthErrorText(value) {
+  const text = String(value || '').toLowerCase();
+  return [
+    'provider authentication failed',
+    'no inference provider configured',
+    'run `hermes model`',
+    "run 'hermes model'",
+    'hermes model',
+    'primary provider auth failed',
+    'no api key',
+    'api key is missing',
+    'authentication failed',
+  ].some((marker) => text.includes(marker));
+}
+
+function extractUrls(value) {
+  const text = cleanHermesOutput(value);
+  return Array.from(new Set((text.match(/https?:\/\/[^\s)>"']+/g) || []).map((url) => url.replace(/[.,;]+$/, ''))));
+}
+
+function extractUserCode(value) {
+  const text = cleanHermesOutput(value);
+  const explicit = text.match(/enter (?:this )?code:\s*\n\s*([A-Z0-9][A-Z0-9-]{3,})/i);
+  if (explicit) return explicit[1].trim();
+  const inline = text.match(/\b(?:user[_ -]?code|code):\s*([A-Z0-9][A-Z0-9-]{3,})\b/i);
+  return inline ? inline[1].trim() : '';
+}
+
+async function getAuthStatus() {
+  const status = await runHermesPythonJson(STATUS_SCRIPT, {}, { timeoutMs: 20000 });
+  return { ...status, readiness: readinessFromSnapshot(status) };
+}
+
+async function ensureReadyForRun() {
+  try {
+    const status = await getAuthStatus();
+    return { ok: !!(status.readiness && status.readiness.ready), status, reason: status.readiness ? status.readiness.reason : 'unknown' };
+  } catch (error) {
+    return { ok: false, reason: 'status_error', error: error && error.message ? error.message : String(error) };
+  }
+}
+
+async function addApiKeyCredential(payload = {}) {
+  const provider = normalizeProvider(payload.provider);
+  const apiKey = boundedText(payload.apiKey || payload.api_key, MAX_API_KEY_CHARS).trim();
+  const label = normalizeLabel(payload.label);
+  if (!provider) return { ok: false, error: 'Choose a provider.' };
+  if (!apiKey) return { ok: false, error: 'Enter an API key.' };
+  try {
+    return await runHermesPythonJson(ADD_API_KEY_SCRIPT, { provider, api_key: apiKey, label }, { timeoutMs: 30000 });
+  } catch (error) {
+    return { ok: false, error: error && error.message ? error.message : String(error) };
+  }
+}
+
+async function saveModelSelection(payload = {}) {
+  const provider = normalizeProvider(payload.provider);
+  const model = normalizeModel(payload.model);
+  if (!provider) return { ok: false, error: 'Choose a provider.' };
+  if (!model) return { ok: false, error: 'Choose or enter a model.' };
+  try {
+    return await runHermesPythonJson(SAVE_MODEL_SCRIPT, { provider, model }, { timeoutMs: 15000 });
+  } catch (error) {
+    return { ok: false, error: error && error.message ? error.message : String(error) };
+  }
+}
+
+function emitSessionEvent(event) {
+  events.emit('event', event);
+}
+
+function startOAuthSession(payload = {}) {
+  const provider = normalizeProvider(payload.provider);
+  if (!provider) return { ok: false, error: 'Choose a provider.' };
+  let command;
+  try {
+    command = hermesCommandOrThrow();
+  } catch (error) {
+    return { ok: false, error: error && error.message ? error.message : String(error) };
+  }
+
+  const sessionId = randomUUID();
+  const args = ['auth', 'add', provider, '--type', 'oauth', '--no-browser'];
+  const child = spawn(command, args, {
+    cwd: hermesCwd(command),
+    env: hermesEnv(),
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  const rec = { child, provider, stdout: '', stderr: '', startedAt: Date.now() };
+  sessions.set(sessionId, rec);
+
+  const onOutput = (stream) => (chunk) => {
+    const rawText = String(chunk || '');
+    const text = cleanHermesOutput(rawText);
+    rec[stream] = appendOutput(rec[stream], text);
+    const output = `${rec.stdout}\n${rec.stderr}`;
+    emitSessionEvent({
+      sessionId,
+      provider,
+      type: 'output',
+      stream,
+      text,
+      urls: extractUrls(output),
+      userCode: extractUserCode(output),
+    });
+  };
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', onOutput('stdout'));
+  child.stderr.on('data', onOutput('stderr'));
+  child.once('error', (error) => {
+    sessions.delete(sessionId);
+    emitSessionEvent({
+      sessionId,
+      provider,
+      type: 'error',
+      error: error && error.message ? error.message : String(error),
+    });
+  });
+  child.once('close', (code, signal) => {
+    sessions.delete(sessionId);
+    emitSessionEvent({
+      sessionId,
+      provider,
+      type: 'exit',
+      ok: code === 0,
+      code,
+      signal,
+      stdout: redact(rec.stdout),
+      stderr: redact(rec.stderr),
+    });
+  });
+
+  emitSessionEvent({ sessionId, provider, type: 'started' });
+  return { ok: true, sessionId, provider };
+}
+
+function sendOAuthInput(payload = {}) {
+  const sessionId = boundedText(payload.sessionId, 128).trim();
+  const input = boundedText(payload.input, 10000);
+  const rec = sessions.get(sessionId);
+  if (!rec || !rec.child || rec.child.killed) return { ok: false, error: 'Auth session is not running.' };
+  rec.child.stdin.write(`${input.replace(/\r?\n/g, '')}\n`);
+  return { ok: true };
+}
+
+function cancelOAuthSession(payload = {}) {
+  const sessionId = boundedText(payload.sessionId, 128).trim();
+  const rec = sessions.get(sessionId);
+  if (!rec || !rec.child || rec.child.killed) return { ok: true };
+  rec.child.kill('SIGTERM');
+  return { ok: true };
+}
+
+function onSessionEvent(listener) {
+  events.on('event', listener);
+  return () => events.off('event', listener);
+}
+
+module.exports = {
+  addApiKeyCredential,
+  cancelOAuthSession,
+  ensureReadyForRun,
+  extractUrls,
+  extractUserCode,
+  getAuthStatus,
+  isAuthErrorText,
+  onSessionEvent,
+  readinessFromSnapshot,
+  saveModelSelection,
+  sendOAuthInput,
+  startOAuthSession,
+};

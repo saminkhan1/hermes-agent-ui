@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' agent-ui-pet: data: blob:; connect-src 'self' ws://localhost:* http://localhost:*; object-src 'none';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hermes Login</title>
+    <link rel="stylesheet" href="/src/auth.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="header">
+        <div id="header-app-icon" class="header-app-icon" role="img" aria-label="agent-UI"></div>
+        <div class="header-copy">
+          <h1>Connect Hermes</h1>
+          <p id="subtitle">Hermes handles provider auth. agent-UI only sends input and shows output.</p>
+        </div>
+        <button type="button" id="btn-close" class="close-btn" aria-label="Close">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </header>
+
+      <main class="main">
+        <section id="connect-step" class="step">
+          <label class="field-label" for="provider-select">Provider</label>
+          <select id="provider-select" class="field"></select>
+
+          <div class="mode-row">
+            <button type="button" id="btn-oauth" class="mode-btn">Use Hermes sign-in</button>
+            <button type="button" id="btn-api-mode" class="mode-btn">Use API key</button>
+          </div>
+
+          <div id="api-panel" class="panel" hidden>
+            <label class="field-label" for="api-key-input">API key</label>
+            <input id="api-key-input" class="field" type="password" autocomplete="off" spellcheck="false" />
+            <label class="field-label" for="label-input">Label <span>optional</span></label>
+            <input id="label-input" class="field" type="text" autocomplete="off" spellcheck="false" />
+            <button type="button" id="btn-save-key" class="primary-action">Connect</button>
+          </div>
+
+          <div id="oauth-panel" class="panel" hidden>
+            <div class="oauth-topline">
+              <span id="oauth-status" class="oauth-status">Ready to start browser sign-in.</span>
+              <button type="button" id="btn-start-oauth" class="primary-action">Start sign-in</button>
+            </div>
+            <div id="oauth-summary" class="oauth-summary" hidden>
+              <label class="summary-label" for="oauth-url">Link</label>
+              <div class="copy-row">
+                <input id="oauth-url" class="copy-field" type="text" readonly spellcheck="false" />
+                <button type="button" id="btn-copy-link" class="secondary-action copy-action" disabled>Copy</button>
+              </div>
+              <label class="summary-label" for="oauth-code">Code</label>
+              <div class="copy-row">
+                <input id="oauth-code" class="copy-field summary-code" type="text" readonly spellcheck="false" />
+                <button type="button" id="btn-copy-code" class="secondary-action copy-action" disabled>Copy</button>
+              </div>
+            </div>
+            <div class="oauth-actions">
+              <button type="button" id="btn-open-link" class="secondary-action" disabled>Open Link</button>
+              <button type="button" id="btn-check-oauth" class="secondary-action" hidden>Check Again</button>
+              <button type="button" id="btn-retry-oauth" class="secondary-action" hidden>Retry</button>
+              <button type="button" id="btn-cancel-oauth" class="secondary-action" disabled>Cancel</button>
+            </div>
+            <p id="oauth-output" class="oauth-output" aria-live="polite"></p>
+          </div>
+        </section>
+
+        <section id="model-step" class="step" hidden>
+          <label class="field-label" for="model-provider-select">Provider</label>
+          <select id="model-provider-select" class="field"></select>
+
+          <label class="field-label" for="model-select">Model</label>
+          <select id="model-select" class="field"></select>
+
+          <label id="custom-model-label" class="field-label" for="custom-model-input" hidden>Custom model</label>
+          <input id="custom-model-input" class="field" type="text" autocomplete="off" spellcheck="false" hidden />
+
+          <p class="note" id="model-note"></p>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <span id="error" class="error" role="alert" hidden></span>
+        <div class="footer-actions">
+          <span id="hint" class="hint"><kbd>Esc</kbd> close</span>
+          <button type="button" id="btn-back" class="secondary-action" hidden>Back</button>
+          <button type="button" id="btn-primary" class="primary-action">Continue</button>
+        </div>
+      </footer>
+    </div>
+    <script type="module" src="/src/auth.js"></script>
+  </body>
+</html>

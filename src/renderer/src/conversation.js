@@ -174,6 +174,37 @@ function renderAttachmentContent(item = {}) {
   return wrap;
 }
 
+function isAuthErrorText(value) {
+  const text = String(value || '').toLowerCase();
+  return [
+    'provider authentication failed',
+    'no inference provider configured',
+    'run `hermes model`',
+    "run 'hermes model'",
+    'hermes model',
+    'primary provider auth failed',
+    'no api key',
+    'api key is missing',
+    'authentication failed',
+  ].some((marker) => text.includes(marker));
+}
+
+function renderAuthErrorAction() {
+  const wrap = document.createElement('div');
+  wrap.className = 'line-action-row';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'line-action';
+  button.textContent = 'Connect Hermes';
+  button.addEventListener('click', () => {
+    if (typeof window.agentUI?.openHermesAuth === 'function') {
+      window.agentUI.openHermesAuth();
+    }
+  });
+  wrap.appendChild(button);
+  return wrap;
+}
+
 function renderLogItems(items) {
   logEl.replaceChildren();
   for (const item of items || []) {
@@ -192,6 +223,9 @@ function renderLogItems(items) {
       text.appendChild(renderAttachmentContent(item));
     } else {
       text.textContent = item.text == null ? '' : String(item.text);
+      if (item.kind === 'error' && isAuthErrorText(text.textContent)) {
+        text.appendChild(renderAuthErrorAction());
+      }
     }
 
     line.append(label, text);

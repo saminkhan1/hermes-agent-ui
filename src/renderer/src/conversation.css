@@ -204,6 +204,27 @@ body {
   color: #ff8a7a;
 }
 
+.line-action-row {
+  margin-top: 8px;
+}
+
+.line-action {
+  padding: 5px 10px;
+  border: 1px solid rgba(245, 78, 0, 0.55);
+  border-radius: 6px;
+  background: rgba(245, 78, 0, 0.92);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.line-action:hover {
+  background: #f54e00;
+}
+
 .attachment {
   display: flex;
   flex-direction: column;

@@ -16,7 +16,7 @@ export default defineConfig({
         name: 'copy-main-agents',
         writeBundle() {
           const outMain = join('out', 'main')
-          for (const f of ['agents.js', 'eval-server.js', 'eval-trace.js', 'hermes-attachments.js', 'hermes-gateway-client.js', 'hermes-runtime.js', 'pet-assets.js', 'pet-layout.js', 'window-lifecycle.js']) {
+          for (const f of ['agents.js', 'eval-server.js', 'eval-trace.js', 'hermes-attachments.js', 'hermes-auth.js', 'hermes-gateway-client.js', 'hermes-runtime.js', 'pet-assets.js', 'pet-layout.js', 'window-lifecycle.js']) {
             copyFileSync(join('src', 'main', f), join(outMain, f))
           }
         },
@@ -35,6 +35,7 @@ export default defineConfig({
           index: 'src/renderer/index.html',
           modal: 'src/renderer/modal.html',
           conversation: 'src/renderer/conversation.html',
+          auth: 'src/renderer/auth.html',
         },
       },
     },

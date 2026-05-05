@@ -85,10 +85,12 @@ test('manual customer pass documents bootstrap Gatekeeper expectations', () => {
 test('installed app release smoke is a committed repeatable gate', () => {
   const pkg = JSON.parse(read('package.json'));
   const smoke = read('scripts/installed-app-release-smoke.js');
+  const guiSmoke = read('scripts/tart-gui-manual.sh');
   const readme = read('README.md');
   const evidenceTemplate = read('docs/release/evidence-template.md');
 
   assert.equal(pkg.scripts['smoke:installed-release'], 'node scripts/installed-app-release-smoke.js');
+  assert.equal(pkg.scripts['tart:manual-gui'], 'bash scripts/tart-gui-manual.sh');
   assert.match(smoke, /AGENT_UI_EVAL/);
   assert.match(smoke, /AGENT_UI_CONFIG_DIR/);
   assert.match(smoke, /AGENT_UI_HERMES_HOME/);
@@ -101,6 +103,9 @@ test('installed app release smoke is a committed repeatable gate', () => {
   assert.match(smoke, /reopen-smoke/);
   assert.match(smoke, /assertNoErrorItems/);
   assert.match(smoke, /installed-release-smoke-summary\.json/);
+  assert.match(guiSmoke, /TART_IMAGE must be a Cirrus vanilla image/);
+  assert.match(guiSmoke, /tart run --dir="agent-ui-artifacts:\$artifact_dir:ro"/);
+  assert.match(guiSmoke, /Open the Tart VM window/);
   assert.match(readme, /npm run smoke:installed-release -- \/Applications\/agent-UI\.app/);
   assert.match(evidenceTemplate, /Installed-App Automation/);
   assert.match(evidenceTemplate, /Ring 3 - Manual Customer Pass/);

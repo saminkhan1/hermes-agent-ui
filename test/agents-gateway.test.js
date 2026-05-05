@@ -379,5 +379,6 @@ test('electron build copies gateway client into main output', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'electron.vite.config.mjs'), 'utf8');
   assert.match(source, /hermes-gateway-client\.js/);
   assert.match(source, /hermes-attachments\.js/);
+  assert.match(source, /hermes-auth\.js/);
   assert.match(source, /window-lifecycle\.js/);
 });

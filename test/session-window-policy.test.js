@@ -32,3 +32,33 @@ test('opening a conversation focuses existing session window instead of replacin
   assert.doesNotMatch(body, /conversationWindow\.loadURL\(/);
   assert.doesNotMatch(body, /conversationWindow\.loadFile\(/);
 });
+
+test('auth window dismisses without clearing pending auth work', () => {
+  const body = functionBody('openHermesAuthWindow');
+  const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'auth.js'), 'utf8');
+  const preload = fs.readFileSync(path.join(__dirname, '..', 'src', 'preload', 'index.js'), 'utf8');
+
+  assert.match(body, /dismissHermesAuthWindow\(\)/);
+  assert.doesNotMatch(body, /pendingAuthRun = null/);
+  assert.match(renderer, /dismissHermesAuth/);
+  assert.doesNotMatch(renderer.match(/async function closeWindow\(\) \{[\s\S]*?\n\}/)[0], /cancelOAuth\(\)/);
+  assert.match(preload, /dismissHermesAuth/);
+});
+
+test('auth browser handoff has monitor recovery and fallback menu copy', () => {
+  const authHelpers = main.slice(main.indexOf('function idleAuthFlow'), main.indexOf('function getPetOverlayStatePath'));
+  const menuBody = functionBody('hermesLoginMenuItem');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'auth.html'), 'utf8');
+  const preload = fs.readFileSync(path.join(__dirname, '..', 'src', 'preload', 'index.js'), 'utf8');
+
+  assert.match(authHelpers, /AUTH_MONITOR_INTERVAL_MS/);
+  assert.match(authHelpers, /AUTH_STALE_MS/);
+  assert.match(authHelpers, /checkHermesAuthFlow/);
+  assert.match(authHelpers, /showHermesAuthWindowForState\('auth-success'\)/);
+  assert.match(authHelpers, /showHermesAuthWindowForState\('auth-stale'\)/);
+  assert.match(authHelpers, /showHermesAuthWindowForState\('auth-status-failed'\)/);
+  assert.match(menuBody, /Return to Hermes Sign-In/);
+  assert.match(html, /btn-check-oauth/);
+  assert.match(html, /btn-retry-oauth/);
+  assert.match(preload, /checkHermesAuthNow/);
+});

@@ -6,6 +6,7 @@ const {
   Menu,
   nativeImage,
   ipcMain,
+  clipboard,
   screen,
   shell,
   protocol,
@@ -47,6 +48,7 @@ const {
 } = require('./pet-layout');
 const petAssets = require('./pet-assets');
 const hermesAttachments = require('./hermes-attachments');
+const hermesAuth = require('./hermes-auth');
 const { captureAndTranscribeVoice } = require('./hermes-runtime');
 const { clearCurrentWindow, focusWindow, isCurrentWindow, isLiveWindow, runForCurrentWindow } = require('./window-lifecycle');
 
@@ -75,6 +77,8 @@ const ACTIVE_WINDOW_CACHE_INTERVAL_MS = 3000;
 const ACTIVE_WINDOW_CACHE_DURATION_MS = 15000;
 const INPUT_MODE_TEXT = 'text';
 const INPUT_MODE_VOICE = 'voice';
+const AUTH_MONITOR_INTERVAL_MS = 2500;
+const AUTH_STALE_MS = 25000;
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -203,6 +207,7 @@ function execFileText(command, args, opts = {}) {
 let mainWindow;
 let modalWindow;
 let conversationWindow;
+let authWindow;
 let activeConversationCatId = null;
 /** Square conversation panel — content dimensions (px). */
 const CONVERSATION_WINDOW_SIDE = 800;
@@ -216,6 +221,10 @@ let overlayReady = false;
 const pendingSpawnCats = [];
 let activeModalContextId = null;
 const modalContexts = new Map();
+let pendingAuthRun = null;
+let authMonitorTimer = null;
+let authFlow = idleAuthFlow();
+const ignoredAuthSessionIds = new Set();
 const evalUiSnapshots = new Map();
 let lastExternalWindowSnapshot = null;
 let activeWindowCacheTimer = null;
@@ -234,6 +243,239 @@ let petPlacement = 'top-end';
 let petCharacterOptions = [];
 let selectedPetCharacterId = FALLBACK_PET_CHARACTER_ID;
 let selectedInputMode = INPUT_MODE_TEXT;
+
+hermesAuth.onSessionEvent((payload) => {
+  handleHermesAuthSessionEvent(payload);
+});
+
+function idleAuthFlow() {
+  return {
+    sessionId: '',
+    provider: '',
+    state: 'idle',
+    latestUrl: '',
+    userCode: '',
+    lastError: '',
+    hidden: false,
+    startedAt: 0,
+    lastEventAt: 0,
+  };
+}
+
+function authFlowIsRecoverable() {
+  return !!pendingAuthRun || !!authFlow.sessionId || authFlow.state !== 'idle';
+}
+
+function authFlowIsWaiting() {
+  return !!authFlow.sessionId && (authFlow.state === 'waiting' || authFlow.state === 'stale');
+}
+
+function authContextPayload(reason = '') {
+  return {
+    hasPendingRun: !!pendingAuthRun,
+    reason: String(reason || ''),
+    authFlow: { ...authFlow },
+  };
+}
+
+function sendHermesAuthContext(reason = '') {
+  if (!authWindow || authWindow.isDestroyed()) return;
+  authWindow.webContents.send('hermes-auth-context', authContextPayload(reason));
+}
+
+function sendHermesAuthEvent(payload = {}) {
+  if (!authWindow || authWindow.isDestroyed()) return;
+  authWindow.webContents.send('hermes-auth-event', {
+    ...payload,
+    authFlow: { ...authFlow },
+    hasPendingRun: !!pendingAuthRun,
+  });
+}
+
+function stopAuthMonitor() {
+  if (authMonitorTimer) clearInterval(authMonitorTimer);
+  authMonitorTimer = null;
+}
+
+function startAuthMonitor() {
+  stopAuthMonitor();
+  authMonitorTimer = setInterval(() => {
+    void checkHermesAuthFlow('poll');
+  }, AUTH_MONITOR_INTERVAL_MS);
+  void checkHermesAuthFlow('start');
+}
+
+function authStatusHasProvider(status = {}, provider = '') {
+  const target = String(provider || '').trim();
+  const providers = Array.isArray(status.providers) ? status.providers : [];
+  if (!target) return providers.length > 0;
+  return providers.some((entry) => String(entry?.slug || entry?.id || '').trim() === target);
+}
+
+function markAuthFlow(state, patch = {}) {
+  authFlow = {
+    ...authFlow,
+    ...patch,
+    state,
+    lastEventAt: Date.now(),
+  };
+  rebuildAppMenus();
+  sendHermesAuthContext(`auth-${state}`);
+}
+
+function resetAuthFlow({ clearPending = false } = {}) {
+  stopAuthMonitor();
+  authFlow = idleAuthFlow();
+  if (clearPending) pendingAuthRun = null;
+  rebuildAppMenus();
+  sendHermesAuthContext('auth-reset');
+}
+
+function showHermesAuthWindowForState(reason = '') {
+  authFlow.hidden = false;
+  if (authWindow && !authWindow.isDestroyed()) {
+    focusWindow(authWindow);
+    sendHermesAuthContext(reason);
+    return authWindow;
+  }
+  return openHermesAuthWindow({ reason });
+}
+
+function dismissHermesAuthWindow() {
+  if (!authWindow || authWindow.isDestroyed()) return { ok: true, dismissed: false };
+  if (!authFlowIsRecoverable()) {
+    authWindow.close();
+    return { ok: true, dismissed: false };
+  }
+  authFlow.hidden = true;
+  authWindow.hide();
+  rebuildAppMenus();
+  return { ok: true, dismissed: true, authFlow: { ...authFlow } };
+}
+
+async function checkHermesAuthFlow(reason = 'check') {
+  if (!authFlowIsWaiting()) return authContextPayload(reason);
+  const sessionAtStart = authFlow.sessionId;
+  try {
+    const status = await hermesAuth.getAuthStatus();
+    if (sessionAtStart !== authFlow.sessionId) return authContextPayload(reason);
+    if (authStatusHasProvider(status, authFlow.provider)) {
+      stopAuthMonitor();
+      markAuthFlow('success', { hidden: false, lastError: '' });
+      showHermesAuthWindowForState('auth-success');
+      return authContextPayload('auth-success');
+    }
+    const ageMs = Date.now() - (authFlow.startedAt || authFlow.lastEventAt || Date.now());
+    if (authFlow.state === 'waiting' && ageMs >= AUTH_STALE_MS) {
+      markAuthFlow('stale', {
+        hidden: false,
+        lastError: 'Still waiting for browser sign-in.',
+      });
+      showHermesAuthWindowForState('auth-stale');
+    }
+  } catch (error) {
+    if (sessionAtStart !== authFlow.sessionId) return authContextPayload(reason);
+    stopAuthMonitor();
+    markAuthFlow('failed', {
+      hidden: false,
+      lastError: error && error.message ? error.message : String(error),
+    });
+    showHermesAuthWindowForState('auth-status-failed');
+  }
+  return authContextPayload(reason);
+}
+
+function startHermesOAuthFlow(payload = {}) {
+  const retry = !!payload.retry;
+  if (retry && authFlow.sessionId) {
+    ignoredAuthSessionIds.add(authFlow.sessionId);
+    hermesAuth.cancelOAuthSession({ sessionId: authFlow.sessionId });
+  }
+  const result = hermesAuth.startOAuthSession(payload);
+  if (!result || result.ok === false) return result;
+  const now = Date.now();
+  authFlow = {
+    ...idleAuthFlow(),
+    sessionId: String(result.sessionId || ''),
+    provider: String(result.provider || payload.provider || ''),
+    state: 'waiting',
+    hidden: false,
+    startedAt: now,
+    lastEventAt: now,
+  };
+  rebuildAppMenus();
+  startAuthMonitor();
+  sendHermesAuthContext('auth-started');
+  return { ...result, authFlow: { ...authFlow }, hasPendingRun: !!pendingAuthRun };
+}
+
+function cancelHermesOAuthFlow(payload = {}, { clearPending = true } = {}) {
+  const sessionId = String(payload.sessionId || authFlow.sessionId || '').trim();
+  if (sessionId) {
+    ignoredAuthSessionIds.add(sessionId);
+    hermesAuth.cancelOAuthSession({ sessionId });
+  }
+  resetAuthFlow({ clearPending });
+  return { ok: true };
+}
+
+function handleHermesAuthSessionEvent(payload = {}) {
+  const sessionId = String(payload.sessionId || '').trim();
+  if (sessionId && ignoredAuthSessionIds.has(sessionId)) {
+    if (payload.type === 'exit' || payload.type === 'error') ignoredAuthSessionIds.delete(sessionId);
+    return;
+  }
+  if (sessionId && authFlow.sessionId && sessionId !== authFlow.sessionId) return;
+  if ((payload.type === 'exit' || payload.type === 'error') && authFlow.state === 'success') {
+    sendHermesAuthEvent(payload);
+    return;
+  }
+
+  if (payload.type === 'output') {
+    const urls = Array.isArray(payload.urls) ? payload.urls : [];
+    authFlow = {
+      ...authFlow,
+      sessionId: sessionId || authFlow.sessionId,
+      provider: String(payload.provider || authFlow.provider || ''),
+      latestUrl: urls.length ? String(urls[urls.length - 1] || '') : authFlow.latestUrl,
+      userCode: payload.userCode ? String(payload.userCode || '') : authFlow.userCode,
+      state: authFlow.state === 'idle' ? 'waiting' : authFlow.state,
+      lastEventAt: Date.now(),
+    };
+    sendHermesAuthEvent(payload);
+    sendHermesAuthContext('auth-output');
+    return;
+  }
+
+  if (payload.type === 'exit') {
+    stopAuthMonitor();
+    if (payload.ok) {
+      markAuthFlow('success', { hidden: false, lastError: '' });
+      showHermesAuthWindowForState('auth-success');
+    } else {
+      markAuthFlow('failed', {
+        hidden: false,
+        lastError: payload.stderr || payload.stdout || 'Hermes sign-in failed.',
+      });
+      showHermesAuthWindowForState('auth-failed');
+    }
+    sendHermesAuthEvent(payload);
+    return;
+  }
+
+  if (payload.type === 'error') {
+    stopAuthMonitor();
+    markAuthFlow('failed', {
+      hidden: false,
+      lastError: payload.error || 'Hermes sign-in failed.',
+    });
+    showHermesAuthWindowForState('auth-error');
+    sendHermesAuthEvent(payload);
+    return;
+  }
+
+  sendHermesAuthEvent(payload);
+}
 
 function getPetOverlayStatePath() {
   return path.join(getAgentUIConfigDir(), 'pet-overlay.json');
@@ -1040,6 +1282,94 @@ function openConversationWindow(catId) {
   }
 }
 
+function displayForAuthWindow(pendingRun = null) {
+  const launchContext = pendingRun && pendingRun.launchContext ? pendingRun.launchContext : null;
+  if (launchContext && launchContext.display) return launchContext.display;
+  if (launchContext && launchContext.cursor) return screen.getDisplayNearestPoint(launchContext.cursor);
+  return displayForPetOrCursor();
+}
+
+function openHermesAuthWindow({ pendingRun = null, reason = '' } = {}) {
+  if (pendingRun) pendingAuthRun = pendingRun;
+  if (authWindow && !authWindow.isDestroyed()) {
+    authFlow.hidden = false;
+    focusWindow(authWindow);
+    sendHermesAuthContext(reason);
+    return authWindow;
+  }
+
+  const bounds = centeredWindowBounds(640, 560, displayForAuthWindow(pendingRun));
+  const win = new BrowserWindow({
+    width: bounds.width,
+    height: bounds.height,
+    x: bounds.x,
+    y: bounds.y,
+    useContentSize: true,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    modal: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    show: false,
+    ...macPanelWindowOptions(),
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  authWindow = win;
+  applyOverlayWindowPolicy(win, { level: FOCUSED_OVERLAY_WINDOW_LEVEL });
+
+  closeWindowOnEscape(win, () => {
+    if (isCurrentWindow(win, () => authWindow)) {
+      dismissHermesAuthWindow();
+    }
+  });
+
+  win.webContents.once('did-finish-load', () => {
+    if (isCurrentWindow(win, () => authWindow)) sendHermesAuthContext(reason);
+  });
+
+  win.once('ready-to-show', () => {
+    runForCurrentWindow(win, () => authWindow, (currentWindow) => {
+      currentWindow.show();
+      currentWindow.moveTop();
+      currentWindow.focus();
+      currentWindow.webContents.focus();
+    });
+  });
+
+  win.on('closed', () => {
+    clearCurrentWindow(win, () => authWindow, (next) => {
+      authWindow = next;
+    });
+  });
+
+  const query = {
+    pending: pendingAuthRun ? '1' : '',
+    reason: String(reason || ''),
+  };
+  if (process.env.ELECTRON_RENDERER_URL) {
+    const base = process.env.ELECTRON_RENDERER_URL.replace(/\/?$/, '');
+    void win.loadURL(`${base}/auth.html?${new URLSearchParams(query).toString()}`);
+  } else {
+    void win.loadFile(path.join(__dirname, '../renderer/auth.html'), { query });
+  }
+  return win;
+}
+
+function closeHermesAuthWindow() {
+  if (authWindow && !authWindow.isDestroyed()) {
+    authWindow.close();
+  }
+}
+
 function setCatsVisible(visible) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (visible) {
@@ -1048,6 +1378,15 @@ function setCatsVisible(visible) {
     closePetOverlay({ persist: true });
   }
   rebuildAppMenus();
+}
+
+function hermesLoginMenuItem() {
+  return {
+    label: authFlowIsRecoverable() ? 'Return to Hermes Sign-In...' : 'Hermes Login...',
+    click: () => {
+      openHermesAuthWindow({ reason: 'menu' });
+    },
+  };
 }
 
 function petCharacterMenuItem() {
@@ -1105,6 +1444,8 @@ function settingsMenuItem() {
   return {
     label: 'Settings',
     submenu: [
+      hermesLoginMenuItem(),
+      { type: 'separator' },
       inputModeMenuItem(),
     ],
   };
@@ -1537,8 +1878,39 @@ async function startCatRunFromPayload(payload = {}, opts = {}) {
     runtime,
     contextQuality: launchContext ? launchContext.contextQuality : 'missing',
   });
+
+  const prepared = { catId, prompt, runtime, modalContextId, launchContext };
+  if (opts.skipAuthPreflight !== true) {
+    const readiness = await hermesAuth.ensureReadyForRun();
+    if (!readiness.ok) {
+      recordTrace('submit_auth_required', {
+        catId,
+        modalContextId: modalContextId || null,
+        reason: readiness.reason || 'unknown',
+      });
+      if (modalContextId) modalContexts.delete(modalContextId);
+      if (activeModalContextId === modalContextId) activeModalContextId = null;
+      if (opts.closeModal !== false && modalWindow && !modalWindow.isDestroyed()) {
+        modalWindow.close();
+      }
+      openHermesAuthWindow({ pendingRun: prepared, reason: readiness.reason || 'preflight' });
+      return { ok: false, needsAuth: true, reason: readiness.reason || 'preflight' };
+    }
+  }
+
+  launchPreparedCatRun(prepared, { closeModal: opts.closeModal !== false });
+  return { ok: true, catId, runtime };
+}
+
+function launchPreparedCatRun(prepared = {}, opts = {}) {
+  const catId = normalizeCatId(prepared.catId) || randomUUID();
+  const prompt = boundedText(prepared.prompt);
+  const runtime = 'local';
+  const modalContextId = normalizeCatId(prepared.modalContextId);
+  const launchContext = prepared.launchContext || null;
   const out = { catId, prompt, runtime, modalContextId };
   if (modalContextId) modalContexts.delete(modalContextId);
+  if (activeModalContextId === modalContextId) activeModalContextId = null;
   if (opts.closeModal !== false && modalWindow && !modalWindow.isDestroyed()) {
     modalWindow.close();
   }
@@ -1553,7 +1925,6 @@ async function startCatRunFromPayload(payload = {}, opts = {}) {
     },
     { getMainWindow: () => mainWindow, log: console }
   );
-  return { ok: true, catId, runtime };
 }
 
 ipcMain.on('new-cat-submit', (_event, payload) => {
@@ -1703,9 +2074,86 @@ ipcMain.handle('open-agent-attachment', async (_e, { url } = {}) => {
   return { ok: false, error: 'Unsupported attachment URL.' };
 });
 
+ipcMain.handle('open-external-url', async (_e, { url } = {}) => {
+  const value = boundedText(url, 4096).trim();
+  if (!value) return { ok: false, error: 'Missing URL.' };
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { ok: false, error: 'Unsupported URL.' };
+    }
+    await shell.openExternal(parsed.toString());
+    return { ok: true };
+  } catch {
+    return { ok: false, error: 'Unsupported URL.' };
+  }
+});
+
+ipcMain.handle('clipboard-write-text', (_e, { text } = {}) => {
+  const value = boundedText(text, 20000);
+  if (!value) return { ok: false, error: 'Missing text.' };
+  clipboard.writeText(value);
+  return { ok: true };
+});
+
 ipcMain.handle('get-agent-conversation', (_e, catId) => {
   const id = normalizeCatId(catId);
   return id ? getAgentConversation(id) : { found: false, items: [] };
+});
+
+ipcMain.handle('hermes-auth-status', async () => {
+  try {
+    return await hermesAuth.getAuthStatus();
+  } catch (error) {
+    return { ok: false, error: error && error.message ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('hermes-auth-add-api-key', async (_e, payload = {}) => {
+  return hermesAuth.addApiKeyCredential(payload);
+});
+
+ipcMain.handle('hermes-auth-save-model', async (_e, payload = {}) => {
+  return hermesAuth.saveModelSelection(payload);
+});
+
+ipcMain.handle('hermes-auth-oauth-start', (_e, payload = {}) => {
+  return startHermesOAuthFlow(payload);
+});
+
+ipcMain.handle('hermes-auth-oauth-input', (_e, payload = {}) => {
+  return hermesAuth.sendOAuthInput(payload);
+});
+
+ipcMain.handle('hermes-auth-oauth-cancel', (_e, payload = {}) => {
+  return cancelHermesOAuthFlow(payload, { clearPending: true });
+});
+
+ipcMain.handle('hermes-auth-check-now', async () => {
+  return await checkHermesAuthFlow('check-now');
+});
+
+ipcMain.handle('hermes-auth-finish', () => {
+  const pending = pendingAuthRun;
+  resetAuthFlow({ clearPending: true });
+  closeHermesAuthWindow();
+  if (pending) {
+    launchPreparedCatRun(pending, { closeModal: false });
+    return { ok: true, started: true, catId: pending.catId || null };
+  }
+  return { ok: true, started: false };
+});
+
+ipcMain.on('hermes-auth-close', () => {
+  closeHermesAuthWindow();
+});
+
+ipcMain.handle('hermes-auth-dismiss', () => {
+  return dismissHermesAuthWindow();
+});
+
+ipcMain.on('hermes-auth-open', () => {
+  openHermesAuthWindow({ reason: 'renderer' });
 });
 
 function evalWindowState(win) {
