@@ -4,6 +4,10 @@ agent-UI is a thin desktop launcher and status surface for Hermes.
 
 It captures lightweight app/window/display context when the global shortcut fires, then starts the currently selected input mode: text mode opens a minimal task input, while voice mode records through Hermes voice capture and places the transcript in the same input for review before submission.
 
+<p align="center">
+  <img src="assets/readme_pic.png" alt="agent-UI desktop interface preview" width="760">
+</p>
+
 ## Documentation Map
 
 - New contributors: [Developer Onboarding](docs/DEVELOPER_ONBOARDING.md)
