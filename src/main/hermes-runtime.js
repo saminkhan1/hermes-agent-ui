@@ -7,7 +7,6 @@ const { spawn, execFile } = require('child_process');
 const { randomBytes } = require('crypto');
 const {
   defaultGatewayEnvPath,
-  gatewayBaseUrlFromEnv,
   readGatewayEnvFile,
   realUserHomeDir,
 } = require('./hermes-gateway-client');
@@ -615,13 +614,13 @@ function ensureGatewayEnvFile(overrides = {}) {
   const file = defaultGatewayEnvPath();
   const current = readGatewayEnvFile(file);
   const nextPort = overrides.LOCAL_DESKTOP_PORT || overrides.port || current.LOCAL_DESKTOP_PORT || '8766';
+  const nextHost = overrides.LOCAL_DESKTOP_HOST || overrides.host || current.LOCAL_DESKTOP_HOST || '127.0.0.1';
   const merged = {
     LOCAL_DESKTOP_GATEWAY_KEY: current.LOCAL_DESKTOP_GATEWAY_KEY || current.AGENT_UI_HERMES_GATEWAY_KEY || randomBytes(32).toString('hex'),
     LOCAL_DESKTOP_ALLOWED_USERS: current.LOCAL_DESKTOP_ALLOWED_USERS || LOCAL_DESKTOP_USER,
     LOCAL_DESKTOP_ALLOW_ALL_USERS: current.LOCAL_DESKTOP_ALLOW_ALL_USERS || 'false',
-    LOCAL_DESKTOP_HOST: current.LOCAL_DESKTOP_HOST || '127.0.0.1',
+    LOCAL_DESKTOP_HOST: String(nextHost),
     LOCAL_DESKTOP_PORT: String(nextPort),
-    AGENT_UI_HERMES_GATEWAY_URL: current.AGENT_UI_HERMES_GATEWAY_URL || '',
   };
   ensureDir(path.dirname(file));
   const body = [
@@ -631,11 +630,38 @@ function ensureGatewayEnvFile(overrides = {}) {
     `LOCAL_DESKTOP_ALLOW_ALL_USERS=${merged.LOCAL_DESKTOP_ALLOW_ALL_USERS}`,
     `LOCAL_DESKTOP_HOST=${merged.LOCAL_DESKTOP_HOST}`,
     `LOCAL_DESKTOP_PORT=${merged.LOCAL_DESKTOP_PORT}`,
-    merged.AGENT_UI_HERMES_GATEWAY_URL ? `AGENT_UI_HERMES_GATEWAY_URL=${merged.AGENT_UI_HERMES_GATEWAY_URL}` : '',
     '',
   ].filter((line) => line !== '').join('\n');
   fs.writeFileSync(file, body, { encoding: 'utf8', mode: 0o600 });
   return { file, env: merged };
+}
+
+function gatewayBaseUrlForEnv(env = {}) {
+  const host = String(env.LOCAL_DESKTOP_HOST || '127.0.0.1').trim() || '127.0.0.1';
+  const port = String(env.LOCAL_DESKTOP_PORT || '8766').trim() || '8766';
+  return `http://${host}:${port}`;
+}
+
+function gatewayEnvOverridesFromProcess() {
+  const overrides = {};
+  const directUrl = String(process.env.AGENT_UI_HERMES_GATEWAY_URL || '').trim();
+  if (directUrl) {
+    const parsed = parseGatewayBaseUrl(directUrl);
+    if (parsed.host) overrides.LOCAL_DESKTOP_HOST = parsed.host;
+    if (parsed.port) overrides.LOCAL_DESKTOP_PORT = String(parsed.port);
+  }
+  if (process.env.LOCAL_DESKTOP_HOST) overrides.LOCAL_DESKTOP_HOST = process.env.LOCAL_DESKTOP_HOST;
+  if (process.env.LOCAL_DESKTOP_PORT) overrides.LOCAL_DESKTOP_PORT = process.env.LOCAL_DESKTOP_PORT;
+  return overrides;
+}
+
+function syncGatewayEnvToProcess(gatewayEnv) {
+  const baseUrl = gatewayBaseUrlForEnv(gatewayEnv);
+  process.env.LOCAL_DESKTOP_GATEWAY_KEY = gatewayEnv.LOCAL_DESKTOP_GATEWAY_KEY;
+  process.env.LOCAL_DESKTOP_HOST = gatewayEnv.LOCAL_DESKTOP_HOST;
+  process.env.LOCAL_DESKTOP_PORT = gatewayEnv.LOCAL_DESKTOP_PORT;
+  process.env.AGENT_UI_HERMES_GATEWAY_URL = baseUrl;
+  return baseUrl;
 }
 
 async function healthOk(baseUrl, timeoutMs = 900) {
@@ -843,8 +869,8 @@ function gatewayStartupFailureMessage(baseUrl, childExit, stdoutTail, stderrTail
 
 async function ensureGatewayProcess(log = console) {
   if (!gatewayAutostartEnabled()) return { ok: false, skipped: true, reason: 'autostart disabled' };
-  let { env: gatewayEnv } = ensureGatewayEnvFile();
-  let baseUrl = gatewayBaseUrlFromEnv();
+  let { env: gatewayEnv } = ensureGatewayEnvFile(gatewayEnvOverridesFromProcess());
+  let baseUrl = syncGatewayEnvToProcess(gatewayEnv);
   const hermesHome = effectiveGatewayHermesHome();
   if (await gatewayReadyOk(baseUrl, gatewayEnv.LOCAL_DESKTOP_GATEWAY_KEY)) {
     return { ok: true, alreadyRunning: true, baseUrl };
@@ -886,8 +912,11 @@ async function ensureGatewayProcess(log = console) {
   const endpoint = parseGatewayBaseUrl(baseUrl);
   if (!await portAvailable(endpoint.host, endpoint.port)) {
     const replacementPort = await nextAvailableGatewayPort(endpoint.host, endpoint.port + 1);
-    ({ env: gatewayEnv } = ensureGatewayEnvFile({ LOCAL_DESKTOP_PORT: String(replacementPort) }));
-    baseUrl = gatewayBaseUrlFromEnv();
+    ({ env: gatewayEnv } = ensureGatewayEnvFile({
+      LOCAL_DESKTOP_HOST: endpoint.host,
+      LOCAL_DESKTOP_PORT: String(replacementPort),
+    }));
+    baseUrl = syncGatewayEnvToProcess(gatewayEnv);
     log.warn('[agent-ui] Hermes gateway port was occupied; using', baseUrl);
   }
 

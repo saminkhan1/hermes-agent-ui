@@ -35,6 +35,7 @@ function isolateEnv(t) {
   delete process.env.AGENT_UI_HERMES_BIN;
   delete process.env.AGENT_UI_HERMES_HOME;
   delete process.env.AGENT_UI_HERMES_ENV_PATH;
+  delete process.env.AGENT_UI_HERMES_GATEWAY_URL;
   delete process.env.AGENT_UI_RELEASE_MODE;
   delete process.env.AGENT_UI_RELEASE_FLAVOR;
   delete process.env.AGENT_UI_CONNECTOR_GATEWAY_RESTART_APPROVED;
@@ -203,6 +204,36 @@ test('ensureGatewayProcess rotates the gateway port when the preferred port is o
   assert.match(result.error, /Hermes executable is missing/);
   assert.doesNotMatch(env, new RegExp(`LOCAL_DESKTOP_PORT=${blockedPort}\\b`));
   assert.match(env, /LOCAL_DESKTOP_PORT=\d+/);
+  assert.notEqual(process.env.LOCAL_DESKTOP_PORT, String(blockedPort));
+  assert.equal(process.env.AGENT_UI_HERMES_GATEWAY_URL, `http://127.0.0.1:${process.env.LOCAL_DESKTOP_PORT}`);
+});
+
+test('ensureGatewayProcess reconciles direct gateway URL with the Hermes env file', async (t) => {
+  isolateEnv(t);
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-runtime-url-'));
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-runtime-home-'));
+  const probe = net.createServer();
+  await new Promise((resolve) => probe.listen({ host: '127.0.0.1', port: 0, exclusive: true }, resolve));
+  const directPort = probe.address().port;
+  await new Promise((resolve) => probe.close(resolve));
+  t.after(() => {
+    stopGatewayProcess();
+  });
+
+  process.env.AGENT_UI_CONFIG_DIR = configDir;
+  process.env.AGENT_UI_HERMES_HOME = homeDir;
+  process.env.AGENT_UI_HERMES_BIN = path.join(configDir, 'missing-hermes');
+  process.env.AGENT_UI_HERMES_GATEWAY_URL = `http://127.0.0.1:${directPort}/`;
+  ensureGatewayEnvFile({ LOCAL_DESKTOP_PORT: '8766' });
+
+  const result = await ensureGatewayProcess({ warn() {}, log() {} });
+  const env = fs.readFileSync(path.join(homeDir, '.env'), 'utf8');
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /Hermes executable is missing/);
+  assert.match(env, new RegExp(`LOCAL_DESKTOP_PORT=${directPort}\\b`));
+  assert.equal(process.env.LOCAL_DESKTOP_PORT, String(directPort));
+  assert.equal(process.env.AGENT_UI_HERMES_GATEWAY_URL, `http://127.0.0.1:${directPort}`);
 });
 
 test('gateway autostart uses replace mode for quit/reopen recovery', () => {
