@@ -49,7 +49,7 @@ Before starting a new dev session, clear stale local preview/dev processes if ne
 node scripts/ensure-clean-dev.js
 ```
 
-Do not rely on your shell `PATH`, Homebrew Hermes, a local Jarvis checkout, or developer tools when judging release readiness. Packaged artifacts must use the bundled Hermes runtime under `agent-UI.app/Contents/Resources/hermes-runtime`.
+Do not rely on your shell `PATH`, Homebrew Hermes, a local checkout, or developer tools when judging standalone release readiness. Standalone artifacts must use the bundled Hermes runtime under `agent-UI Standalone.app/Contents/Resources/hermes-runtime`. Connector artifacts must omit that runtime.
 
 ## Change Checklist
 
@@ -72,7 +72,7 @@ For gateway/client behavior changes, run the relevant smoke tests:
 
 ```bash
 npm run smoke:gateway
-npm run smoke:installed-release -- /Applications/agent-UI.app
+npm run smoke:installed-release -- "/Applications/agent-UI Standalone.app"
 ```
 
 The installed-release smoke expects a built app already installed or extracted. It launches the app in eval mode with isolated config and Hermes state.

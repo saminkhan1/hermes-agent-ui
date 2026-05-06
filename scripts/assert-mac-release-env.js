@@ -2,7 +2,9 @@
 
 const { spawnSync } = require('node:child_process');
 
-const mode = String(process.argv[2] || process.env.AGENT_UI_MAC_RELEASE_MODE || 'bootstrap').trim().toLowerCase();
+const signingMode = String(process.argv[2] || process.env.AGENT_UI_MAC_SIGNING_MODE || 'bootstrap').trim().toLowerCase();
+const appMode = String(process.argv[3] || process.env.AGENT_UI_RELEASE_MODE || process.env.AGENT_UI_RELEASE_FLAVOR || 'standalone').trim().toLowerCase();
+const connectorPluginRepo = String(process.env.AGENT_UI_LOCAL_DESKTOP_PLUGIN_REPO || 'saminkhan1/agent-ui-local-desktop-plugin').trim();
 
 function hasCommand(command) {
   const res = spawnSync(command, ['--version'], { encoding: 'utf8' });
@@ -27,25 +29,33 @@ const missing = [];
 if (process.platform !== 'darwin') {
   missing.push('macOS host for mac app packaging');
 }
-if (!hasCommand('uv')) {
+if (!['connector', 'standalone'].includes(appMode)) {
+  missing.push(`known app release mode, got ${appMode}`);
+}
+
+if (appMode === 'connector' && !connectorPluginRepo) {
+  missing.push('AGENT_UI_LOCAL_DESKTOP_PLUGIN_REPO for the public local_desktop plugin repository');
+}
+
+if (appMode === 'standalone' && !hasCommand('uv')) {
   missing.push('uv for bundled Python dependency resolution');
 }
 
-if (mode === 'developer-id') {
+if (signingMode === 'developer-id') {
   if (!hasDeveloperIdIdentity()) {
     missing.push('Developer ID Application signing identity or CSC_LINK/CSC_KEY_PASSWORD');
   }
   if (!hasNotarizationCredentials()) {
     missing.push('Apple notarization credentials');
   }
-} else if (mode !== 'bootstrap') {
-  missing.push(`known release mode, got ${mode}`);
+} else if (signingMode !== 'bootstrap') {
+  missing.push(`known signing mode, got ${signingMode}`);
 }
 
 if (missing.length) {
-  console.error(`[agent-ui] mac ${mode} packaging requires:`);
+  console.error(`[agent-ui] mac ${appMode} ${signingMode} packaging requires:`);
   for (const item of missing) console.error(`- ${item}`);
-  if (mode === 'developer-id') {
+  if (signingMode === 'developer-id') {
     console.error('[agent-ui] Use the Developer ID workflow with release secrets, or provide these env vars locally.');
   } else {
     console.error('[agent-ui] Bootstrap builds use ad-hoc signing and skip Apple notarization.');
@@ -53,6 +63,6 @@ if (missing.length) {
   process.exit(1);
 }
 
-if (mode === 'bootstrap') {
-  console.log('[agent-ui] bootstrap mac packaging: ad-hoc app signing, no notarization or stapling.');
+if (signingMode === 'bootstrap') {
+  console.log(`[agent-ui] ${appMode} bootstrap mac packaging: ad-hoc app signing, no notarization or stapling.`);
 }

@@ -11,49 +11,95 @@ function read(relPath) {
   return fs.readFileSync(path.join(root, relPath), 'utf8');
 }
 
-test('default mac distribution uses the bootstrap no-paid-plan path', () => {
+test('default mac distribution builds connector and standalone bootstrap apps', () => {
   const pkg = JSON.parse(read('package.json'));
-  const bootstrapConfig = require('../packaging/electron-builder.bootstrap.cjs');
+  const connectorConfig = require('../packaging/electron-builder.connector.bootstrap.cjs');
+  const standaloneConfig = require('../packaging/electron-builder.standalone.bootstrap.cjs');
   const workflow = read('.github/workflows/mac-release.yml');
 
   assert.equal(pkg.scripts['dist:mac'], 'npm run dist:mac:bootstrap');
-  assert.match(pkg.scripts['dist:mac:bootstrap'], /assert-mac-release-env\.js bootstrap/);
-  assert.match(pkg.scripts['dist:mac:bootstrap'], /electron-builder --config packaging\/electron-builder\.bootstrap\.cjs/);
-  assert.match(pkg.scripts['dist:mac:developer-id'], /assert-mac-release-env\.js developer-id/);
+  assert.match(pkg.scripts['dist:mac:bootstrap'], /dist:mac:connector:bootstrap/);
+  assert.match(pkg.scripts['dist:mac:bootstrap'], /dist:mac:standalone:bootstrap/);
+  assert.match(pkg.scripts['dist:mac:connector:bootstrap'], /assert-mac-release-env\.js bootstrap connector/);
+  assert.match(pkg.scripts['dist:mac:connector:bootstrap'], /electron-builder --config packaging\/electron-builder\.connector\.bootstrap\.cjs/);
+  assert.match(pkg.scripts['dist:mac:standalone:bootstrap'], /assert-mac-release-env\.js bootstrap standalone/);
+  assert.match(pkg.scripts['dist:mac:standalone:bootstrap'], /npm run bundle:hermes/);
+  assert.match(pkg.scripts['dist:mac:developer-id'], /dist:mac:connector:developer-id/);
   assert.match(pkg.scripts['release:verify'], /release:verify:bootstrap/);
-  assert.match(pkg.scripts['release:verify:bootstrap'], /RELEASE_VERIFY_MODE=bootstrap/);
-  assert.match(pkg.scripts['release:verify:developer-id'], /RELEASE_VERIFY_MODE=developer-id/);
+  assert.match(pkg.scripts['release:verify:bootstrap'], /RELEASE_VERIFY_SIGNING_MODE=bootstrap/);
+  assert.match(pkg.scripts['release:verify:bootstrap'], /RELEASE_VERIFY_APP_MODE=all/);
+  assert.match(pkg.scripts['release:verify:developer-id'], /RELEASE_VERIFY_SIGNING_MODE=developer-id/);
 
-  assert.equal(bootstrapConfig.mac.identity, '-');
-  assert.equal(bootstrapConfig.mac.notarize, false);
-  assert.equal(bootstrapConfig.mac.gatekeeperAssess, false);
-  assert.match(bootstrapConfig.artifactName, /bootstrap/);
+  assert.equal(connectorConfig.productName, 'agent-UI for Hermes');
+  assert.equal(connectorConfig.appId, 'ai.agent-ui.hermes');
+  assert.equal(connectorConfig.extraResources.length, 0);
+  assert.equal(connectorConfig.afterPack, undefined);
+  assert.match(connectorConfig.artifactName, /agent-UI-for-Hermes/);
+  assert.equal(connectorConfig.extraMetadata.agentUI.releaseMode, 'connector');
+  assert.equal(connectorConfig.extraMetadata.agentUI.hermesRuntimeIncluded, false);
+
+  assert.equal(standaloneConfig.productName, 'agent-UI Standalone');
+  assert.equal(standaloneConfig.appId, 'ai.agent-ui.standalone');
+  assert.equal(standaloneConfig.extraResources.some((entry) => entry.to === 'hermes-runtime'), true);
+  assert.match(standaloneConfig.artifactName, /agent-UI-Standalone/);
+  assert.equal(standaloneConfig.extraMetadata.agentUI.releaseMode, 'standalone');
+  assert.equal(standaloneConfig.extraMetadata.agentUI.hermesRuntimeIncluded, true);
+
+  assert.equal(connectorConfig.mac.identity, '-');
+  assert.equal(standaloneConfig.mac.identity, '-');
+  assert.equal(connectorConfig.mac.notarize, false);
+  assert.equal(standaloneConfig.mac.notarize, false);
+  assert.equal(connectorConfig.mac.gatekeeperAssess, false);
+  assert.equal(standaloneConfig.mac.gatekeeperAssess, false);
 
   assert.match(workflow, /macos-15/);
   assert.match(workflow, /branches:\n\s+- deployment/);
-  assert.match(workflow, /RELEASE_VERIFY_MODE: bootstrap/);
+  assert.match(workflow, /RELEASE_VERIFY_SIGNING_MODE: bootstrap/);
+  assert.match(workflow, /RELEASE_VERIFY_APP_MODE: all/);
   assert.match(workflow, /npm run dist:mac/);
   assert.doesNotMatch(workflow, /MACOS_CSC_LINK|APPLE_API_KEY|notarize|staple/);
 });
 
-test('release manifest distinguishes bootstrap from Developer ID verification', () => {
+test('release manifest records app mode and enforces Hermes runtime inclusion', () => {
   const manifest = read('scripts/release-manifest.js');
   const envCheck = read('scripts/assert-mac-release-env.js');
 
-  assert.match(manifest, /RELEASE_VERIFY_MODE/);
+  assert.match(manifest, /RELEASE_VERIFY_SIGNING_MODE/);
+  assert.match(manifest, /RELEASE_VERIFY_APP_MODE/);
   assert.match(manifest, /not_applicable_bootstrap/);
-  assert.match(manifest, /modeFiles = mode === 'bootstrap'/);
+  assert.match(manifest, /artifactAppMode/);
+  assert.match(manifest, /knownAppFiles/);
   assert.match(manifest, /-bootstrap\\\./);
+  assert.match(manifest, /connector app must not include Contents\/Resources\/hermes-runtime/);
+  assert.match(manifest, /standalone app must include Contents\/Resources\/hermes-runtime/);
+  assert.match(manifest, /hermesRuntimeIncluded/);
+  assert.match(manifest, /baselineRequirement/);
   assert.match(manifest, /app is not ad-hoc signed for bootstrap distribution/);
   assert.match(manifest, /app is not signed with Developer ID Application/);
   assert.match(manifest, /notarizationStatus/);
   assert.match(manifest, /sourceDirty/);
+  assert.match(manifest, /sourcePolicy/);
+  assert.match(manifest, /sourceGitStatus/);
+  assert.match(manifest, /bundledHermesAgentTreeSha256/);
   assert.match(manifest, /gitStatus/);
   assert.match(manifest, /sha256/);
 
+  assert.match(envCheck, /standalone.*uv for bundled Python dependency resolution/s);
   assert.match(envCheck, /bootstrap mac packaging: ad-hoc app signing, no notarization or stapling/);
   assert.match(envCheck, /Developer ID Application signing identity/);
   assert.match(envCheck, /Apple notarization credentials/);
+});
+
+test('standalone Hermes bundler uses local source provenance by default', () => {
+  const bundler = read('scripts/bundle-hermes-runtime.js');
+
+  assert.match(bundler, /HERMES_BUNDLE_SOURCE_POLICY \|\| 'local'/);
+  assert.match(bundler, /HERMES_BUNDLE_REQUIRE_RELEASE/);
+  assert.match(bundler, /Bundling local Hermes source/);
+  assert.match(bundler, /hermesSourceGitStatus/);
+  assert.match(bundler, /bundledHermesAgentTreeSha256/);
+  assert.match(bundler, /action: 'kept-source'/);
+  assert.match(bundler, /action: 'copied-vendored'/);
 });
 
 test('Tart clean-room smoke uses vanilla images and password SSH isolation', () => {
@@ -106,7 +152,7 @@ test('installed app release smoke is a committed repeatable gate', () => {
   assert.match(guiSmoke, /TART_IMAGE must be a Cirrus vanilla image/);
   assert.match(guiSmoke, /tart run --dir="agent-ui-artifacts:\$artifact_dir:ro"/);
   assert.match(guiSmoke, /Open the Tart VM window/);
-  assert.match(readme, /npm run smoke:installed-release -- \/Applications\/agent-UI\.app/);
+  assert.match(readme, /npm run smoke:installed-release -- "\/Applications\/agent-UI Standalone\.app"/);
   assert.match(evidenceTemplate, /Installed-App Automation/);
   assert.match(evidenceTemplate, /Ring 3 - Manual Customer Pass/);
 });

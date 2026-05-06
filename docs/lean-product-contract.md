@@ -8,7 +8,7 @@ Prior planning, repo history, README copy, and existing implementation details a
 
 agent-UI is a thin desktop UI wrapper for Hermes.
 
-The user can create an AI agent session from any application, on any monitor, while staying in their current workflow. agent-UI captures the user's task and lightweight screen context, starts Hermes through a CLI call, then shows progress and completion through desktop pets.
+The user can create an AI agent session from any application, on any monitor, while staying in their current workflow. agent-UI captures the user's task and lightweight screen context, sends it to Hermes through the `local_desktop` gateway, then shows progress and completion through desktop pets.
 
 Hermes owns agent reasoning, tool use, computer use, terminal access, orchestration, permissions inside the agent runtime, and final work execution. agent-UI owns only the user-facing launch, status, notification, and review surfaces.
 
@@ -88,29 +88,18 @@ metadata is observational only; user_message is the user instruction
 
 Context capture failure must never block session creation.
 
-## Hermes CLI Contract
+## Hermes Gateway Contract
 
-agent-UI starts Hermes through a CLI call.
+agent-UI sends tasks to Hermes through the `local_desktop` gateway only. Hermes owns execution, session state, reasoning, tool use, provider auth, and model selection. agent-UI posts user text to `/messages`, reads `/events`, and renders returned gateway events.
 
-Default runtime target:
+Release modes:
 
-```bash
-/Users/saminkhan1/Documents/jarvis/script/aura-hermes
-```
+- `connector`: small app for users with an existing local Hermes runtime. It remembers the detected Hermes binary path as non-secret config, revalidates it on launch, uses the default local Hermes profile for beta, installs/enables `local_desktop` only through `hermes plugins install <repo> --enable` after explicit permission, and does not bundle Hermes runtime resources.
+- `standalone`: app-owned Hermes runtime. It ships with `local_desktop`, stores `LOCAL_DESKTOP_GATEWAY_KEY` in the app-owned Hermes `.env`, reads that key at runtime only, and starts/restarts the bundled gateway behind the scenes.
 
-Environment override:
+Both modes share the same text launcher, voice launcher, pet/status stack, detail window, follow-up, cancel, auth/model flow, and gateway event handling.
 
-```bash
-AGENT_UI_HERMES_BIN=/path/to/aura-hermes
-```
-
-The CLI call must follow the AURA-compatible tagged prompt shape:
-
-```bash
-script/aura-hermes chat --quiet --yolo --source agent-ui --query '<tagged prompt>'
-```
-
-Tagged prompt shape:
+Tagged first-message shape:
 
 ```xml
 <user_message source="agent-ui">USER TASK, XML ESCAPED</user_message>
@@ -150,39 +139,37 @@ Tagged prompt shape:
 
 The user message must be XML-escaped. Metadata JSON must be safe inside the XML-like tag and must not allow tag-breaking content.
 
-Hermes is assumed to be available and to provide resumable session metadata. Follow-up messages must preserve the Hermes session id and resume through Hermes. agent-UI must not reimplement Hermes memory, planning, or tool selection.
+Follow-ups must reuse the same gateway `conversation_id`. agent-UI must not reimplement Hermes memory, planning, or tool selection.
 
 Hermes output handling:
 
-- Treat `chat --quiet --query` as a final-response turn interface. agent-UI may append stdout chunks as they arrive, but the product must not require live token streaming because the AURA wrapper can buffer quiet output until Hermes exits.
-- Treat stdout as the visible Hermes response.
-- Treat stderr as diagnostics plus session metadata. Persist it for artifacts/debugging, but do not render stderr as assistant output except when explaining a failed run.
-- Parse and store `session_id:` or `Session:` from Hermes output. Prefer stderr, with stdout as fallback.
-- For follow-ups, call Hermes with `--resume <session_id>`.
-- Do not replace this flow with `hermes -z` while agent-UI needs resumable sessions. `hermes -z` is cleaner for scripts, but it intentionally omits session metadata.
-- Current Hermes source/docs do not define an `agent-ui` status-event protocol for `chat --quiet --query`; do not add parser aliases for undocumented status lines.
+- Treat `/events` as the visible output stream.
+- Render documented `message.*`, `attachment.created`, and `typing.*` gateway events.
+- Persist only the last SSE sequence for replay. Do not store gateway keys in agent-UI config.
+- Do not add CLI-spawn fallback or legacy local execution mode.
+- Do not run provider/model readiness preflight. The user starts a task first; if Hermes reports provider/model auth is required, open the thin auth/model flow and preserve the pending task.
 
 Hermes transcript boundary:
 
 - Hermes internally stores richer categorized session data, including message role, content, tool call id, tool calls, tool name, timestamp, token counts, finish reason, reasoning fields, and Codex response replay fields.
 - Those categories are Hermes-owned transcript metadata. agent-UI must not read Hermes SQLite, Hermes JSONL exports, Hermes MCP session APIs, or Hermes transcript files to reconstruct a categorized transcript.
-- agent-UI's local detail model should stay limited to user task/follow-up text, visible Hermes stdout, failure detail, run status, duration, artifacts, launch context, and Hermes session id.
+- agent-UI's local detail model should stay limited to user task/follow-up text, visible Hermes events, failure detail, run status, duration, artifacts, launch context, and gateway conversation id.
 - Do not surface Hermes tool calls, tool results, reasoning, token accounting, raw message roles, session search, or transcript export/import in the pet or detail UI.
 - If a future Hermes integration exposes explicit structured events to agent-UI, this contract must be changed before agent-UI renders new event categories.
 
 Status derivation:
 
-- `running`: Hermes child process is alive.
-- `completed` / review: Hermes exits with code `0`.
-- `error` / failed: Hermes fails to launch or exits nonzero.
-- `cancelled` / failed: user or app terminates the Hermes child process.
+- `running`: Hermes gateway reports active typing or the submitted conversation has not reached a terminal gateway event.
+- `completed` / review: Hermes gateway reports successful completion.
+- `error` / failed: Hermes gateway reports failure or gateway transport/setup fails.
+- `cancelled` / failed: user sends cancel and Hermes reports cancellation or failure.
 - `needs-input`: reserved for a future documented Hermes machine-readable waiting signal. Do not infer needs-input by parsing assistant prose, stderr text, or phrases such as "I need input".
 
 Failure handling:
 
-- Follow the Hermes/process failure result. agent-UI must show the session as failed when Hermes exits nonzero or is cancelled.
-- Preserve and show any visible Hermes stdout in the detail window.
-- Show stderr, launch errors, or exit information as failure detail, not as assistant output.
+- Follow the Hermes/gateway failure result. agent-UI must show the session as failed when Hermes reports failure, gateway setup fails, or cancel fails.
+- Preserve and show any visible Hermes events in the detail window.
+- Show gateway transport, setup, plugin install, restart, or auth/model errors as failure detail, not as assistant output.
 - Do not add retry orchestration, recovery wizards, diagnostics dashboards, alternate runtimes, or Hermes troubleshooting flows to agent-UI.
 - The failed state is a lean output surface for Hermes failure, not a separate product workflow.
 
@@ -274,7 +261,7 @@ This prompt is intentionally harmless and bounded. It checks the real UI path, r
 Default command:
 
 ```bash
-AGENT_UI_HERMES_BIN=/Users/saminkhan1/Documents/jarvis/script/aura-hermes npm run dev
+AGENT_UI_HERMES_BIN=/Users/saminkhan1/Documents/hermes/script/aura-hermes npm run dev
 ```
 
 User-path check:
@@ -313,7 +300,7 @@ Reply exactly: AGENT_UI_FOLLOWUP_OK.
 Evidence check:
 
 ```bash
-AGENT_UI_EVAL=1 AGENT_UI_EVAL_RUN_ID=manual-real-hermes AGENT_UI_HERMES_BIN=/Users/saminkhan1/Documents/jarvis/script/aura-hermes npm run dev
+AGENT_UI_EVAL=1 AGENT_UI_EVAL_RUN_ID=manual-real-hermes AGENT_UI_HERMES_BIN=/Users/saminkhan1/Documents/hermes/script/aura-hermes npm run dev
 ```
 
 After submitting the same prompt, inspect the generated `prompt.txt` under `.agent-ui-eval/runs/manual-real-hermes/`. It must contain:
@@ -363,8 +350,8 @@ Technical acceptance:
 - `modal.js` no longer validates any folder state.
 - `startCatRunFromPayload` accepts a folderless payload.
 - Trigger-time context is captured before `openNewCatModal`.
-- Hermes args use `chat --quiet --yolo --source agent-ui --query`.
-- Follow-up Hermes args include `--resume <session_id>`.
+- First prompt posts to Hermes `local_desktop` `/messages`.
+- Follow-up posts to the same gateway `conversation_id`.
 - Tagged prompt contains `<user_message source="agent-ui">`.
 - Tagged prompt contains `<aura_meta type="context_snapshot" version="1">` when context is available.
 - Inline pet reply is unavailable until Hermes documents a machine-readable needs-input status.
@@ -374,7 +361,7 @@ Technical acceptance:
 
 E2E acceptance:
 
-- Run against real Jarvis/Hermes.
+- Run against real Hermes.
 - No Hermes stub is used.
 - The E2E path uses the same trigger and submit flow a user uses.
 - The prompt result includes `AGENT_UI_E2E_OK`.

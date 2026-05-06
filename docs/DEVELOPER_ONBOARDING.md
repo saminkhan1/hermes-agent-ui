@@ -4,9 +4,9 @@ This guide gets a new contributor from a fresh clone to a verified local develop
 
 ## What This App Is
 
-agent-UI is a thin macOS desktop launcher and status surface for Hermes. It captures local desktop context, starts text or voice input, and sends work to Hermes through the bundled `local_desktop` gateway path.
+agent-UI is a thin macOS desktop launcher and status surface for Hermes. It captures local desktop context, starts text or voice input, and sends work to Hermes through the `local_desktop` gateway path.
 
-The release app is expected to carry its own Hermes runtime. A customer install must not require Node, npm, `uv`, Homebrew, Xcode Command Line Tools, `/usr/bin/python3`, an existing Hermes install, or a local Jarvis checkout.
+There are two release apps: `agent-UI for Hermes` connects to an existing local Hermes runtime, and `agent-UI Standalone` carries its own Hermes runtime. A standalone customer install must not require Node, npm, `uv`, Homebrew, Xcode Command Line Tools, `/usr/bin/python3`, an existing Hermes install, or a local Hermes checkout.
 
 ## Prerequisites
 
@@ -16,10 +16,10 @@ Required for normal development:
 - Git
 - Node.js and npm
 
-Required for packaging:
+Required for standalone packaging:
 
 - `uv` for build-time Python dependency resolution
-- a Hermes checkout or release source pinned to `v2026.4.30`
+- a local Hermes checkout; by default the packaging script bundles `/Users/saminkhan1/Documents/hermes/hermes-agent`, including local tools and code modifications, and records its provenance in `build/hermes-runtime/MANIFEST.json`
 
 Required for Ring 2 VM verification:
 
@@ -79,10 +79,10 @@ Default packaging command:
 npm run dist:mac
 ```
 
-This builds the bootstrap no-paid-plan release path:
+This builds the bootstrap no-paid-plan release path for both app modes:
 
-- DMG
-- zip
+- connector DMG and zip
+- standalone DMG and zip
 - ad-hoc signed app
 - no notarization
 - no stapling
@@ -95,19 +95,27 @@ If your Hermes checkout is not at the default local path, set it explicitly:
 HERMES_BUNDLE_SOURCE=/path/to/hermes-agent npm run dist:mac
 ```
 
+The default local source path is:
+
+```text
+/Users/saminkhan1/Documents/hermes/hermes-agent
+```
+
 After packaging:
 
 ```bash
 npm run release:verify
 ```
 
-This writes `dist/release-manifest.json` with app SHA, Hermes SHA, Python runtime details, signing mode, notarization mode, artifact hashes, and verification failures.
+This writes `dist/release-manifest.json` with app mode, app SHA, connector Hermes baseline or standalone bundled Hermes provenance, runtime-inclusion status, signing mode, notarization mode, artifact hashes, and verification failures. Standalone provenance includes the source path, source policy, git SHA, dirty state, dirty file list, and bundled tree hash.
 
 ## Runtime State
 
 Important local files:
 
-- `~/.agent-ui/local-desktop-gateway.env`: agent-UI generated local gateway secret, host, and port.
+- `~/.agent-ui/hermes-home/.env`: standalone app-owned Hermes env, including `LOCAL_DESKTOP_GATEWAY_KEY`, host, and port.
+- `~/Documents/hermes/hermes-home/.env`: default connector Hermes env for beta.
+- `~/.agent-ui/connector-runtime.json`: connector-only remembered Hermes binary path, not secret material.
 - `~/.agent-ui/hermes-gateway.json`: last gateway sequence used for reconnect/replay.
 - Hermes provider config/auth: owned by Hermes, not by agent-UI.
 
@@ -120,18 +128,20 @@ export AGENT_UI_HERMES_GATEWAY_KEY="<gateway secret>"
 export AGENT_UI_HERMES_GATEWAY_AUTOSTART=0
 ```
 
-`AGENT_UI_HERMES_BIN` is a development escape hatch. Packaged app release behavior must resolve Hermes from:
+`AGENT_UI_HERMES_BIN` is a development escape hatch. Standalone packaged app release behavior must resolve Hermes from:
 
 ```text
-agent-UI.app/Contents/Resources/hermes-runtime/bin/hermes
+agent-UI Standalone.app/Contents/Resources/hermes-runtime/bin/hermes
 ```
+
+Connector packaged app release behavior resolves the remembered or detected local Hermes binary, validates it on launch, and falls back to reconnect setup when the remembered path is invalid.
 
 ## Gateway And Provider Auth
 
 Keep these layers separate:
 
 - Gateway transport: local loopback HTTP/SSE, `LOCAL_DESKTOP_GATEWAY_KEY`, host, and port.
-- Hermes runtime: bundled Hermes executable and Python runtime.
+- Hermes runtime: bundled Hermes executable and Python runtime for standalone; detected local Hermes binary/profile for connector.
 - Provider auth: Hermes model/provider credentials.
 
 Symptoms:
@@ -157,4 +167,5 @@ A healthy gateway does not prove provider auth is configured.
 
 - [Contributing](../CONTRIBUTING.md)
 - [Testing And Verification](TESTING_AND_VERIFICATION.md)
+- [Private Bootstrap Release](release/PRIVATE_BOOTSTRAP_RELEASE.md)
 - [Manual Customer Pass](release/MANUAL_CUSTOMER_PASS.md)

@@ -13,21 +13,22 @@ It captures lightweight app/window/display context when the global shortcut fire
 - New contributors: [Developer Onboarding](docs/DEVELOPER_ONBOARDING.md)
 - Contribution workflow: [Contributing](CONTRIBUTING.md)
 - Test and release gates: [Testing And Verification](docs/TESTING_AND_VERIFICATION.md)
+- Private bootstrap release: [Private Bootstrap Release](docs/release/PRIVATE_BOOTSTRAP_RELEASE.md)
 - Manual customer release pass: [Manual Customer Pass](docs/release/MANUAL_CUSTOMER_PASS.md)
 - Release evidence notes: [Release Evidence Template](docs/release/evidence-template.md)
 
 ## Manual Testing Goal
 
-For manual testers, ship a single macOS app bundle/zip that contains:
+For manual testers, ship two macOS app variants with the same launcher, voice, pet stack, detail, follow-up, cancel, and thin Hermes auth/model flow:
 
-- the Electron UI gateway (`agent-UI.app`);
-- Hermes Agent core pinned to `v2026.4.30` plus the app-owned `local_desktop` platform overlay under the app resources;
-- a self-contained Python 3.11+ Hermes runtime with local desktop gateway, messaging, and voice dependencies already resolved;
-- automatic local gateway secret creation in `~/.agent-ui/local-desktop-gateway.env`;
-- automatic Hermes Gateway startup on first prompt;
-- separate text and voice input modes, follow-ups, and transcript review before submission.
+- `agent-UI for Hermes`: a small connector for users who already have a local Hermes runtime.
+- `agent-UI Standalone`: an app-owned Hermes runtime for users who do not know Hermes.
 
-The packaged app should not require gateway setup after install. Model/provider login still belongs to Hermes; if the tester has not configured a Hermes provider yet, Hermes will surface that setup/login error through the conversation details.
+Both variants post prompts to Hermes `local_desktop` `/messages` and read `/events`. agent-UI does not store LLM/provider credentials, does not keep gateway keys in its own config, and does not run a provider-auth preflight. The user starts a task first; if Hermes reports provider/model setup is required, agent-UI opens the thin Hermes auth/model flow and preserves the pending task.
+
+The standalone package includes the local Hermes Agent checkout at `/Users/saminkhan1/Documents/hermes/hermes-agent` by default, preserving local tools and code modifications. If that checkout already contains `plugins/platforms/local_desktop`, the build keeps the local copy; otherwise it overlays the app-owned `vendor/hermes-platforms/local_desktop` plugin. The package also includes a self-contained Python 3.11+ runtime with local desktop gateway, messaging, and voice dependencies already resolved. Its app-owned Hermes `.env` stores `LOCAL_DESKTOP_GATEWAY_KEY`, and the app reads it at runtime.
+
+The connector package omits Hermes runtime resources and bundled plugin copies. It resolves and remembers the local Hermes binary path as non-secret config, revalidates it on launch, uses the default local Hermes profile for beta, and installs/enables `local_desktop` only through `hermes plugins install saminkhan1/agent-ui-local-desktop-plugin --enable` after explicit permission.
 
 ## Requirements
 
@@ -36,7 +37,7 @@ For developers building the distributable:
 - Node.js and npm
 - macOS for the mac app build
 - `uv` for build-time Python dependency resolution
-- a Hermes Agent checkout at `v2026.4.30`; by default the build script uses `/Users/saminkhan1/Documents/jarvis/.aura/hermes-agent`
+- a local Hermes Agent checkout; by default the build script uses `/Users/saminkhan1/Documents/hermes/hermes-agent` and records its git SHA, dirty state, and bundled tree hash in the runtime manifest
 
 Developer ID Application signing credentials and Apple notarization credentials are optional for the future public distribution track. The default bootstrapped track does not require a paid Apple Developer plan.
 
@@ -55,7 +56,7 @@ npm install
 npm run dist:mac
 ```
 
-`npm run dist:mac` is the bootstrapped packaging command. It emits DMG + zip artifacts with an ad-hoc signed app, no Apple notarization, and no stapling. This is the no-paid-plan path for direct testers; macOS may require the tester to use Finder's right-click Open approval on first launch.
+`npm run dist:mac` is the bootstrapped two-app packaging command. It emits connector and standalone DMG + zip artifacts with ad-hoc signed apps, no Apple notarization, and no stapling. This is the no-paid-plan path for direct testers; macOS may require the tester to use Finder's right-click Open approval on first launch.
 
 The future Developer ID path remains available when paid signing and notarization credentials exist:
 
@@ -67,8 +68,10 @@ npm run release:verify:developer-id
 The bootstrap artifacts are written to `dist/`, for example:
 
 ```text
-dist/agent-UI-1.0.0-mac-arm64-bootstrap.dmg
-dist/agent-UI-1.0.0-mac-arm64-bootstrap.zip
+dist/agent-UI-for-Hermes-1.0.0-mac-arm64-bootstrap.dmg
+dist/agent-UI-for-Hermes-1.0.0-mac-arm64-bootstrap.zip
+dist/agent-UI-Standalone-1.0.0-mac-arm64-bootstrap.dmg
+dist/agent-UI-Standalone-1.0.0-mac-arm64-bootstrap.zip
 dist/release-manifest.json
 ```
 
@@ -78,14 +81,22 @@ To bundle a different Hermes checkout:
 HERMES_BUNDLE_SOURCE=/path/to/hermes-agent npm run dist:mac
 ```
 
-`npm run dist:mac` performs three steps:
+The default standalone build intentionally accepts local Hermes modifications. To force the older clean upstream-release policy for a reproducible baseline build, use:
 
-1. copies the exact pinned Hermes release into `build/hermes-runtime` without `.git`, source venvs, caches, sessions, or logs;
-2. overlays the vendored app-owned `vendor/hermes-platforms/local_desktop` plugin into `plugins/platforms/local_desktop` and records its SHA-256 in the runtime manifest;
+```bash
+HERMES_BUNDLE_SOURCE_POLICY=release npm run dist:mac:standalone:bootstrap
+```
+
+The standalone packaging path performs these steps:
+
+1. copies the selected local Hermes checkout into `build/hermes-runtime` without `.git`, source venvs, caches, build outputs, sessions, or logs;
+2. keeps `plugins/platforms/local_desktop` from the local Hermes checkout when present, otherwise overlays the vendored app-owned `vendor/hermes-platforms/local_desktop` plugin, and records the action plus SHA-256 in the runtime manifest;
 3. creates a bundled `build/hermes-runtime/python` runtime and preinstalls the lean `[voice,messaging]` dependencies needed by local desktop gateway and voice input;
 4. builds the Electron main/preload/renderer output;
-5. packages `agent-UI.app` with `build/hermes-runtime` as app resources;
+5. packages `agent-UI Standalone.app` with `build/hermes-runtime` as app resources;
 6. ad-hoc signs the bootstrap app and emits DMG + zip artifacts. `dist:mac:developer-id` instead uses Developer ID signing, hardened runtime, notarization, and stapling checks.
+
+The connector packaging path builds the same Electron output as `agent-UI for Hermes.app`, omits `build/hermes-runtime`, and records `v2026.4.30+` as the required local Hermes baseline.
 
 The bundled Hermes launcher does not create user venvs, call `uv`, call `/usr/bin/python3`, or install packages at customer runtime. If the bundled runtime is missing or damaged, it exits with an explicit rebuild error.
 
@@ -93,16 +104,18 @@ The bundled Hermes launcher does not create user venvs, call `uv`, call `/usr/bi
 
 agent-UI uses the Hermes local desktop gateway. It does not spawn `hermes chat` or keep a local copy of conversation history.
 
-On app startup/use, agent-UI:
+In standalone mode, agent-UI:
 
-1. creates `~/.agent-ui/local-desktop-gateway.env` if needed;
+1. creates the app-owned Hermes `.env` under `~/.agent-ui/hermes-home/.env` if needed;
 2. enables `platforms.local_desktop` in the active Hermes `config.yaml`;
-3. reads `LOCAL_DESKTOP_GATEWAY_KEY`, host, and port from that env file;
+3. reads `LOCAL_DESKTOP_GATEWAY_KEY`, host, and port from that Hermes `.env` file;
 4. checks unauthenticated `GET /health` plus a side-effect-free authenticated `POST /messages` schema probe on the local gateway;
 5. starts `hermes gateway run --replace` if the gateway is not already running with agent-UI's key, and waits through Hermes' replacement window so quit/reopen can recover from a stale gateway lock or surviving child process;
 6. connects to `/events` and posts prompts to `/messages`.
 
-If the default local port is occupied by another process or by a Hermes gateway using a different key, agent-UI automatically moves its bundled gateway to the next available loopback port and rewrites `~/.agent-ui/local-desktop-gateway.env`.
+If the default local port is occupied by another process or by a Hermes gateway using a different key, standalone mode automatically moves its bundled gateway to the next available loopback port and rewrites the app-owned Hermes `.env`.
+
+In connector mode, agent-UI reads the default local Hermes profile, remembers the detected Hermes binary path in `~/.agent-ui/connector-runtime.json`, and revalidates it on launch. It may write only the required Hermes `config.yaml` and `.env` settings for the local desktop gateway. If the gateway needs a restart, connector mode reports the exact restart command instead of silently replacing the user's local Hermes process.
 
 `GET /health` is unauthenticated. `POST /messages` and `GET /events` require `Authorization: Bearer <LOCAL_DESKTOP_GATEWAY_KEY>`.
 
@@ -115,7 +128,7 @@ export AGENT_UI_HERMES_GATEWAY_KEY="<gateway secret>"
 export AGENT_UI_HERMES_GATEWAY_AUTOSTART=0
 ```
 
-`AGENT_UI_HERMES_BIN` remains a developer escape hatch, but normal packaged app startup resolves the Hermes launcher from `agent-UI.app/Contents/Resources/hermes-runtime/bin/hermes`. It does not search `PATH`, Homebrew, an existing Hermes install, or `~/Documents/jarvis`.
+`AGENT_UI_HERMES_BIN` remains a developer escape hatch. Standalone packaged app startup resolves Hermes from `agent-UI Standalone.app/Contents/Resources/hermes-runtime/bin/hermes`. Connector packaged app startup resolves the remembered or detected local Hermes binary. Neither path searches shell `PATH`.
 
 Gateway mode behavior:
 
@@ -171,8 +184,8 @@ If the built app is missing, run `npm run build` from the repo root.
 
 ## Manual Test Checklist
 
-1. Mount `dist/agent-UI-*-bootstrap.dmg`.
-2. Drag `agent-UI.app` to `/Applications`.
+1. Mount the connector or standalone bootstrap DMG.
+2. Drag the app to `/Applications`.
 3. Launch from Finder, using right-click Open for the bootstrap Gatekeeper approval if macOS requires it.
 4. Confirm the app starts without requiring a terminal.
 5. In the app or tray menu, choose `Settings > Input Mode > Text`.
@@ -196,14 +209,14 @@ Known first-run cases to check:
 Use the four-ring release workflow for user-downloadable macOS artifacts:
 
 1. Ring 0, local fast checks: `npm test` and `npm run build`. No VMs.
-2. Ring 1, GitHub Actions build gate: `.github/workflows/mac-release.yml` runs on pinned `macos-15`, checks out Hermes `v2026.4.30`, builds bootstrap DMG + zip artifacts, verifies the ad-hoc signed app plus artifact hashes, and uploads artifacts. GitHub runners are only a build gate, not clean-install proof.
-3. Ring 2, Tart clean-room gate: run `scripts/tart-clean-room-smoke.sh dist/<artifact>` against a Cirrus `*-vanilla` image, for example `ghcr.io/cirruslabs/macos-sequoia-vanilla:latest`. The script refuses `base` images, installs the artifact into `/Applications`, poisons `PATH` and fake Jarvis locations, verifies the bundled Hermes runtime, starts the local gateway on `127.0.0.1:8766`, and launches the app.
+2. Ring 1, GitHub Actions build gate: `.github/workflows/mac-release.yml` runs on pinned `macos-15`, builds connector and standalone bootstrap DMG + zip artifacts from the configured Hermes source, verifies app-mode manifests plus artifact hashes, and uploads artifacts. GitHub runners are only a build gate, not clean-install proof.
+3. Ring 2, Tart clean-room gate: run `scripts/tart-clean-room-smoke.sh dist/<standalone-artifact>` against a Cirrus `*-vanilla` image, for example `ghcr.io/cirruslabs/macos-sequoia-vanilla:latest`. The script refuses `base` images, installs the standalone artifact into `/Applications`, poisons `PATH` and fake local-checkout locations, verifies the bundled Hermes runtime, starts the local gateway on `127.0.0.1:8766`, and launches the app.
 4. Ring 3, manual customer pass: mount the DMG, drag to `/Applications`, launch from Finder, approve the bootstrap Gatekeeper prompt with right-click Open if needed, confirm TCC microphone prompts, tray/menu behavior, text/voice sessions, follow-up, cancel, background mode, quit/reopen, and clear first-run errors for missing credentials, offline mode, port conflicts, and denied permissions.
 
 After installing a release candidate into `/Applications`, run the installed-app automation before the human Ring 3 pass:
 
 ```bash
-npm run smoke:installed-release -- /Applications/agent-UI.app
+npm run smoke:installed-release -- "/Applications/agent-UI Standalone.app"
 ```
 
 The smoke launches the installed app in eval mode with isolated config/Hermes home directories, blocks the default gateway port to exercise port-conflict recovery, drives background mode, follow-up, cancel, conversation-window, and quit/reopen checks, then writes JSON evidence to `/private/tmp/agent-ui-installed-release-smoke-*`.
@@ -214,9 +227,11 @@ After Ring 1 packaging, run:
 npm run release:verify
 ```
 
-This writes `dist/release-manifest.json` with app version, git SHA, app source dirty status, Hermes release/tag/SHA, bundled Python version, signing identity, notarization status, and SHA-256 hashes for every DMG/zip artifact. In bootstrap mode, `notarizationStatus` is recorded as `not_applicable_bootstrap`; `spctl` and stapler results are still captured as evidence but are not required to pass.
+This writes `dist/release-manifest.json` with app mode, app version, git SHA, app source dirty status, connector Hermes baseline or standalone bundled Hermes provenance, whether Hermes runtime is included, signing identity, notarization status, and SHA-256 hashes for every DMG/zip artifact. For standalone, provenance includes the Hermes source path, source policy, git SHA, release-tag SHA when available, dirty state, dirty file list, and bundled tree hash. In bootstrap signing mode, `notarizationStatus` is recorded as `not_applicable_bootstrap`; `spctl` and stapler results are still captured as evidence but are not required to pass.
 
 For the full command-by-command release verification path, see [Testing And Verification](docs/TESTING_AND_VERIFICATION.md).
+
+For the no-paid-Apple-Developer-account release path, use [Private Bootstrap Release](docs/release/PRIVATE_BOOTSTRAP_RELEASE.md). The customer-facing download link should be the GitHub Release page, not a GitHub Actions artifact link.
 
 ## Verify
 

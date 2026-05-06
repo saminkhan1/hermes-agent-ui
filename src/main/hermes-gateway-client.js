@@ -1,29 +1,16 @@
 'use strict';
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { randomUUID } = require('crypto');
+const {
+  defaultGatewayEnvPathForMode,
+  getAgentUIConfigDir,
+  realUserHomeDir,
+} = require('./hermes-release');
 
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-}
-
-function realUserHomeDir() {
-  try {
-    const userHome = os.userInfo().homedir;
-    if (userHome) return userHome;
-  } catch {
-    // Fall through to Node's HOME-aware default.
-  }
-  return os.homedir();
-}
-
-function getAgentUIConfigDir() {
-  const configured = String(process.env.AGENT_UI_CONFIG_DIR || '').trim();
-  const dir = configured ? path.resolve(configured) : path.join(realUserHomeDir(), '.agent-ui');
-  ensureDir(dir);
-  return dir;
 }
 
 function defaultStatePath() {
@@ -31,7 +18,7 @@ function defaultStatePath() {
 }
 
 function defaultGatewayEnvPath() {
-  return path.join(getAgentUIConfigDir(), 'local-desktop-gateway.env');
+  return defaultGatewayEnvPathForMode();
 }
 
 function unquoteEnvValue(value) {
@@ -219,7 +206,7 @@ class HermesGatewayClient {
   }
 
   authHeaders(extra = {}) {
-    if (!this.key) throw new Error('Missing LOCAL_DESKTOP_GATEWAY_KEY for Hermes gateway. Set LOCAL_DESKTOP_GATEWAY_KEY, AGENT_UI_HERMES_GATEWAY_KEY, or create ~/.agent-ui/local-desktop-gateway.env.');
+    if (!this.key) throw new Error('Missing LOCAL_DESKTOP_GATEWAY_KEY for Hermes gateway. Set LOCAL_DESKTOP_GATEWAY_KEY, AGENT_UI_HERMES_GATEWAY_KEY, or create the active Hermes .env file.');
     return {
       ...extra,
       authorization: `Bearer ${this.key}`,
@@ -286,7 +273,7 @@ class HermesGatewayClient {
   }
 
   start() {
-    if (!this.key) throw new Error('Missing LOCAL_DESKTOP_GATEWAY_KEY for Hermes gateway. Set LOCAL_DESKTOP_GATEWAY_KEY, AGENT_UI_HERMES_GATEWAY_KEY, or create ~/.agent-ui/local-desktop-gateway.env.');
+    if (!this.key) throw new Error('Missing LOCAL_DESKTOP_GATEWAY_KEY for Hermes gateway. Set LOCAL_DESKTOP_GATEWAY_KEY, AGENT_UI_HERMES_GATEWAY_KEY, or create the active Hermes .env file.');
     if (this.running) return;
     this.running = true;
     this.streamPromise = this.streamLoop();

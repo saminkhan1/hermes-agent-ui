@@ -21,6 +21,7 @@ function emptySseResponse() {
 function setupGatewayEnv(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-agents-'));
   process.env.AGENT_UI_CONFIG_DIR = dir;
+  process.env.AGENT_UI_HERMES_HOME = path.join(dir, 'hermes-home');
   process.env.LOCAL_DESKTOP_GATEWAY_KEY = 'secret';
   t.after(() => {
     agents.cancelAllAgents();
@@ -378,6 +379,7 @@ test('conversation window does not disable web security', () => {
 test('electron build copies gateway client into main output', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'electron.vite.config.mjs'), 'utf8');
   assert.match(source, /hermes-gateway-client\.js/);
+  assert.match(source, /hermes-release\.js/);
   assert.match(source, /hermes-attachments\.js/);
   assert.match(source, /hermes-auth\.js/);
   assert.match(source, /window-lifecycle\.js/);

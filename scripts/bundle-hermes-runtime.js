@@ -23,10 +23,17 @@ const pythonRoot = path.join(outRoot, 'python');
 const hermesReleaseTag = 'v2026.4.30';
 const hermesReleaseUrl = 'https://github.com/NousResearch/hermes-agent/releases/tag/v2026.4.30';
 const platformOverlayRoot = path.join(repoRoot, 'vendor', 'hermes-platforms');
+const defaultHermesSource = path.join(realUserHomeDir(), 'Documents', 'hermes', 'hermes-agent');
 const source = path.resolve(
   process.env.HERMES_BUNDLE_SOURCE ||
-  path.join(realUserHomeDir(), 'Documents', 'jarvis', '.aura', 'hermes-agent')
+  defaultHermesSource
 );
+const hermesSourcePolicy = String(process.env.HERMES_BUNDLE_SOURCE_POLICY || 'local').trim().toLowerCase();
+if (!['local', 'release'].includes(hermesSourcePolicy)) {
+  throw new Error(`HERMES_BUNDLE_SOURCE_POLICY must be local or release, got ${hermesSourcePolicy}`);
+}
+const requireReleaseSource = hermesSourcePolicy === 'release' ||
+  String(process.env.HERMES_BUNDLE_REQUIRE_RELEASE || '').trim() === '1';
 
 const ignoredNames = new Set([
   '.git',
@@ -41,6 +48,8 @@ const ignoredNames = new Set([
   'sessions',
   'logs',
   'cache',
+  'build',
+  'dist',
 ]);
 
 const pythonCopyIgnoredNames = new Set([
@@ -139,15 +148,34 @@ function vendoredPlatformOverlays() {
 
 function copyVendoredPlatformOverlays(hermesRoot) {
   const overlays = vendoredPlatformOverlays();
+  const copied = [];
   for (const overlay of overlays) {
     const dst = path.join(hermesRoot, 'plugins', 'platforms', overlay.name);
     if (fs.existsSync(dst)) {
-      throw new Error(`Hermes release already contains plugins/platforms/${overlay.name}; remove the app-owned overlay before updating the pinned release.`);
+      const manifest = path.join(dst, 'plugin.yaml');
+      const init = path.join(dst, '__init__.py');
+      if (!fs.existsSync(manifest) || !fs.existsSync(init)) {
+        throw new Error(`Hermes source already contains plugins/platforms/${overlay.name}, but it is missing plugin.yaml or __init__.py.`);
+      }
+      copied.push({
+        name: overlay.name,
+        source: 'hermes-source',
+        sourcePath: path.relative(outRoot, dst),
+        target: path.relative(outRoot, dst),
+        sha256: treeSha256(dst),
+        vendoredSha256: overlay.sha256,
+        action: 'kept-source',
+      });
+      continue;
     }
     copyTree(overlay.source, dst);
-    overlay.target = path.relative(outRoot, dst);
+    copied.push({
+      ...overlay,
+      target: path.relative(outRoot, dst),
+      action: 'copied-vendored',
+    });
   }
-  return overlays;
+  return copied;
 }
 
 function gitHead(dir) {
@@ -164,20 +192,29 @@ function verifyHermesSource(dir) {
   const head = gitHead(dir);
   const releaseHead = gitOutput(dir, ['rev-parse', `${hermesReleaseTag}^{commit}`]);
   const dirty = gitOutput(dir, ['status', '--porcelain']);
-  const allowNonRelease = String(process.env.HERMES_BUNDLE_ALLOW_NON_RELEASE || '').trim() === '1';
-  if (head === 'unknown' || !releaseHead) {
-    throw new Error(`Hermes source must be a git checkout with ${hermesReleaseTag}: ${dir}`);
+  if (head === 'unknown') {
+    throw new Error(`Hermes source must be a git checkout: ${dir}`);
   }
-  if (!allowNonRelease && head !== releaseHead) {
+  if (requireReleaseSource && !releaseHead) {
+    throw new Error(`Hermes source must contain release tag ${hermesReleaseTag}: ${dir}`);
+  }
+  if (requireReleaseSource && head !== releaseHead) {
     throw new Error(`Hermes source must be checked out at ${hermesReleaseTag} (${releaseHead}); got ${head}. Set HERMES_BUNDLE_SOURCE to a clean release checkout.`);
   }
-  if (!allowNonRelease && dirty) {
+  if (requireReleaseSource && dirty) {
     throw new Error(`Hermes source must be clean for release bundling:\n${dirty}`);
   }
-  if (allowNonRelease) {
-    console.warn(`[agent-ui] WARNING: bundling non-release or dirty Hermes source from ${dir}`);
+  if (!requireReleaseSource && (dirty || (releaseHead && head !== releaseHead) || !releaseHead)) {
+    console.warn(`[agent-ui] Bundling local Hermes source from ${dir}; provenance will be recorded in MANIFEST.json.`);
   }
-  return { head, releaseHead, dirty: !!dirty };
+  return {
+    head,
+    releaseHead: releaseHead || 'unknown',
+    dirty: !!dirty,
+    gitStatus: dirty ? dirty.split('\n').filter(Boolean) : [],
+    sourcePolicy: requireReleaseSource ? 'release' : 'local',
+    isReleaseHead: releaseHead ? head === releaseHead : false,
+  };
 }
 
 function runChecked(command, args, opts = {}) {
@@ -349,7 +386,7 @@ exec "$PY" -m hermes_cli.main "$@"
 
 if (!fs.existsSync(source)) {
   console.error(`[agent-ui] Hermes source not found: ${source}`);
-  console.error('[agent-ui] Set HERMES_BUNDLE_SOURCE=/path/to/hermes-agent or install the local AURA checkout.');
+  console.error(`[agent-ui] Set HERMES_BUNDLE_SOURCE=/path/to/hermes-agent or install Hermes at ${defaultHermesSource}.`);
   process.exit(1);
 }
 
@@ -359,16 +396,21 @@ ensureDir(outRoot);
 const hermesRoot = path.join(outRoot, 'hermes-agent');
 copyTree(source, hermesRoot);
 const hermesPlatformOverlays = copyVendoredPlatformOverlays(hermesRoot);
+const bundledHermesAgentTreeSha256 = treeSha256(hermesRoot);
 const embeddedPython = buildEmbeddedPython();
 writeLauncher();
 fs.writeFileSync(path.join(outRoot, 'MANIFEST.json'), JSON.stringify({
   version: require(path.join(repoRoot, 'package.json')).version,
   source,
+  hermesSourcePolicy: hermesSourceState.sourcePolicy,
   hermesReleaseTag,
   hermesReleaseUrl,
   gitHead: hermesSourceState.head,
   hermesReleaseGitHead: hermesSourceState.releaseHead,
   hermesSourceDirty: hermesSourceState.dirty,
+  hermesSourceGitStatus: hermesSourceState.gitStatus,
+  hermesSourceIsReleaseHead: hermesSourceState.isReleaseHead,
+  bundledHermesAgentTreeSha256,
   hermesPlatformOverlays,
   appGitHead: gitHead(repoRoot),
   python: embeddedPython,

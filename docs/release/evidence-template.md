@@ -14,7 +14,8 @@ Reference docs:
 - GitHub Actions run:
 - GitHub Actions URL:
 - Artifact directory:
-- Release mode: bootstrap
+- App mode: connector / standalone / all
+- Signing mode: bootstrap
 - macOS target architecture:
 
 ## Artifacts
@@ -39,10 +40,13 @@ Reference docs:
 - Manifest path:
 - Manifest `package.gitSha`:
 - Manifest `package.sourceDirty`:
+- Manifest `environment.appMode`:
+- Manifest `environment.signingMode`:
+- Connector `hermesRuntimeIncluded`:
+- Standalone `hermesRuntimeIncluded`:
 - Manifest `hermes.gitSha`:
 - Manifest `hermes.python.version`:
 - Manifest `hermes.python.voiceRuntime.ok`:
-- Manifest `environment.releaseMode`:
 - Manifest artifact `failures`:
 - Expected bootstrap trust-policy records:
 
@@ -54,12 +58,12 @@ Reference docs:
 - Zip command:
 - Zip smoke:
 - Bundled Hermes version output:
-- Poisoned `PATH` / fake Jarvis result:
+- Poisoned `PATH` / fake local-checkout result:
 - Gateway `127.0.0.1:8766` result:
 
 ## Installed-App Automation
 
-- Command: `npm run smoke:installed-release -- /Applications/agent-UI.app`
+- Command: `npm run smoke:installed-release -- "/Applications/agent-UI Standalone.app"`
 - Evidence directory:
 - Background mode:
 - Follow-up:

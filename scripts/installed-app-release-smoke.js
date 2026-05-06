@@ -7,12 +7,29 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const defaultBundle = '/Applications/agent-UI.app';
+const defaultBundle = '/Applications/agent-UI Standalone.app';
 const appArg = String(process.argv[2] || process.env.AGENT_UI_INSTALLED_APP || defaultBundle);
 const appPath = path.resolve(appArg);
-const appExecutable = appPath.endsWith('.app')
-  ? path.join(appPath, 'Contents', 'MacOS', 'agent-UI')
-  : appPath;
+function resolveAppExecutable(value) {
+  if (!value.endsWith('.app')) return value;
+  const macosDir = path.join(value, 'Contents', 'MacOS');
+  try {
+    const executable = fs.readdirSync(macosDir)
+      .map((name) => path.join(macosDir, name))
+      .find((file) => {
+        try {
+          return fs.statSync(file).isFile() && (fs.statSync(file).mode & 0o111);
+        } catch {
+          return false;
+        }
+      });
+    if (executable) return executable;
+  } catch {
+    // Fall through to the historical executable name.
+  }
+  return path.join(macosDir, 'agent-UI');
+}
+const appExecutable = resolveAppExecutable(appPath);
 const tmpRoot = fs.existsSync('/private/tmp') ? '/private/tmp' : os.tmpdir();
 const runDir = process.env.AGENT_UI_INSTALLED_SMOKE_DIR
   ? path.resolve(process.env.AGENT_UI_INSTALLED_SMOKE_DIR)
@@ -287,7 +304,7 @@ async function runFirstLaunchChecks() {
   assertCondition(uiTargets && uiTargets.conversation && uiTargets.conversation.visible === true, 'conversation window was not visible');
   assertCondition(uiTargets.conversation.followupRect, 'conversation follow-up input was not discoverable');
 
-  const envFile = path.join(configDir, 'local-desktop-gateway.env');
+  const envFile = path.join(hermesHome, '.env');
   if (fs.existsSync(envFile)) {
     evidence.files.gatewayEnv = envFile;
     evidence.gatewayEnv = fs.readFileSync(envFile, 'utf8');

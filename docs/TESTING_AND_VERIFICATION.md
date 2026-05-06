@@ -45,7 +45,7 @@ The release workflow is:
 .github/workflows/mac-release.yml
 ```
 
-It runs on pushes to `deployment` and manual dispatches. It builds bootstrap DMG and zip artifacts on `macos-15`, using Hermes `v2026.4.30`.
+It runs on pushes to `deployment` and manual dispatches. It builds connector and standalone bootstrap DMG and zip artifacts on `macos-15` from the configured Hermes source. Local standalone builds default to `/Users/saminkhan1/Documents/hermes/hermes-agent` and preserve local Hermes modifications; the release manifest records the source path, git SHA, dirty state, dirty file list, and bundled tree hash.
 
 Manual dispatch:
 
@@ -73,16 +73,21 @@ gh run download <run-id> \
 Verify manifest and hashes:
 
 ```bash
-node -e "const fs=require('fs'); const p='/private/tmp/agent-ui-gh-run-<run-id>/agent-ui-mac-bootstrap-deployment/release-manifest.json'; const m=JSON.parse(fs.readFileSync(p,'utf8')); console.log(JSON.stringify({gitSha:m.package.gitSha,sourceDirty:m.package.sourceDirty,releaseMode:m.environment.releaseMode,artifacts:m.artifacts.map(a=>({name:a.name,sha256:a.sha256,failures:a.failures}))},null,2));"
+node -e "const fs=require('fs'); const p='/private/tmp/agent-ui-gh-run-<run-id>/agent-ui-mac-bootstrap-deployment/release-manifest.json'; const m=JSON.parse(fs.readFileSync(p,'utf8')); console.log(JSON.stringify({gitSha:m.package.gitSha,sourceDirty:m.package.sourceDirty,appMode:m.environment.appMode,signingMode:m.environment.signingMode,artifacts:m.artifacts.map(a=>({name:a.name,appMode:a.appMode,hermesRuntimeIncluded:a.hermesRuntimeIncluded,sha256:a.sha256,failures:a.failures}))},null,2));"
 shasum -a 256 /private/tmp/agent-ui-gh-run-<run-id>/agent-ui-mac-bootstrap-deployment/*.dmg /private/tmp/agent-ui-gh-run-<run-id>/agent-ui-mac-bootstrap-deployment/*.zip
 ```
+
+GitHub Actions artifact links are internal verification links, not customer download links. For private beta distribution, attach the verified DMG/zip files and `release-manifest.json` to a GitHub prerelease as described in [Private Bootstrap Release](release/PRIVATE_BOOTSTRAP_RELEASE.md).
 
 Pass criteria:
 
 - workflow conclusion is `success`
 - manifest `package.gitSha` equals the release commit
 - manifest `package.sourceDirty` is `false`
-- manifest `environment.releaseMode` is `bootstrap`
+- manifest `environment.appMode` is `all`
+- manifest `environment.signingMode` is `bootstrap`
+- connector artifacts have `hermesRuntimeIncluded: false`
+- standalone artifacts have `hermesRuntimeIncluded: true`
 - every artifact has `failures: []`
 - local SHA-256 output matches the manifest
 
@@ -105,8 +110,8 @@ brew install cirruslabs/cli/tart
 Run both artifacts:
 
 ```bash
-DMG=/private/tmp/agent-ui-gh-run-<run-id>/agent-ui-mac-bootstrap-deployment/agent-UI-1.0.0-mac-arm64-bootstrap.dmg
-ZIP=/private/tmp/agent-ui-gh-run-<run-id>/agent-ui-mac-bootstrap-deployment/agent-UI-1.0.0-mac-arm64-bootstrap.zip
+DMG=/private/tmp/agent-ui-gh-run-<run-id>/agent-ui-mac-bootstrap-deployment/agent-UI-Standalone-1.0.0-mac-arm64-bootstrap.dmg
+ZIP=/private/tmp/agent-ui-gh-run-<run-id>/agent-ui-mac-bootstrap-deployment/agent-UI-Standalone-1.0.0-mac-arm64-bootstrap.zip
 
 TART_IMAGE=ghcr.io/cirruslabs/macos-sequoia-vanilla:latest \
 scripts/tart-clean-room-smoke.sh "$DMG"
@@ -129,8 +134,8 @@ The script verifies:
 - artifact installs into `/Applications`
 - bundled Hermes launcher exists
 - fake `PATH` Hermes is ignored
-- fake `~/Documents/jarvis` Hermes is ignored
-- bundled Hermes reports the pinned release
+- fake local Documents Hermes checkout is ignored
+- bundled Hermes reports the manifest provenance for the selected local source
 - gateway starts on `127.0.0.1:8766`
 - app launches from `/Applications`
 
@@ -147,16 +152,16 @@ Common failures:
 
 ## Installed-App Automation
 
-After installing or extracting the exact release app, run:
+After installing or extracting the exact standalone release app, run:
 
 ```bash
-npm run smoke:installed-release -- /Applications/agent-UI.app
+npm run smoke:installed-release -- "/Applications/agent-UI Standalone.app"
 ```
 
 You can also point it at an extracted app:
 
 ```bash
-npm run smoke:installed-release -- /private/tmp/some-release/agent-UI.app
+npm run smoke:installed-release -- "/private/tmp/some-release/agent-UI Standalone.app"
 ```
 
 The smoke uses isolated state and drives:
@@ -207,3 +212,5 @@ Do not call a release candidate verified unless all of these are true:
 - Ring 3 manual customer pass was completed and recorded.
 
 Developer ID `spctl`, notarization, and stapler clean acceptance are expected only for the future paid Developer ID distribution path. They are not pass criteria for the current bootstrap release path.
+
+After the release commit is created, rebuild the final artifacts from that clean commit before sharing links. The release manifest must show `package.sourceDirty: false` and `package.gitSha` equal to the commit that was tagged.

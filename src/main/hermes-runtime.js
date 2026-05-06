@@ -1,7 +1,6 @@
 'use strict';
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const net = require('net');
 const { spawn, execFile } = require('child_process');
@@ -12,9 +11,17 @@ const {
   readGatewayEnvFile,
   realUserHomeDir,
 } = require('./hermes-gateway-client');
+const {
+  connectorPluginInstallArgs,
+  defaultConnectorHermesCandidates,
+  defaultHermesHomeForMode,
+  isConnectorMode,
+  readConnectorRuntimeState,
+  releaseMode,
+  rememberConnectorHermesCommand,
+} = require('./hermes-release');
 
 const CLI_BIN_ENV = 'AGENT_UI_HERMES_BIN';
-const HERMES_HOME_ENV = 'AGENT_UI_HERMES_HOME';
 const GATEWAY_AUTOSTART_ENV = 'AGENT_UI_HERMES_GATEWAY_AUTOSTART';
 const LOCAL_DESKTOP_USER = 'local';
 const LOCAL_DESKTOP_PLATFORM = 'local_desktop';
@@ -23,6 +30,8 @@ const GATEWAY_READY_ATTEMPTS = 80;
 const GATEWAY_READY_INTERVAL_MS = 250;
 const GATEWAY_READY_REQUEST_TIMEOUT_MS = 500;
 const GATEWAY_OUTPUT_TAIL_CHARS = 4000;
+const CONNECTOR_PLUGIN_INSTALL_APPROVED_ENV = 'AGENT_UI_CONNECTOR_PLUGIN_INSTALL_APPROVED';
+const CONNECTOR_GATEWAY_RESTART_APPROVED_ENV = 'AGENT_UI_CONNECTOR_GATEWAY_RESTART_APPROVED';
 
 let gatewayProcess = null;
 let gatewayStartPromise = null;
@@ -141,20 +150,95 @@ function bundledHermesCommand() {
   return '';
 }
 
+function absoluteCommandPath(value) {
+  const command = String(value || '').trim();
+  if (!command) return '';
+  return path.isAbsolute(command) ? command : path.resolve(process.cwd(), command);
+}
+
+function resolveConnectorHermesCommand(configured = '') {
+  const configuredPath = absoluteCommandPath(configured);
+  if (configuredPath) {
+    if (executableExists(configuredPath)) rememberConnectorHermesCommand(configuredPath);
+    return {
+      command: configuredPath,
+      configured: true,
+      bundled: false,
+      releaseMode: 'connector',
+      remembered: false,
+      needsOnboarding: !executableExists(configuredPath),
+    };
+  }
+
+  const state = readConnectorRuntimeState();
+  const remembered = absoluteCommandPath(state.hermesBin);
+  if (remembered && !executableExists(remembered)) {
+    return {
+      command: '',
+      configured: false,
+      bundled: false,
+      releaseMode: 'connector',
+      remembered: true,
+      needsOnboarding: true,
+      invalidRememberedPath: remembered,
+    };
+  }
+  if (remembered) {
+    return {
+      command: remembered,
+      configured: false,
+      bundled: false,
+      releaseMode: 'connector',
+      remembered: true,
+      needsOnboarding: false,
+    };
+  }
+
+  for (const candidate of defaultConnectorHermesCandidates()) {
+    const resolved = absoluteCommandPath(candidate);
+    if (executableExists(resolved)) {
+      rememberConnectorHermesCommand(resolved);
+      return {
+        command: resolved,
+        configured: false,
+        bundled: false,
+        releaseMode: 'connector',
+        remembered: false,
+        needsOnboarding: false,
+      };
+    }
+  }
+
+  return {
+    command: '',
+    configured: false,
+    bundled: false,
+    releaseMode: 'connector',
+    remembered: false,
+    needsOnboarding: true,
+  };
+}
+
 function resolveHermesCommand() {
   const configured = String(process.env[CLI_BIN_ENV] || '').trim();
+  const mode = releaseMode();
+  if (isConnectorMode(mode)) return resolveConnectorHermesCommand(configured);
   const candidates = [configured, bundledHermesCommand()].filter(Boolean);
   const requested = candidates[0] || '';
   return {
-    command: requested ? (path.isAbsolute(requested) ? requested : path.resolve(process.cwd(), requested)) : '',
+    command: absoluteCommandPath(requested),
     configured: !!configured,
     bundled: !!requested && requested === bundledHermesCommand(),
+    releaseMode: 'standalone',
+    needsOnboarding: false,
   };
 }
 
 function hermesCwd(command) {
   const bundled = bundledHermesCommand();
   if (bundled && command === bundled) return path.dirname(path.dirname(bundled));
+  const connector = connectorHermesRuntimeForCommand(command, { requireVoiceDeps: false });
+  if (connector && connector.agentRoot) return connector.agentRoot;
   return process.cwd();
 }
 
@@ -166,6 +250,48 @@ function bundledHermesRootForCommand(command) {
   if (path.basename(binDir) !== 'bin') return '';
   if (!fs.existsSync(path.join(root, 'hermes-agent', 'tools', 'voice_mode.py'))) return '';
   return root;
+}
+
+function connectorHermesRuntimeForCommand(command, opts = {}) {
+  const resolved = path.resolve(String(command || ''));
+  const candidates = [];
+
+  if (path.basename(resolved) === 'aura-hermes' && path.basename(path.dirname(resolved)) === 'script') {
+    const root = path.dirname(path.dirname(resolved));
+    candidates.push({
+      agentRoot: path.join(root, '.aura', 'hermes-agent'),
+      hermesHome: path.join(root, '.aura', 'hermes-home'),
+      projectRoot: root,
+    });
+  }
+
+  const parts = resolved.split(path.sep);
+  const hermesAgentIdx = parts.lastIndexOf('hermes-agent');
+  if (hermesAgentIdx >= 0) {
+    const agentRoot = parts.slice(0, hermesAgentIdx + 1).join(path.sep) || path.sep;
+    candidates.push({
+      agentRoot,
+      hermesHome: defaultHermesHome(),
+      projectRoot: agentRoot,
+    });
+  }
+
+  for (const candidate of candidates) {
+    const pyCandidates = [
+      path.join(candidate.agentRoot, 'venv', 'bin', 'python3'),
+      path.join(candidate.agentRoot, '.venv', 'bin', 'python3'),
+      path.join(path.dirname(resolved), 'python3'),
+    ];
+    const python = pyCandidates.find(executableExists) || '';
+    if (!python) continue;
+    if (!fs.existsSync(path.join(candidate.agentRoot, 'hermes_cli', 'main.py'))) continue;
+    if (opts.requireVoiceDeps === false) {
+      return { ...candidate, python };
+    }
+    return { ...candidate, python };
+  }
+
+  return null;
 }
 
 async function bundledHermesRuntimeForCommand(command, opts = {}) {
@@ -183,7 +309,11 @@ async function bundledHermesRuntimeForCommand(command, opts = {}) {
 }
 
 async function hermesPythonRuntimeForCommand(command, opts = {}) {
-  return await bundledHermesRuntimeForCommand(command, opts);
+  const bundled = await bundledHermesRuntimeForCommand(command, opts);
+  if (bundled) return bundled;
+  const connector = connectorHermesRuntimeForCommand(command);
+  if (!connector || !await bundledVoiceDependenciesAvailable(connector.python)) return null;
+  return connector;
 }
 
 function parseTranscriptionJson(stdout) {
@@ -337,8 +467,7 @@ async function captureAndTranscribeVoice(opts = {}) {
 }
 
 function defaultHermesHome() {
-  const configured = String(process.env[HERMES_HOME_ENV] || '').trim();
-  return configured ? path.resolve(configured) : path.join(realUserHomeDir(), '.agent-ui', 'hermes-home');
+  return defaultHermesHomeForMode();
 }
 
 function effectiveGatewayHermesHome() {
@@ -613,6 +742,85 @@ function gatewayArgsFor(command) {
   return ['gateway', 'run', '--replace'];
 }
 
+function connectorPluginInstallCommand(command = resolveHermesCommand().command) {
+  return {
+    command: String(command || ''),
+    args: connectorPluginInstallArgs(),
+  };
+}
+
+function connectorPluginInstallApproved() {
+  const raw = String(process.env[CONNECTOR_PLUGIN_INSTALL_APPROVED_ENV] || '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+function connectorGatewayRestartApproved() {
+  const raw = String(process.env[CONNECTOR_GATEWAY_RESTART_APPROVED_ENV] || '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+async function installConnectorLocalDesktopPlugin(opts = {}) {
+  if (!isConnectorMode()) return { ok: true, skipped: true, reason: 'not connector mode' };
+  if (opts.requireApproval !== false && !connectorPluginInstallApproved()) {
+    const planned = connectorPluginInstallCommand();
+    return {
+      ok: false,
+      needsPermission: true,
+      command: [planned.command, ...planned.args].filter(Boolean).join(' '),
+    };
+  }
+
+  const planned = connectorPluginInstallCommand();
+  if (!planned.args.length) {
+    return { ok: false, error: 'AGENT_UI_LOCAL_DESKTOP_PLUGIN_REPO is required for connector plugin installation.' };
+  }
+  if (!planned.command || !executableExists(planned.command)) {
+    return { ok: false, error: 'Hermes executable is missing for connector plugin installation.' };
+  }
+
+  return new Promise((resolve) => {
+    const child = spawn(planned.command, planned.args, {
+      cwd: hermesCwd(planned.command),
+      env: {
+        ...process.env,
+        HERMES_HOME: effectiveGatewayHermesHome(),
+        HOME: realUserHomeDir(),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      stdout = appendOutputTail(stdout, chunk);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr = appendOutputTail(stderr, chunk);
+    });
+    child.once('error', (error) => {
+      resolve({
+        ok: false,
+        command: [planned.command, ...planned.args].join(' '),
+        exitCode: null,
+        stdout,
+        stderr,
+        error: error && error.message ? error.message : String(error),
+      });
+    });
+    child.once('close', (code, signal) => {
+      resolve({
+        ok: code === 0,
+        command: [planned.command, ...planned.args].join(' '),
+        exitCode: code,
+        signal: signal || '',
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+      });
+    });
+  });
+}
+
 function gatewayStartupWaitBudgetMs() {
   return GATEWAY_READY_ATTEMPTS * GATEWAY_READY_INTERVAL_MS;
 }
@@ -640,6 +848,39 @@ async function ensureGatewayProcess(log = console) {
   const hermesHome = effectiveGatewayHermesHome();
   if (await gatewayReadyOk(baseUrl, gatewayEnv.LOCAL_DESKTOP_GATEWAY_KEY)) {
     return { ok: true, alreadyRunning: true, baseUrl };
+  }
+
+  if (isConnectorMode() && !connectorGatewayRestartApproved()) {
+    const { command } = resolveHermesCommand();
+    const manual = command
+      ? `HERMES_HOME="${hermesHome}" "${command}" gateway run --replace`
+      : 'Reconnect Hermes, then run `hermes gateway run --replace`.';
+    return {
+      ok: false,
+      pendingRestart: true,
+      reason: `Hermes gateway restart is required before agent-UI for Hermes can connect. Run: ${manual}`,
+      command,
+      baseUrl,
+    };
+  }
+
+  if (isConnectorMode() && connectorPluginInstallApproved()) {
+    const installed = await installConnectorLocalDesktopPlugin({ requireApproval: false });
+    if (!installed.ok) {
+      return {
+        ok: false,
+        pluginInstallFailed: true,
+        error: [
+          'Hermes local_desktop plugin install failed.',
+          installed.command ? `Command: ${installed.command}` : '',
+          installed.exitCode != null ? `Exit code: ${installed.exitCode}` : '',
+          installed.stdout ? `stdout: ${installed.stdout}` : '',
+          installed.stderr ? `stderr: ${installed.stderr}` : '',
+          installed.error ? `error: ${installed.error}` : '',
+        ].filter(Boolean).join(' '),
+        install: installed,
+      };
+    }
   }
 
   const endpoint = parseGatewayBaseUrl(baseUrl);
@@ -733,11 +974,13 @@ module.exports = {
   ensureGatewayEnvFile,
   ensureGatewayConfigFile,
   ensureGatewayProcess,
+  connectorPluginInstallCommand,
   executableExists,
   gatewayAuthOk,
   gatewayReadyOk,
   gatewayArgsFor,
   gatewayStartupWaitBudgetMs,
+  installConnectorLocalDesktopPlugin,
   hermesCwd,
   nextAvailableGatewayPort,
   parseTranscriptionJson,

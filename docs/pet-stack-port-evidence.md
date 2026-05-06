@@ -389,7 +389,7 @@ Observed user path:
 
 - Finder was activated, then the normal global shortcut opened the launcher.
 - Prompt submitted through the launcher: `Reply exactly: AGENT_UI_E2E_OK. Also name the active app from the provided context metadata.`
-- Hermes command resolved to `/Users/saminkhan1/Documents/jarvis/script/aura-hermes`.
+- Current local dev should resolve Hermes through `/Users/saminkhan1/Documents/hermes/script/aura-hermes`.
 - The pet stack showed the submitted session, then the detail window was opened from the stack row.
 - Detail follow-up submitted: `Reply exactly: AGENT_UI_FOLLOWUP_OK.`
 - The same Hermes session resumed with `--resume 20260502_160542_4939e2`.

@@ -27,17 +27,18 @@ test('contribution docs preserve branch and release gate expectations', () => {
   assert.match(contributing, /gateway[\s\S]*active integration branch/);
   assert.match(contributing, /deployment[\s\S]*GitHub Actions release branch/);
   assert.match(contributing, /npm run verify/);
-  assert.match(contributing, /npm run smoke:installed-release -- \/Applications\/agent-UI\.app/);
+  assert.match(contributing, /npm run smoke:installed-release -- "\/Applications\/agent-UI Standalone\.app"/);
   assert.match(contributing, /Bootstrap releases are ad-hoc signed and are not notarized/);
 });
 
 test('onboarding docs separate gateway transport from provider auth', () => {
   const onboarding = read('docs/DEVELOPER_ONBOARDING.md');
 
-  assert.match(onboarding, /local-desktop-gateway\.env/);
+  assert.match(onboarding, /~\/\.agent-ui\/hermes-home\/\.env/);
+  assert.match(onboarding, /~\/\.agent-ui\/connector-runtime\.json/);
   assert.match(onboarding, /No inference provider configured/);
   assert.match(onboarding, /A healthy gateway does not prove provider auth is configured/);
-  assert.match(onboarding, /agent-UI\.app\/Contents\/Resources\/hermes-runtime\/bin\/hermes/);
+  assert.match(onboarding, /agent-UI Standalone\.app\/Contents\/Resources\/hermes-runtime\/bin\/hermes/);
 });
 
 test('testing docs include the full release verification path', () => {
@@ -50,5 +51,5 @@ test('testing docs include the full release verification path', () => {
   assert.match(testing, /ghcr\.io\/cirruslabs\/macos-sequoia-vanilla:latest/);
   assert.match(testing, /scripts\/tart-clean-room-smoke\.sh "\$DMG"/);
   assert.match(testing, /scripts\/tart-clean-room-smoke\.sh "\$ZIP"/);
-  assert.match(testing, /npm run smoke:installed-release -- \/Applications\/agent-UI\.app/);
+  assert.match(testing, /npm run smoke:installed-release -- "\/Applications\/agent-UI Standalone\.app"/);
 });

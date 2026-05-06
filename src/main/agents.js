@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { HermesGatewayClient } = require('./hermes-gateway-client');
 const { attachmentDescriptor, normalizeAttachmentType } = require('./hermes-attachments');
+const { isAuthErrorText } = require('./hermes-auth');
 const {
   ensureGatewayEnvFile,
   ensureGatewayProcess,
@@ -31,9 +32,14 @@ const MAX_METADATA_BYTES = 16384;
 
 let gatewayClient = null;
 let gatewayNotify = () => {};
+let onAuthRequired = () => {};
 
 function setOnConversationPushed(fn) {
   onConversationPushed = typeof fn === 'function' ? fn : () => {};
+}
+
+function setOnAuthRequired(fn) {
+  onAuthRequired = typeof fn === 'function' ? fn : () => {};
 }
 
 function now() {
@@ -321,6 +327,23 @@ function handleGatewayEvent(event = {}) {
       transport: 'gateway',
       gatewaySeq: seq || null,
     });
+    const failureText = [
+      event.error,
+      event.message,
+      event.text,
+      event.metadata && event.metadata.error,
+      event.metadata && event.metadata.message,
+    ].filter(Boolean).join('\n');
+    if (status === 'error' && isAuthErrorText(failureText) && !rec.authPrompted) {
+      rec.authPrompted = true;
+      onAuthRequired({
+        catId,
+        prompt: rec.prompt || '',
+        launchContext: rec.pointerContext || null,
+        reason: 'gateway-auth-error',
+        error: failureText,
+      });
+    }
     gatewayNotify({
       catId,
       status,
@@ -772,6 +795,16 @@ function markGatewayError(catId, error, notify) {
     durationMs: rec ? rec.durationMs : 0,
     finishBubbleLine: finishBubbleLineFromConversation(rec),
   });
+  if (rec && isAuthErrorText(message) && !rec.authPrompted) {
+    rec.authPrompted = true;
+    onAuthRequired({
+      catId: id,
+      prompt: rec.prompt || '',
+      launchContext: rec.pointerContext || null,
+      reason: 'gateway-auth-error',
+      error: message,
+    });
+  }
 }
 
 async function runAgentLifecycle({ catId, prompt, runtime, pointerContext, notify, log, getMainWindow }) {
@@ -893,6 +926,7 @@ module.exports = {
   getAgentConversation,
   listAgentConversations,
   setOnConversationPushed,
+  setOnAuthRequired,
   deleteConversationState,
   cancelAgent,
   dismissAgent,

@@ -8,8 +8,13 @@ const os = require('os');
 const path = require('path');
 
 const {
+  defaultConnectorHermesCandidates,
+} = require('../src/main/hermes-release');
+
+const {
   defaultHermesHome,
   effectiveGatewayHermesHome,
+  connectorPluginInstallCommand,
   ensureGatewayConfigFile,
   ensureGatewayEnvFile,
   ensureGatewayProcess,
@@ -29,6 +34,11 @@ function isolateEnv(t) {
   delete process.env.AGENT_UI_CONFIG_DIR;
   delete process.env.AGENT_UI_HERMES_BIN;
   delete process.env.AGENT_UI_HERMES_HOME;
+  delete process.env.AGENT_UI_HERMES_ENV_PATH;
+  delete process.env.AGENT_UI_RELEASE_MODE;
+  delete process.env.AGENT_UI_RELEASE_FLAVOR;
+  delete process.env.AGENT_UI_CONNECTOR_GATEWAY_RESTART_APPROVED;
+  delete process.env.AGENT_UI_CONNECTOR_PLUGIN_INSTALL_APPROVED;
   delete process.env.HERMES_HOME;
   delete process.env.LOCAL_DESKTOP_GATEWAY_KEY;
   delete process.env.LOCAL_DESKTOP_HOST;
@@ -40,7 +50,7 @@ function isolateEnv(t) {
 
 test('defaultHermesHome uses the real user home instead of sandbox HOME', (t) => {
   isolateEnv(t);
-  const poisonedHome = path.join(os.userInfo().homedir, 'Documents', 'jarvis', '.aura', 'home');
+  const poisonedHome = path.join(os.userInfo().homedir, 'Documents', 'hermes', '.aura', 'home');
   process.env.HOME = poisonedHome;
   process.env.HERMES_HOME = path.join(poisonedHome, 'hermes-home');
 
@@ -52,11 +62,12 @@ test('ensureGatewayEnvFile creates a local desktop gateway env file with a stabl
   isolateEnv(t);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-runtime-env-'));
   process.env.AGENT_UI_CONFIG_DIR = dir;
+  process.env.AGENT_UI_HERMES_HOME = path.join(dir, 'hermes-home');
 
   const first = ensureGatewayEnvFile();
   const second = ensureGatewayEnvFile();
 
-  assert.equal(first.file, path.join(dir, 'local-desktop-gateway.env'));
+  assert.equal(first.file, path.join(dir, 'hermes-home', '.env'));
   assert.equal(fs.statSync(first.file).mode & 0o777, 0o600);
   assert.equal(first.env.LOCAL_DESKTOP_ALLOWED_USERS, 'local');
   assert.equal(first.env.LOCAL_DESKTOP_ALLOW_ALL_USERS, 'false');
@@ -70,6 +81,7 @@ test('ensureGatewayEnvFile can rotate the local desktop port without changing th
   isolateEnv(t);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-runtime-env-'));
   process.env.AGENT_UI_CONFIG_DIR = dir;
+  process.env.AGENT_UI_HERMES_HOME = path.join(dir, 'hermes-home');
 
   const first = ensureGatewayEnvFile();
   const second = ensureGatewayEnvFile({ LOCAL_DESKTOP_PORT: '8777' });
@@ -77,6 +89,36 @@ test('ensureGatewayEnvFile can rotate the local desktop port without changing th
   assert.equal(second.env.LOCAL_DESKTOP_GATEWAY_KEY, first.env.LOCAL_DESKTOP_GATEWAY_KEY);
   assert.equal(second.env.LOCAL_DESKTOP_PORT, '8777');
   assert.match(fs.readFileSync(second.file, 'utf8'), /LOCAL_DESKTOP_PORT=8777/);
+});
+
+test('connector mode uses default local Hermes home and remembers detected binary', (t) => {
+  isolateEnv(t);
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-connector-config-'));
+  const hermesRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-connector-hermes-'));
+  const bin = path.join(hermesRoot, 'script', 'aura-hermes');
+  fs.mkdirSync(path.dirname(bin), { recursive: true });
+  fs.writeFileSync(bin, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  process.env.AGENT_UI_CONFIG_DIR = configDir;
+  process.env.AGENT_UI_RELEASE_MODE = 'connector';
+  process.env.AGENT_UI_HERMES_BIN = bin;
+
+  const resolved = resolveHermesCommand();
+
+  assert.equal(defaultHermesHome(), path.join(os.userInfo().homedir, 'Documents', 'hermes', 'hermes-home'));
+  assert.equal(resolved.command, bin);
+  assert.equal(resolved.releaseMode, 'connector');
+  assert.equal(resolved.configured, true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(configDir, 'connector-runtime.json'), 'utf8')).hermesBin, bin);
+});
+
+test('connector discovery prefers Hermes venv over AURA wrapper', () => {
+  const candidates = defaultConnectorHermesCandidates();
+  const venv = candidates.findIndex((candidate) => candidate.endsWith(path.join('hermes-agent', 'venv', 'bin', 'hermes')));
+  const wrapper = candidates.findIndex((candidate) => candidate.endsWith(path.join('script', 'aura-hermes')));
+
+  assert.notEqual(venv, -1);
+  assert.notEqual(wrapper, -1);
+  assert.equal(venv < wrapper, true);
 });
 
 test('ensureGatewayConfigFile creates local desktop platform config', (t) => {
@@ -155,7 +197,7 @@ test('ensureGatewayProcess rotates the gateway port when the preferred port is o
   ensureGatewayEnvFile({ LOCAL_DESKTOP_PORT: String(blockedPort) });
 
   const result = await ensureGatewayProcess({ warn() {}, log() {} });
-  const env = fs.readFileSync(path.join(configDir, 'local-desktop-gateway.env'), 'utf8');
+  const env = fs.readFileSync(path.join(homeDir, '.env'), 'utf8');
 
   assert.equal(result.ok, false);
   assert.match(result.error, /Hermes executable is missing/);
@@ -165,6 +207,36 @@ test('ensureGatewayProcess rotates the gateway port when the preferred port is o
 
 test('gateway autostart uses replace mode for quit/reopen recovery', () => {
   assert.deepEqual(gatewayArgsFor('/path/to/hermes'), ['gateway', 'run', '--replace']);
+});
+
+test('connector plugin install uses Hermes-native install and enable command', (t) => {
+  isolateEnv(t);
+  process.env.AGENT_UI_RELEASE_MODE = 'connector';
+  process.env.AGENT_UI_LOCAL_DESKTOP_PLUGIN_REPO = 'owner/local-desktop';
+
+  const planned = connectorPluginInstallCommand('/path/to/hermes');
+
+  assert.equal(planned.command, '/path/to/hermes');
+  assert.deepEqual(planned.args, ['plugins', 'install', 'owner/local-desktop', '--enable']);
+});
+
+test('connector mode requires explicit gateway restart approval when Hermes is not ready', async (t) => {
+  isolateEnv(t);
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-connector-config-'));
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-connector-home-'));
+  const bin = path.join(configDir, 'hermes');
+  fs.writeFileSync(bin, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  process.env.AGENT_UI_CONFIG_DIR = configDir;
+  process.env.AGENT_UI_RELEASE_MODE = 'connector';
+  process.env.AGENT_UI_HERMES_HOME = homeDir;
+  process.env.AGENT_UI_HERMES_BIN = bin;
+
+  const result = await ensureGatewayProcess({ warn() {}, log() {} });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.pendingRestart, true);
+  assert.match(result.reason, /Hermes gateway restart is required/);
+  assert.match(result.reason, /gateway run --replace/);
 });
 
 test('gateway autostart wait covers Hermes replace takeover window', () => {
@@ -184,7 +256,7 @@ test('resolveHermesCommand prefers explicit override', (t) => {
   assert.equal(resolved.configured, true);
 });
 
-test('resolveHermesCommand does not fall back to PATH or Jarvis Hermes', (t) => {
+test('resolveHermesCommand does not fall back to PATH or local checkout Hermes', (t) => {
   isolateEnv(t);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-fake-path-'));
   const fakeHermes = path.join(dir, 'hermes');

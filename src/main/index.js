@@ -31,6 +31,7 @@ const {
   getAgentConversation,
   listAgentConversations,
   setOnConversationPushed,
+  setOnAuthRequired,
   cancelAgent,
   dismissAgent,
   sendFollowup,
@@ -246,6 +247,22 @@ let selectedInputMode = INPUT_MODE_TEXT;
 
 hermesAuth.onSessionEvent((payload) => {
   handleHermesAuthSessionEvent(payload);
+});
+
+setOnAuthRequired((payload = {}) => {
+  const catId = normalizeCatId(payload.catId);
+  const prompt = boundedText(payload.prompt || '');
+  if (!catId || !prompt.trim()) return;
+  openHermesAuthWindow({
+    pendingRun: {
+      catId,
+      prompt,
+      runtime: 'local',
+      modalContextId: '',
+      launchContext: payload.launchContext || null,
+    },
+    reason: payload.reason || 'gateway-auth-error',
+  });
 });
 
 function idleAuthFlow() {
@@ -1880,24 +1897,6 @@ async function startCatRunFromPayload(payload = {}, opts = {}) {
   });
 
   const prepared = { catId, prompt, runtime, modalContextId, launchContext };
-  if (opts.skipAuthPreflight !== true) {
-    const readiness = await hermesAuth.ensureReadyForRun();
-    if (!readiness.ok) {
-      recordTrace('submit_auth_required', {
-        catId,
-        modalContextId: modalContextId || null,
-        reason: readiness.reason || 'unknown',
-      });
-      if (modalContextId) modalContexts.delete(modalContextId);
-      if (activeModalContextId === modalContextId) activeModalContextId = null;
-      if (opts.closeModal !== false && modalWindow && !modalWindow.isDestroyed()) {
-        modalWindow.close();
-      }
-      openHermesAuthWindow({ pendingRun: prepared, reason: readiness.reason || 'preflight' });
-      return { ok: false, needsAuth: true, reason: readiness.reason || 'preflight' };
-    }
-  }
-
   launchPreparedCatRun(prepared, { closeModal: opts.closeModal !== false });
   return { ok: true, catId, runtime };
 }

@@ -8,7 +8,7 @@ const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
-const appPath = path.resolve(process.argv[2] || path.join(repoRoot, 'dist', 'mac-arm64', 'agent-UI.app'));
+const appPath = path.resolve(process.argv[2] || path.join(repoRoot, 'dist', 'mac-arm64', 'agent-UI Standalone.app'));
 const port = Number(process.env.LOCAL_DESKTOP_PORT || process.argv[3] || 8766);
 const host = '127.0.0.1';
 const hermes = path.join(appPath, 'Contents', 'Resources', 'hermes-runtime', 'bin', 'hermes');

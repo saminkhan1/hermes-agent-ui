@@ -29,6 +29,10 @@ function isolateEnv(t) {
   delete process.env.LOCAL_DESKTOP_HOST;
   delete process.env.LOCAL_DESKTOP_PORT;
   delete process.env.AGENT_UI_CONFIG_DIR;
+  delete process.env.AGENT_UI_HERMES_HOME;
+  delete process.env.AGENT_UI_HERMES_ENV_PATH;
+  delete process.env.AGENT_UI_RELEASE_MODE;
+  delete process.env.AGENT_UI_RELEASE_FLAVOR;
   t.after(() => {
     process.env = { ...originalEnv };
   });
@@ -141,9 +145,9 @@ test('postMessage reports gateway transport failures with the target URL', async
 
 test('gateway config falls back to local desktop env file', (t) => {
   isolateEnv(t);
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-gateway-env-'));
-  process.env.AGENT_UI_CONFIG_DIR = dir;
-  fs.writeFileSync(path.join(dir, 'local-desktop-gateway.env'), [
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-gateway-env-'));
+  process.env.AGENT_UI_HERMES_HOME = home;
+  fs.writeFileSync(path.join(home, '.env'), [
     'export LOCAL_DESKTOP_GATEWAY_KEY="file-secret"',
     'LOCAL_DESKTOP_HOST=127.0.0.2',
     'LOCAL_DESKTOP_PORT=9911',
@@ -157,21 +161,21 @@ test('gateway config falls back to local desktop env file', (t) => {
 
 test('default gateway config ignores Hermes-owned HOME override', (t) => {
   isolateEnv(t);
-  const poisonedHome = path.join(os.userInfo().homedir, 'Documents', 'jarvis', '.aura', 'home');
+  const poisonedHome = path.join(os.userInfo().homedir, 'Documents', 'hermes', '.aura', 'home');
   process.env.HOME = poisonedHome;
   const expectedDir = path.join(os.userInfo().homedir, '.agent-ui');
 
   assert.equal(getAgentUIConfigDir(), expectedDir);
-  assert.equal(defaultGatewayEnvPath(), path.join(expectedDir, 'local-desktop-gateway.env'));
+  assert.equal(defaultGatewayEnvPath(), path.join(expectedDir, 'hermes-home', '.env'));
 });
 
 test('explicit gateway env overrides local desktop env file', (t) => {
   isolateEnv(t);
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-gateway-env-'));
-  process.env.AGENT_UI_CONFIG_DIR = dir;
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-gateway-env-'));
+  process.env.AGENT_UI_HERMES_HOME = home;
   process.env.AGENT_UI_HERMES_GATEWAY_KEY = 'direct-secret';
   process.env.AGENT_UI_HERMES_GATEWAY_URL = 'http://127.0.0.9:7777/';
-  fs.writeFileSync(path.join(dir, 'local-desktop-gateway.env'), [
+  fs.writeFileSync(path.join(home, '.env'), [
     'LOCAL_DESKTOP_GATEWAY_KEY=file-secret',
     'LOCAL_DESKTOP_HOST=127.0.0.2',
     'LOCAL_DESKTOP_PORT=9911',

@@ -65,13 +65,50 @@ function commandRoot(command) {
 }
 
 function pythonRuntimeForHermes(command) {
-  const root = commandRoot(command);
-  if (!root) return null;
-  const python = path.join(root, 'python', 'bin', 'python3');
-  const agentRoot = path.join(root, 'hermes-agent');
-  if (!executableExists(python)) return null;
-  if (!fs.existsSync(path.join(agentRoot, 'hermes_cli', 'main.py'))) return null;
-  return { python, agentRoot, root };
+  const resolved = path.resolve(String(command || ''));
+  const bundledRoot = commandRoot(resolved);
+  const candidates = [];
+  if (bundledRoot) {
+    candidates.push({
+      root: bundledRoot,
+      agentRoot: path.join(bundledRoot, 'hermes-agent'),
+      pythonCandidates: [path.join(bundledRoot, 'python', 'bin', 'python3')],
+    });
+  }
+  if (path.basename(resolved) === 'aura-hermes' && path.basename(path.dirname(resolved)) === 'script') {
+    const root = path.dirname(path.dirname(resolved));
+    const agentRoot = path.join(root, '.aura', 'hermes-agent');
+    candidates.push({
+      root,
+      agentRoot,
+      pythonCandidates: [
+        path.join(agentRoot, 'venv', 'bin', 'python3'),
+        path.join(agentRoot, '.venv', 'bin', 'python3'),
+      ],
+    });
+  }
+  const parts = resolved.split(path.sep);
+  const hermesAgentIdx = parts.lastIndexOf('hermes-agent');
+  if (hermesAgentIdx >= 0) {
+    const agentRoot = parts.slice(0, hermesAgentIdx + 1).join(path.sep) || path.sep;
+    candidates.push({
+      root: path.dirname(agentRoot),
+      agentRoot,
+      pythonCandidates: [
+        path.join(agentRoot, 'venv', 'bin', 'python3'),
+        path.join(agentRoot, '.venv', 'bin', 'python3'),
+        path.join(path.dirname(resolved), 'python3'),
+      ],
+    });
+  }
+
+  for (const candidate of candidates) {
+    const python = candidate.pythonCandidates.find(executableExists) || '';
+    if (!python) continue;
+    if (!fs.existsSync(path.join(candidate.agentRoot, 'hermes_cli', 'main.py'))) continue;
+    return { python, agentRoot: candidate.agentRoot, root: candidate.root };
+  }
+  return null;
 }
 
 function hermesEnv(extra = {}) {

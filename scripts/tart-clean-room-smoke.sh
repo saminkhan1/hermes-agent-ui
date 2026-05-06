@@ -104,23 +104,23 @@ case "$artifact" in
   *.dmg)
     mkdir -p "$install_root/mnt"
     hdiutil attach -nobrowse -readonly -mountpoint "$install_root/mnt" "$artifact"
-    app_path="$(find "$install_root/mnt" -maxdepth 2 -name 'agent-UI.app' -type d | head -n 1)"
+    app_path="$(find "$install_root/mnt" -maxdepth 2 -name 'agent-UI Standalone.app' -type d | head -n 1)"
     if [[ -z "$app_path" ]]; then
-      echo "agent-UI.app not found in DMG." >&2
+      echo "agent-UI Standalone.app not found in DMG." >&2
       exit 32
     fi
-    rm -rf /Applications/agent-UI.app
+    rm -rf "/Applications/agent-UI Standalone.app"
     cp -R "$app_path" /Applications/
     hdiutil detach "$install_root/mnt"
     ;;
   *.zip)
     ditto -x -k "$artifact" "$install_root/unzip"
-    app_path="$(find "$install_root/unzip" -maxdepth 4 -name 'agent-UI.app' -type d | head -n 1)"
+    app_path="$(find "$install_root/unzip" -maxdepth 4 -name 'agent-UI Standalone.app' -type d | head -n 1)"
     if [[ -z "$app_path" ]]; then
-      echo "agent-UI.app not found in zip." >&2
+      echo "agent-UI Standalone.app not found in zip." >&2
       exit 33
     fi
-    rm -rf /Applications/agent-UI.app
+    rm -rf "/Applications/agent-UI Standalone.app"
     cp -R "$app_path" /Applications/
     ;;
   *)
@@ -129,16 +129,16 @@ case "$artifact" in
     ;;
 esac
 
-runtime="/Applications/agent-UI.app/Contents/Resources/hermes-runtime/bin/hermes"
+runtime="/Applications/agent-UI Standalone.app/Contents/Resources/hermes-runtime/bin/hermes"
 if [[ ! -x "$runtime" ]]; then
   echo "Bundled Hermes launcher missing: $runtime" >&2
   exit 35
 fi
 
-mkdir -p "$HOME/fakebin" "$HOME/Documents/jarvis/script"
+mkdir -p "$HOME/fakebin" "$HOME/Documents/hermes/script"
 printf '#!/bin/sh\necho fake PATH hermes >&2\nexit 86\n' > "$HOME/fakebin/hermes"
-printf '#!/bin/sh\necho fake Jarvis Hermes >&2\nexit 87\n' > "$HOME/Documents/jarvis/script/aura-hermes"
-chmod +x "$HOME/fakebin/hermes" "$HOME/Documents/jarvis/script/aura-hermes"
+printf '#!/bin/sh\necho fake Documents Hermes >&2\nexit 88\n' > "$HOME/Documents/hermes/script/aura-hermes"
+chmod +x "$HOME/fakebin/hermes" "$HOME/Documents/hermes/script/aura-hermes"
 
 version_out="$(
   PATH="$HOME/fakebin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" \
@@ -147,7 +147,7 @@ version_out="$(
 )"
 echo "$version_out"
 echo "$version_out" | grep 'Hermes Agent v0.12.0 (2026.4.30)' >/dev/null
-echo "$version_out" | grep '/Applications/agent-UI.app/Contents/Resources/hermes-runtime/hermes-agent' >/dev/null
+echo "$version_out" | grep '/Applications/agent-UI Standalone.app/Contents/Resources/hermes-runtime/hermes-agent' >/dev/null
 
 gateway_home="$HOME/.agent-ui-clean-room/hermes-home"
 rm -rf "$gateway_home"
@@ -182,10 +182,10 @@ curl -sS \
   -d '{}' \
   http://127.0.0.1:8766/messages | grep 'missing_conversation_id' >/dev/null
 
-open -a /Applications/agent-UI.app
+open -a "/Applications/agent-UI Standalone.app"
 sleep 5
-pgrep -f '/Applications/agent-UI.app/Contents/MacOS/agent-UI' >/dev/null
-osascript -e 'tell application "agent-UI" to quit' >/dev/null 2>&1 || true
+pgrep -f '/Applications/agent-UI Standalone.app/Contents/MacOS/agent-UI Standalone' >/dev/null
+osascript -e 'tell application "agent-UI Standalone" to quit' >/dev/null 2>&1 || true
 REMOTE
 
 echo "[agent-ui] Tart clean-room smoke passed on $image"
