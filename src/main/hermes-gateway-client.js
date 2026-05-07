@@ -9,6 +9,8 @@ const {
   realUserHomeDir,
 } = require('./hermes-release');
 
+const DEFAULT_POST_TIMEOUT_MS = 15000;
+
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
@@ -138,8 +140,10 @@ class HermesGatewayClient {
     this.fetchImpl = opts.fetchImpl || global.fetch;
     this.log = opts.log || console;
     this.onEvent = typeof opts.onEvent === 'function' ? opts.onEvent : () => {};
+    this.onConnectionChange = typeof opts.onConnectionChange === 'function' ? opts.onConnectionChange : () => {};
     this.onReplayExpired = typeof opts.onReplayExpired === 'function' ? opts.onReplayExpired : () => {};
     this.clientVersion = String(opts.clientVersion || 'unknown');
+    this.postTimeoutMs = Math.max(0, Math.trunc(Number(opts.postTimeoutMs) || DEFAULT_POST_TIMEOUT_MS));
     this.stateSaveDebounceMs = Math.max(0, Math.trunc(Number(opts.stateSaveDebounceMs) || 250));
     this.sseDisconnectLogThrottleMs = Math.max(0, Math.trunc(Number(opts.sseDisconnectLogThrottleMs) || 30000));
     const savedState = readJsonFile(this.statePath, {});
@@ -202,6 +206,18 @@ class HermesGatewayClient {
     this.log.warn('[agent-ui] Hermes gateway SSE disconnected:', message);
   }
 
+  reportConnection(state, error = null) {
+    try {
+      this.onConnectionChange({
+        state,
+        baseUrl: this.baseUrl,
+        error: error && error.message ? error.message : (error ? String(error) : ''),
+      });
+    } catch {
+      // Status callbacks must never break the reconnect loop.
+    }
+  }
+
   createMessageId(prefix = 'agent-ui') {
     return `${prefix}-${Date.now()}-${randomUUID()}`;
   }
@@ -227,7 +243,7 @@ class HermesGatewayClient {
     }
   }
 
-  async postMessage({ conversationId, messageId, text, chatName, metadata = {}, retries = 1 }) {
+  async postMessage({ conversationId, messageId, text, chatName, metadata = {}, retries = 1, timeoutMs = this.postTimeoutMs }) {
     if (!this.fetchImpl) throw new Error('fetch is not available.');
     const payload = {
       conversation_id: String(conversationId || '').trim(),
@@ -244,12 +260,27 @@ class HermesGatewayClient {
     const attempts = Math.max(1, Math.trunc(Number(retries) || 0) + 1);
     let lastError = null;
     for (let attempt = 0; attempt < attempts; attempt++) {
+      const controller = Number(timeoutMs) > 0 ? new AbortController() : null;
+      let timer = null;
       try {
-        const res = await this.fetchImpl(`${this.baseUrl}/messages`, {
+        const request = Promise.resolve(this.fetchImpl(`${this.baseUrl}/messages`, {
           method: 'POST',
           headers: this.authHeaders({ 'content-type': 'application/json' }),
           body: bodyText,
-        });
+          signal: controller ? controller.signal : undefined,
+        }));
+        request.catch(() => {});
+        const res = controller ? await Promise.race([
+          request,
+          new Promise((_, reject) => {
+            timer = setTimeout(() => {
+              controller.abort();
+              const timeoutError = new Error(`Gateway message timed out after ${Number(timeoutMs)}ms`);
+              timeoutError.code = 'ETIMEDOUT';
+              reject(timeoutError);
+            }, Number(timeoutMs));
+          }),
+        ]) : await request;
         let body = null;
         try {
           body = await res.json();
@@ -267,6 +298,8 @@ class HermesGatewayClient {
         const actionable = e && e.status ? e : gatewayConnectionError(e, this.baseUrl);
         if (attempt === attempts - 1) throw actionable;
         lastError = actionable;
+      } finally {
+        if (timer) clearTimeout(timer);
       }
       await sleep(Math.min(250, 50 * (attempt + 1)));
     }
@@ -308,6 +341,7 @@ class HermesGatewayClient {
           delayMs = 100;
         } else {
           this.logSseDisconnect(e);
+          this.reportConnection('disconnected', e);
         }
       }
       if (!this.running) return;
@@ -340,13 +374,18 @@ class HermesGatewayClient {
     if (!res.body || typeof res.body.getReader !== 'function') {
       throw new Error('Gateway event stream is not readable.');
     }
+    this.reportConnection('connected');
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let streamEnded = false;
     while (this.running) {
       const { value, done } = await reader.read();
-      if (done) break;
+      if (done) {
+        streamEnded = true;
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
       let idx = buffer.indexOf('\n\n');
       while (idx >= 0) {
@@ -357,12 +396,18 @@ class HermesGatewayClient {
         idx = buffer.indexOf('\n\n');
       }
     }
+    if (streamEnded && this.running) {
+      throw new Error('Gateway event stream closed.');
+    }
   }
 
   handleEvent(event) {
     const seq = Number(event && event.seq);
-    if (Number.isFinite(seq) && seq > Number(this.state.lastSeq || 0)) {
-      this.state.lastSeq = Math.trunc(seq);
+    if (Number.isFinite(seq)) {
+      const nextSeq = Math.trunc(seq);
+      const currentSeq = Number(this.state.lastSeq || 0);
+      if (nextSeq <= currentSeq) return;
+      this.state.lastSeq = nextSeq;
       this.scheduleStateSave();
     }
     this.onEvent(event);

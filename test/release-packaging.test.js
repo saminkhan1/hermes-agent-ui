@@ -81,6 +81,10 @@ test('release manifest records app mode and enforces Hermes runtime inclusion', 
   assert.match(manifest, /sourcePolicy/);
   assert.match(manifest, /sourceGitStatus/);
   assert.match(manifest, /bundledHermesAgentTreeSha256/);
+  assert.match(manifest, /hermesBinExecutable/);
+  assert.match(manifest, /pythonBinExecutable/);
+  assert.match(manifest, /localDesktopPluginPresent/);
+  assert.match(manifest, /Developer ID standalone build must use HERMES_BUNDLE_SOURCE_POLICY=release/);
   assert.match(manifest, /gitStatus/);
   assert.match(manifest, /sha256/);
 
@@ -88,6 +92,48 @@ test('release manifest records app mode and enforces Hermes runtime inclusion', 
   assert.match(envCheck, /bootstrap mac packaging: ad-hoc app signing, no notarization or stapling/);
   assert.match(envCheck, /Developer ID Application signing identity/);
   assert.match(envCheck, /Apple notarization credentials/);
+});
+
+test('release manifest enforces embedded Hermes runtime provenance', () => {
+  const {
+    appRuntimeEnforcementFailures,
+    hermesReleaseEnforcementFailures,
+  } = require('../scripts/release-manifest.js');
+  const app = {
+    runtime: {
+      hermesRuntimeIncluded: true,
+      hermesBinExecutable: true,
+      pythonBinExecutable: true,
+      runtimeManifestPresent: true,
+      runtimeManifestValid: true,
+      hermesAgentPresent: true,
+      hermesAgentTreeSha256: 'actual-tree',
+      localDesktopManifestPresent: true,
+      localDesktopPluginPresent: true,
+      runtimeManifestData: {
+        gitHead: 'dirty-head',
+        hermesReleaseGitHead: 'release-head',
+        hermesSourcePolicy: 'local',
+        hermesSourceDirty: true,
+        hermesSourceIsReleaseHead: false,
+        hermesReleaseTag: 'v0.0.0',
+        hermesReleaseUrl: 'https://example.invalid/hermes',
+        bundledHermesAgentTreeSha256: 'manifest-tree',
+      },
+    },
+  };
+
+  assert.match(
+    appRuntimeEnforcementFailures(app, 'standalone').join('\n'),
+    /MANIFEST\.json tree hash does not match embedded hermes-agent/
+  );
+  const releaseFailures = hermesReleaseEnforcementFailures(app, 'standalone', 'developer-id').join('\n');
+  assert.match(releaseFailures, /HERMES_BUNDLE_SOURCE_POLICY=release/);
+  assert.match(releaseFailures, /must not bundle a dirty Hermes source/);
+  assert.match(releaseFailures, /must bundle the pinned Hermes release head/);
+  assert.match(releaseFailures, /must bundle Hermes release tag v2026\.4\.30/);
+  assert.match(releaseFailures, /must record Hermes release URL/);
+  assert.match(releaseFailures, /gitHead matching hermesReleaseGitHead/);
 });
 
 test('standalone Hermes bundler uses local source provenance by default', () => {
@@ -100,6 +146,8 @@ test('standalone Hermes bundler uses local source provenance by default', () => 
   assert.match(bundler, /bundledHermesAgentTreeSha256/);
   assert.match(bundler, /action: 'kept-source'/);
   assert.match(bundler, /action: 'copied-vendored'/);
+  const pkg = JSON.parse(read('package.json'));
+  assert.match(pkg.scripts['dist:mac:standalone:developer-id'], /HERMES_BUNDLE_SOURCE_POLICY=release npm run bundle:hermes/);
 });
 
 test('Tart clean-room smoke uses vanilla images and password SSH isolation', () => {
@@ -117,6 +165,8 @@ test('Tart clean-room smoke uses vanilla images and password SSH isolation', () 
   assert.match(smoke, /PubkeyAuthentication=no/);
   assert.match(smoke, /ssh_ready=false/);
   assert.match(smoke, /command -v brew/);
+  assert.match(smoke, /before_hash/);
+  assert.match(smoke, /after_hash/);
 });
 
 test('manual customer pass documents bootstrap Gatekeeper expectations', () => {
@@ -131,6 +181,7 @@ test('manual customer pass documents bootstrap Gatekeeper expectations', () => {
 test('installed app release smoke is a committed repeatable gate', () => {
   const pkg = JSON.parse(read('package.json'));
   const smoke = read('scripts/installed-app-release-smoke.js');
+  const gatewaySmoke = read('scripts/local-gateway-smoke.js');
   const guiSmoke = read('scripts/tart-gui-manual.sh');
   const readme = read('README.md');
   const evidenceTemplate = read('docs/release/evidence-template.md');
@@ -138,6 +189,7 @@ test('installed app release smoke is a committed repeatable gate', () => {
   assert.equal(pkg.scripts['smoke:installed-release'], 'node scripts/installed-app-release-smoke.js');
   assert.equal(pkg.scripts['tart:manual-gui'], 'bash scripts/tart-gui-manual.sh');
   assert.match(smoke, /AGENT_UI_EVAL/);
+  assert.match(smoke, /AGENT_UI_EVAL_TOKEN/);
   assert.match(smoke, /AGENT_UI_CONFIG_DIR/);
   assert.match(smoke, /AGENT_UI_HERMES_HOME/);
   assert.match(smoke, /createPortBlocker/);
@@ -145,10 +197,13 @@ test('installed app release smoke is a committed repeatable gate', () => {
   assert.match(smoke, /\/background Release background smoke/);
   assert.match(smoke, /\/followup/);
   assert.match(smoke, /\/cancel/);
+  assert.match(gatewaySmoke, /\/events/);
   assert.match(smoke, /\/open-conversation/);
   assert.match(smoke, /reopen-smoke/);
   assert.match(smoke, /assertNoErrorItems/);
   assert.match(smoke, /installed-release-smoke-summary\.json/);
+  assert.match(smoke, /app-seal-before/);
+  assert.match(smoke, /installed app bundle changed after launch/);
   assert.match(guiSmoke, /TART_IMAGE must be a Cirrus vanilla image/);
   assert.match(guiSmoke, /tart run --dir="agent-ui-artifacts:\$artifact_dir:ro"/);
   assert.match(guiSmoke, /Open the Tart VM window/);

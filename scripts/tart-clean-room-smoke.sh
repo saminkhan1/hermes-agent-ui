@@ -182,10 +182,25 @@ curl -sS \
   -d '{}' \
   http://127.0.0.1:8766/messages | grep 'missing_conversation_id' >/dev/null
 
+app="/Applications/agent-UI Standalone.app"
+app_tree_hash() {
+  find "$app" -type f -print | LC_ALL=C sort | while IFS= read -r file; do
+    shasum -a 256 "$file"
+  done | shasum -a 256 | awk '{print $1}'
+}
+codesign --verify --deep --strict --verbose=2 "$app"
+before_hash="$(app_tree_hash)"
 open -a "/Applications/agent-UI Standalone.app"
 sleep 5
 pgrep -f '/Applications/agent-UI Standalone.app/Contents/MacOS/agent-UI Standalone' >/dev/null
 osascript -e 'tell application "agent-UI Standalone" to quit' >/dev/null 2>&1 || true
+sleep 1
+codesign --verify --deep --strict --verbose=2 "$app"
+after_hash="$(app_tree_hash)"
+if [[ "$before_hash" != "$after_hash" ]]; then
+  echo "Installed app bundle changed after launch." >&2
+  exit 40
+fi
 REMOTE
 
 echo "[agent-ui] Tart clean-room smoke passed on $image"

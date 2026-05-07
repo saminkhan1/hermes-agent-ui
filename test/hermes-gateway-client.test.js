@@ -19,6 +19,15 @@ function tempStatePath() {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-gateway-')), 'state.json');
 }
 
+async function waitFor(condition, timeoutMs = 1000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail('condition timed out');
+}
+
 const originalEnv = { ...process.env };
 
 function isolateEnv(t) {
@@ -143,6 +152,26 @@ test('postMessage reports gateway transport failures with the target URL', async
   );
 });
 
+test('postMessage times out stalled gateway writes', async () => {
+  const client = new HermesGatewayClient({
+    baseUrl: 'http://127.0.0.1:8766',
+    key: 'secret',
+    statePath: tempStatePath(),
+    fetchImpl: async () => new Promise(() => {}),
+    postTimeoutMs: 20,
+  });
+
+  await assert.rejects(
+    client.postMessage({
+      conversationId: 'cat-timeout',
+      messageId: 'msg-timeout',
+      text: 'hello',
+      retries: 0,
+    }),
+    /Check that Hermes gateway is running at http:\/\/127\.0\.0\.1:8766\./
+  );
+});
+
 test('gateway config falls back to local desktop env file', (t) => {
   isolateEnv(t);
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-gateway-env-'));
@@ -218,6 +247,26 @@ test('last sequence persists across client instances without conversation conten
   const second = new HermesGatewayClient({ key: 'secret', statePath, fetchImpl: async () => {} });
   assert.equal(second.state.lastSeq, 7);
   assert.equal(Object.prototype.hasOwnProperty.call(second.state, 'conversations'), false);
+});
+
+test('duplicate and stale SSE sequences are ignored', () => {
+  const statePath = tempStatePath();
+  const seen = [];
+  const client = new HermesGatewayClient({
+    key: 'secret',
+    statePath,
+    fetchImpl: async () => {},
+    onEvent: (event) => seen.push(event),
+  });
+
+  client.handleEvent({ seq: 7, type: 'attachment.created', conversation_id: 'cat-1' });
+  client.handleEvent({ seq: 7, type: 'attachment.created', conversation_id: 'cat-1' });
+  client.handleEvent({ seq: 6, type: 'message.created', conversation_id: 'cat-1' });
+  client.handleEvent({ type: 'typing.started', conversation_id: 'cat-1' });
+
+  assert.equal(seen.length, 2);
+  assert.equal(seen[0].seq, 7);
+  assert.equal(seen[1].type, 'typing.started');
 });
 
 test('last sequence can be reset when local conversations are not hydrated', () => {
@@ -302,4 +351,29 @@ test('replay-window 409 clears last sequence and reports expiration', async () =
 
   assert.equal(expired, true);
   assert.equal(client.state.lastSeq, 0);
+});
+
+test('clean event stream EOF reports disconnected', async () => {
+  const states = [];
+  const fetchImpl = async () => new Response(new ReadableStream({ start(controller) { controller.close(); } }), {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' },
+  });
+  const client = new HermesGatewayClient({
+    baseUrl: 'http://127.0.0.1:8766',
+    key: 'secret',
+    statePath: tempStatePath(),
+    fetchImpl,
+    onConnectionChange: (state) => states.push(state.state),
+    log: { warn() {} },
+  });
+
+  client.start();
+  try {
+    await waitFor(() => states.includes('disconnected'));
+  } finally {
+    client.stop();
+  }
+
+  assert.deepEqual(states.slice(0, 2), ['connected', 'disconnected']);
 });

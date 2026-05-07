@@ -5,7 +5,8 @@ const http = require('node:http');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const crypto = require('node:crypto');
+const { spawn, spawnSync } = require('node:child_process');
 
 const defaultBundle = '/Applications/agent-UI Standalone.app';
 const appArg = String(process.argv[2] || process.env.AGENT_UI_INSTALLED_APP || defaultBundle);
@@ -37,6 +38,7 @@ const runDir = process.env.AGENT_UI_INSTALLED_SMOKE_DIR
 const configDir = path.join(runDir, 'config');
 const hermesHome = path.join(runDir, 'hermes-home');
 const evalDir = path.join(runDir, 'eval');
+const evalToken = crypto.randomBytes(24).toString('hex');
 const host = '127.0.0.1';
 const defaultGatewayPort = Number(process.env.AGENT_UI_INSTALLED_SMOKE_DEFAULT_PORT || 8766);
 const blockDefaultPort = String(process.env.AGENT_UI_INSTALLED_SMOKE_BLOCK_DEFAULT_PORT || '1') !== '0';
@@ -90,6 +92,67 @@ function readJson(file, fallback = null) {
   }
 }
 
+function runCommand(command, args, opts = {}) {
+  const res = spawnSync(command, args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: opts.timeoutMs || 30000,
+  });
+  return {
+    command: [command, ...args].join(' '),
+    ok: res.status === 0,
+    status: res.status,
+    signal: res.signal || '',
+    stdout: String(res.stdout || '').trim(),
+    stderr: String(res.stderr || res.error || '').trim(),
+  };
+}
+
+function treeSha256(root) {
+  const files = [];
+  function walk(dir) {
+    for (const entry of fs.readdirSync(dir).sort()) {
+      const full = path.join(dir, entry);
+      const rel = path.relative(root, full);
+      const st = fs.lstatSync(full);
+      if (st.isSymbolicLink()) {
+        files.push({ rel, kind: 'symlink', target: fs.readlinkSync(full) });
+      } else if (st.isDirectory()) {
+        walk(full);
+      } else if (st.isFile()) {
+        files.push({
+          rel,
+          kind: 'file',
+          mode: st.mode & 0o777,
+          size: st.size,
+          sha256: crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex'),
+        });
+      }
+    }
+  }
+  walk(root);
+  const hash = crypto.createHash('sha256');
+  hash.update(JSON.stringify(files));
+  return { sha256: hash.digest('hex'), fileCount: files.length };
+}
+
+function installedAppBundlePath() {
+  return appPath.endsWith('.app') ? appPath : path.dirname(path.dirname(path.dirname(appExecutable)));
+}
+
+function appSealSnapshot(label) {
+  const bundle = installedAppBundlePath();
+  if (!bundle.endsWith('.app') || !fs.existsSync(bundle)) {
+    return { label, skipped: true, reason: 'not an app bundle', bundle };
+  }
+  const tree = treeSha256(bundle);
+  const codesign = runCommand('codesign', ['--verify', '--deep', '--strict', '--verbose=2', bundle], { timeoutMs: 60000 });
+  if (!codesign.ok) {
+    throw new Error(`codesign verification failed ${label}: ${codesign.stderr || codesign.stdout}`);
+  }
+  return { label, bundle, ...tree, codesign };
+}
+
 function request(method, url, { headers = {}, body = '', timeoutMs = 5000 } = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request(url, { method, headers, timeout: timeoutMs }, (res) => {
@@ -118,7 +181,9 @@ function request(method, url, { headers = {}, body = '', timeoutMs = 5000 } = {}
 }
 
 async function getJson(route) {
-  const res = await request('GET', `http://${host}:${activePort}${route}`);
+  const res = await request('GET', `http://${host}:${activePort}${route}`, {
+    headers: { authorization: `Bearer ${evalToken}` },
+  });
   if (res.status < 200 || res.status >= 300) {
     throw new Error(`GET ${route} failed: ${res.status} ${res.text}`);
   }
@@ -127,7 +192,10 @@ async function getJson(route) {
 
 async function postJson(route, payload, opts = {}) {
   const res = await request('POST', `http://${host}:${activePort}${route}`, {
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      authorization: `Bearer ${evalToken}`,
+      'content-type': 'application/json',
+    },
     body: JSON.stringify(payload || {}),
     timeoutMs: opts.timeoutMs || 5000,
   });
@@ -184,6 +252,7 @@ async function startApp(label) {
       AGENT_UI_EVAL_RUN_ID: `installed-release-${label}`,
       AGENT_UI_EVAL_DIR: evalDir,
       AGENT_UI_EVAL_PORT_FILE: portFile,
+      AGENT_UI_EVAL_TOKEN: evalToken,
       AGENT_UI_CONFIG_DIR: configDir,
       AGENT_UI_HERMES_HOME: hermesHome,
       HOME: process.env.HOME || os.userInfo().homedir,
@@ -197,7 +266,9 @@ async function startApp(label) {
     if (fs.existsSync(portFile) && fs.statSync(portFile).size > 0) {
       activePort = fs.readFileSync(portFile, 'utf8').trim();
       try {
-        const health = await request('GET', `http://${host}:${activePort}/health`);
+        const health = await request('GET', `http://${host}:${activePort}/health`, {
+          headers: { authorization: `Bearer ${evalToken}` },
+        });
         if (health.status === 200) {
           evidence.checks[`eval-${label}`] = { ok: true, port: activePort };
           return;
@@ -220,7 +291,9 @@ async function stopApp() {
   activePort = '';
   if (port) {
     try {
-      await request('POST', `http://${host}:${port}/shutdown`);
+      await request('POST', `http://${host}:${port}/shutdown`, {
+        headers: { authorization: `Bearer ${evalToken}` },
+      });
     } catch {
       // ignore shutdown transport errors; process kill below is the fallback.
     }
@@ -307,7 +380,8 @@ async function runFirstLaunchChecks() {
   const envFile = path.join(hermesHome, '.env');
   if (fs.existsSync(envFile)) {
     evidence.files.gatewayEnv = envFile;
-    evidence.gatewayEnv = fs.readFileSync(envFile, 'utf8');
+    evidence.gatewayEnv = fs.readFileSync(envFile, 'utf8')
+      .replace(/(LOCAL_DESKTOP_GATEWAY_KEY=).+/g, '$1<redacted>');
   }
   evidence.checks.firstLaunch = { ok: true };
   await stopApp();
@@ -355,8 +429,14 @@ async function cleanup() {
   portBlocker = await createPortBlocker();
   evidence.portBlocker = portBlocker.server ? { active: true, port: portBlocker.port } : portBlocker;
 
+  const sealBefore = saveJson('app-seal-before', appSealSnapshot('before'));
   await runFirstLaunchChecks();
   await runReopenChecks();
+  const sealAfter = saveJson('app-seal-after', appSealSnapshot('after'));
+  if (!sealBefore.skipped && !sealAfter.skipped) {
+    assertCondition(sealBefore.sha256 === sealAfter.sha256, 'installed app bundle changed after launch');
+    evidence.checks.appSeal = { ok: true, before: sealBefore.sha256, after: sealAfter.sha256 };
+  }
 
   evidence.finishedAt = new Date().toISOString();
   evidence.ok = true;

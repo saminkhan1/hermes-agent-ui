@@ -119,7 +119,6 @@ function defaultConnectorHermesCandidates() {
     path.join(root, 'hermes-agent', '.venv', 'bin', 'hermes'),
     path.join(root, 'hermes-agent', 'hermes'),
     path.join(root, 'script', 'aura-hermes'),
-    path.join(home, '.local', 'bin', 'hermes'),
   ];
 }
 

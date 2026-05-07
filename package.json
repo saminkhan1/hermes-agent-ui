@@ -28,7 +28,7 @@
     "dist:mac:standalone:bootstrap": "node scripts/assert-mac-release-env.js bootstrap standalone && npm run bundle:hermes && npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config packaging/electron-builder.standalone.bootstrap.cjs --mac dmg zip --publish never",
     "dist:mac:developer-id": "npm run dist:mac:connector:developer-id && npm run dist:mac:standalone:developer-id",
     "dist:mac:connector:developer-id": "node scripts/assert-mac-release-env.js developer-id connector && npm run build && electron-builder --config packaging/electron-builder.connector.cjs --mac dmg zip --publish never",
-    "dist:mac:standalone:developer-id": "node scripts/assert-mac-release-env.js developer-id standalone && npm run bundle:hermes && npm run build && electron-builder --config packaging/electron-builder.standalone.cjs --mac dmg zip --publish never",
+    "dist:mac:standalone:developer-id": "node scripts/assert-mac-release-env.js developer-id standalone && HERMES_BUNDLE_SOURCE_POLICY=release npm run bundle:hermes && npm run build && electron-builder --config packaging/electron-builder.standalone.cjs --mac dmg zip --publish never",
     "dist:mac:local": "npm run dist:mac:bootstrap",
     "verify": "npm test && npm run build",
     "release:manifest": "node scripts/release-manifest.js",

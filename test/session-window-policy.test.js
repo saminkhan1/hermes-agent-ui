@@ -63,6 +63,19 @@ test('auth browser handoff has monitor recovery and fallback menu copy', () => {
   assert.match(preload, /checkHermesAuthNow/);
 });
 
+test('auth finish resumes follow-up retries without duplicating user input', () => {
+  const start = main.indexOf("trustedIpcHandle('hermes-auth-finish'");
+  const end = main.indexOf("trustedIpcOn('hermes-auth-close'", start);
+  assert.notEqual(start, -1, 'hermes-auth-finish handler exists');
+  assert.notEqual(end, -1, 'hermes-auth-finish handler end exists');
+  const body = main.slice(start, end);
+
+  assert.match(body, /pending\.retryKind/);
+  assert.match(body, /sendFollowup\(pending\.catId, boundedText\(pending\.prompt\)/);
+  assert.match(body, /recordUserItem: false/);
+  assert.match(body, /launchPreparedCatRun\(pending/);
+});
+
 test('privileged preload is bound to trusted renderer origins', () => {
   assert.match(main, /function trustedRendererDevBaseUrl/);
   assert.match(main, /app\.isPackaged/);

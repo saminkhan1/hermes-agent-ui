@@ -8,12 +8,13 @@ const { startAgentUIEvalServer, _test } = require('../src/main/eval-server');
 
 const originalEnv = { ...process.env };
 
-function invokeEvalRoute(method, url, payload, handlers) {
+function invokeEvalRoute(method, url, payload, handlers, headers = { authorization: 'Bearer test-token' }) {
   return new Promise((resolve, reject) => {
     const body = payload == null ? '' : JSON.stringify(payload);
     const req = Readable.from(body ? [body] : []);
     req.method = method;
     req.url = url;
+    req.headers = headers;
 
     const chunks = [];
     const res = new Writable({
@@ -51,11 +52,23 @@ test('eval server is disabled outside AGENT_UI_EVAL', () => {
   process.env = { ...originalEnv };
 });
 
+test('eval server requires an explicit token', () => {
+  process.env = {
+    ...originalEnv,
+    AGENT_UI_EVAL: '1',
+  };
+
+  assert.equal(startAgentUIEvalServer({}, { warn() {} }), null);
+
+  process.env = { ...originalEnv };
+});
+
 test('eval server exposes release smoke control endpoints', async (t) => {
   const calls = [];
   process.env = {
     ...originalEnv,
     AGENT_UI_EVAL: '1',
+    AGENT_UI_EVAL_TOKEN: 'test-token',
   };
   t.after(() => {
     process.env = { ...originalEnv };
@@ -77,6 +90,7 @@ test('eval server exposes release smoke control endpoints', async (t) => {
     shutdown: () => {},
   };
 
+  assert.deepEqual((await invokeEvalRoute('GET', '/health', null, handlers, {})).json, { ok: false, error: 'unauthorized' });
   assert.deepEqual((await invokeEvalRoute('GET', '/health', null, handlers)).json, { ok: true, app: 'agent-UI', eval: true });
   assert.deepEqual((await invokeEvalRoute('POST', '/start', { catId: 'cat-1', prompt: 'hello' }, handlers)).json, { ok: true, catId: 'cat-1' });
   assert.deepEqual((await invokeEvalRoute('POST', '/followup', { catId: 'cat-1', text: 'next' }, handlers)).json, { ok: true });

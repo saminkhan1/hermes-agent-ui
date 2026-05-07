@@ -12,6 +12,17 @@ const originalEnv = { ...process.env };
 const originalFetch = global.fetch;
 
 function emptySseResponse() {
+  return new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(': idle\n\n'));
+    },
+  }), {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' },
+  });
+}
+
+function closedSseResponse() {
   return new Response(new ReadableStream({ start(controller) { controller.close(); } }), {
     status: 200,
     headers: { 'content-type': 'text/event-stream' },
@@ -39,6 +50,8 @@ function setupGatewayEnv(t) {
   t.after(() => {
     agents.cancelAllAgents();
     agents._test.resetGatewayClientForTests();
+    agents.setOnAuthRequired(() => {});
+    agents.setOnConversationPushed(() => {});
     global.fetch = originalFetch;
     process.env = { ...originalEnv };
   });
@@ -96,7 +109,7 @@ test('gateway start posts tagged first prompt with stable conversation id', asyn
   assert.equal(conversation.gatewayConversationId, 'cat-gateway-1');
 });
 
-test('gateway follow-up is sent while session is running', async (t) => {
+test('gateway follow-up waits until session is not running', async (t) => {
   setupGatewayEnv(t);
   const posts = [];
   global.fetch = async (url, opts = {}) => {
@@ -129,6 +142,22 @@ test('gateway follow-up is sent while session is running', async (t) => {
 
   const before = agents.getAgentConversation('cat-gateway-2');
   assert.equal(before.runStatus, 'running');
+
+  const rejected = await agents.sendFollowup('cat-gateway-2', 'plain follow up', {
+    getMainWindow: () => null,
+    log: { warn() {} },
+  });
+
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.error, /after Hermes finishes/);
+  assert.equal(posts.length, 1);
+
+  agents._test.handleGatewayEvent({
+    type: 'typing.stopped',
+    conversation_id: 'cat-gateway-2',
+    outcome: 'success',
+    seq: 1,
+  });
 
   const result = await agents.sendFollowup('cat-gateway-2', 'plain follow up', {
     getMainWindow: () => null,
@@ -215,6 +244,47 @@ test('gateway hydration replays retained conversations after restart', async (t)
   assert.equal(conversation.runStatus, 'completed');
   assert.equal(conversation.items[0].text, 'Restored answer');
   assert.equal(pushed.includes('cat-rehydrated'), true);
+});
+
+test('dismissed gateway conversations are not rehydrated from replay', async (t) => {
+  setupGatewayEnv(t);
+  agents._test.handleGatewayEvent({
+    seq: 1,
+    type: 'message.created',
+    conversation_id: 'cat-dismissed',
+    message_id: 'm1',
+    text: 'Old answer',
+  });
+  agents._test.handleGatewayEvent({
+    seq: 2,
+    type: 'typing.stopped',
+    conversation_id: 'cat-dismissed',
+    outcome: 'success',
+  });
+  const dismissed = await agents.dismissAgent('cat-dismissed', { getMainWindow: () => null, log: { warn() {} } });
+  assert.equal(dismissed.ok, true);
+  assert.equal(agents.getAgentConversation('cat-dismissed').found, false);
+
+  agents._test.handleGatewayEvent({
+    seq: 3,
+    type: 'message.created',
+    conversation_id: 'cat-dismissed',
+    message_id: 'm2',
+    text: 'Replayed after dismiss',
+  });
+
+  assert.equal(agents.getAgentConversation('cat-dismissed').found, false);
+
+  agents._test.resetGatewayClientForTests();
+  agents._test.handleGatewayEvent({
+    seq: 4,
+    type: 'message.created',
+    conversation_id: 'cat-dismissed',
+    message_id: 'm3',
+    text: 'Replayed after restart',
+  });
+
+  assert.equal(agents.getAgentConversation('cat-dismissed').found, false);
 });
 
 test('gateway cancel sends Hermes stop command while session is running', async (t) => {
@@ -458,6 +528,112 @@ test('gateway typing events expose typing state without forcing terminal status'
   conversation = agents.getAgentConversation('cat-typing');
   assert.equal(conversation.runStatus, 'running');
   assert.equal(conversation.typing.active, false);
+});
+
+test('replay expiry marks running gateway sessions terminal', (t) => {
+  setupGatewayEnv(t);
+  agents._test.handleGatewayEvent({
+    seq: 40,
+    type: 'typing.started',
+    conversation_id: 'cat-replay-expired',
+  });
+
+  agents._test.handleGatewayReplayExpired(new Error('expired'));
+
+  const conversation = agents.getAgentConversation('cat-replay-expired');
+  assert.equal(conversation.runStatus, 'error');
+  assert.equal(conversation.typing.active, false);
+  assert.equal(conversation.items.some((item) => item.kind === 'error' && /replay window expired/.test(item.text)), true);
+});
+
+test('event stream disconnect marks running gateway sessions terminal after grace', async (t) => {
+  setupGatewayEnv(t);
+  process.env.AGENT_UI_GATEWAY_STREAM_DISCONNECT_GRACE_MS = '20';
+  let posts = 0;
+  let eventCalls = 0;
+  let closedStreams = 0;
+  global.fetch = async (url, opts = {}) => {
+    const textUrl = String(url);
+    if (textUrl.endsWith('/events')) {
+      eventCalls += 1;
+      if (eventCalls === 1) return emptySseResponse();
+      closedStreams += 1;
+      if (closedStreams === 1) return closedSseResponse();
+      return new Response(JSON.stringify({ ok: false }), { status: 500 });
+    }
+    if (textUrl.endsWith('/messages')) {
+      const body = opts.body ? JSON.parse(opts.body) : {};
+      if (!body.conversation_id) {
+        return new Response(JSON.stringify({ ok: false, error: 'missing_conversation_id' }), { status: 400 });
+      }
+      posts += 1;
+      return new Response(JSON.stringify({ ok: true, accepted: true }), { status: 202 });
+    }
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  };
+
+  agents.startAgentForCat({ catId: 'cat-event-loss', prompt: 'Initial', runtime: 'local' }, {
+    getMainWindow: () => null,
+    log: { warn() {} },
+  });
+
+  await waitFor(() => posts === 1);
+  await waitFor(() => agents.getAgentConversation('cat-event-loss').runStatus === 'error');
+  assert.equal(closedStreams >= 1, true);
+  assert.match(agents.getAgentConversation('cat-event-loss').endResult, /event stream disconnected/);
+});
+
+test('auth-required follow-up recovery uses failed follow-up text', async (t) => {
+  setupGatewayEnv(t);
+  let messageCount = 0;
+  let authPayload = null;
+  agents.setOnAuthRequired((payload) => {
+    authPayload = payload;
+  });
+  global.fetch = async (url, opts = {}) => {
+    const textUrl = String(url);
+    if (textUrl.endsWith('/events')) return emptySseResponse();
+    if (textUrl.endsWith('/messages')) {
+      const body = opts.body ? JSON.parse(opts.body) : {};
+      if (!body.conversation_id) {
+        return new Response(JSON.stringify({ ok: false, error: 'missing_conversation_id' }), { status: 400 });
+      }
+      messageCount += 1;
+      if (messageCount === 1) {
+        return new Response(JSON.stringify({ ok: true, accepted: true }), { status: 202 });
+      }
+      return new Response(JSON.stringify({
+        ok: false,
+        message: 'Primary provider auth failed: No inference provider configured',
+      }), {
+        status: 500,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  };
+
+  agents.startAgentForCat({ catId: 'cat-auth-followup', prompt: 'Original task', runtime: 'local' }, {
+    getMainWindow: () => null,
+    log: { warn() {} },
+  });
+  await waitFor(() => messageCount === 1);
+  agents._test.handleGatewayEvent({
+    seq: 50,
+    type: 'typing.stopped',
+    conversation_id: 'cat-auth-followup',
+    outcome: 'success',
+  });
+
+  const result = await agents.sendFollowup('cat-auth-followup', 'Failed follow-up', {
+    getMainWindow: () => null,
+    log: { warn() {} },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(authPayload.prompt, 'Failed follow-up');
+  assert.equal(authPayload.retryKind, 'followup');
+  assert.equal(authPayload.reason, 'provider-auth-required');
 });
 
 test('conversation window does not disable web security', () => {

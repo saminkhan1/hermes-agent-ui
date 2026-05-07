@@ -8,6 +8,24 @@ const { spawnSync } = require('node:child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
 const distDir = path.join(repoRoot, 'dist');
+const expectedHermesReleaseTag = 'v2026.4.30';
+const expectedHermesReleaseUrl = 'https://github.com/NousResearch/hermes-agent/releases/tag/v2026.4.30';
+const runtimeTreeIgnoredNames = new Set([
+  '.git',
+  '.github',
+  '.mypy_cache',
+  '.pytest_cache',
+  '.ruff_cache',
+  '__pycache__',
+  'venv',
+  '.venv',
+  'node_modules',
+  'sessions',
+  'logs',
+  'cache',
+  'build',
+  'dist',
+]);
 const legacyRequireSigned = String(process.env.RELEASE_VERIFY_REQUIRE_SIGNED || '').trim() === '1';
 const requestedSigningMode = String(
   process.env.RELEASE_VERIFY_SIGNING_MODE ||
@@ -38,6 +56,18 @@ function readJson(file, fallback = {}) {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
     return fallback;
+  }
+}
+
+function readJsonResult(file) {
+  try {
+    return { ok: true, data: JSON.parse(fs.readFileSync(file, 'utf8')), error: '' };
+  } catch (error) {
+    return {
+      ok: false,
+      data: {},
+      error: String(error && error.message ? error.message : error),
+    };
   }
 }
 
@@ -72,6 +102,36 @@ function gitStatus(dir) {
 function sha256(file) {
   const hash = crypto.createHash('sha256');
   hash.update(fs.readFileSync(file));
+  return hash.digest('hex');
+}
+
+function treeSha256(root) {
+  const hash = crypto.createHash('sha256');
+  const normalizedRoot = path.resolve(root);
+
+  function walk(dir) {
+    for (const entry of fs.readdirSync(dir).sort()) {
+      const full = path.join(dir, entry);
+      if (runtimeTreeIgnoredNames.has(path.basename(full))) continue;
+      const st = fs.lstatSync(full);
+      const rel = path.relative(normalizedRoot, full).split(path.sep).join('/');
+      if (st.isSymbolicLink()) {
+        hash.update(`L\0${rel}\0${fs.readlinkSync(full)}\0`);
+        continue;
+      }
+      if (st.isDirectory()) {
+        hash.update(`D\0${rel}\0`);
+        walk(full);
+        continue;
+      }
+      if (!st.isFile()) continue;
+      hash.update(`F\0${rel}\0${st.mode & 0o777}\0`);
+      hash.update(fs.readFileSync(full));
+      hash.update('\0');
+    }
+  }
+
+  walk(normalizedRoot);
   return hash.digest('hex');
 }
 
@@ -133,19 +193,68 @@ function parseSigningIdentity(codesignDisplay) {
   };
 }
 
+function isExecutable(file) {
+  try {
+    const st = fs.statSync(file);
+    return st.isFile() && (st.mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
+}
+
 function appRuntimeState(appPath) {
   const hermesRuntimePath = path.join(appPath, 'Contents', 'Resources', 'hermes-runtime');
+  const hermesAgent = path.join(hermesRuntimePath, 'hermes-agent');
+  const hermesBin = path.join(hermesRuntimePath, 'bin', 'hermes');
+  const pythonBin = path.join(hermesRuntimePath, 'python', 'bin', 'python3');
+  const runtimeManifest = path.join(hermesRuntimePath, 'MANIFEST.json');
+  const localDesktopPlugin = path.join(hermesRuntimePath, 'hermes-agent', 'plugins', 'platforms', 'local_desktop', 'adapter.py');
+  const localDesktopManifest = path.join(hermesRuntimePath, 'hermes-agent', 'plugins', 'platforms', 'local_desktop', 'plugin.yaml');
+  const runtimeManifestPresent = fs.existsSync(runtimeManifest);
+  const runtimeManifestResult = runtimeManifestPresent
+    ? readJsonResult(runtimeManifest)
+    : { ok: false, data: {}, error: 'missing' };
+  let hermesAgentTreeSha256 = '';
+  let hermesAgentTreeSha256Error = '';
+  if (fs.existsSync(hermesAgent)) {
+    try {
+      hermesAgentTreeSha256 = treeSha256(hermesAgent);
+    } catch (error) {
+      hermesAgentTreeSha256Error = String(error && error.message ? error.message : error);
+    }
+  }
   return {
     hermesRuntimePath,
     hermesRuntimeIncluded: fs.existsSync(hermesRuntimePath),
+    hermesAgent,
+    hermesAgentPresent: fs.existsSync(hermesAgent),
+    hermesAgentTreeSha256,
+    hermesAgentTreeSha256Error,
+    hermesBin,
+    hermesBinExecutable: isExecutable(hermesBin),
+    pythonBin,
+    pythonBinExecutable: isExecutable(pythonBin),
+    runtimeManifest,
+    runtimeManifestPresent,
+    runtimeManifestValid: runtimeManifestPresent && runtimeManifestResult.ok,
+    runtimeManifestError: runtimeManifestResult.error,
+    runtimeManifestData: runtimeManifestResult.data,
+    localDesktopPlugin,
+    localDesktopPluginPresent: fs.existsSync(localDesktopPlugin),
+    localDesktopManifest,
+    localDesktopManifestPresent: fs.existsSync(localDesktopManifest),
   };
 }
 
 function appChecks(appPath) {
   const display = run('codesign', ['-dv', '--verbose=4', appPath]);
+  const runtime = appRuntimeState(appPath);
   return {
     appPath,
-    runtime: appRuntimeState(appPath),
+    runtime,
+    hermesVersion: runtime.hermesRuntimeIncluded && runtime.hermesBinExecutable
+      ? run(runtime.hermesBin, ['version'], { timeoutMs: 20000 })
+      : null,
     codesignDisplay: display,
     signingIdentity: parseSigningIdentity(display),
     codesignVerify: run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', appPath], { timeoutMs: 60000 }),
@@ -232,14 +341,73 @@ function commandFailure(check, label) {
 }
 
 function appRuntimeEnforcementFailures(app, appMode) {
-  const runtimeIncluded = !!(app && app.runtime && app.runtime.hermesRuntimeIncluded);
+  const runtime = app && app.runtime ? app.runtime : {};
+  const runtimeIncluded = !!runtime.hermesRuntimeIncluded;
   if (appMode === 'connector' && runtimeIncluded) {
     return ['connector app must not include Contents/Resources/hermes-runtime'];
   }
   if (appMode === 'standalone' && !runtimeIncluded) {
     return ['standalone app must include Contents/Resources/hermes-runtime'];
   }
+  if (appMode === 'standalone' && runtimeIncluded) {
+    const failures = [];
+    if (!runtime.hermesBinExecutable) failures.push('standalone Hermes runtime missing executable bin/hermes');
+    if (!runtime.pythonBinExecutable) failures.push('standalone Hermes runtime missing executable python/bin/python3');
+    if (!runtime.runtimeManifestPresent) failures.push('standalone Hermes runtime missing MANIFEST.json');
+    if (runtime.runtimeManifestPresent && !runtime.runtimeManifestValid) failures.push(`standalone Hermes runtime has invalid MANIFEST.json: ${runtime.runtimeManifestError || 'parse failed'}`);
+    if (!runtime.hermesAgentPresent) failures.push('standalone Hermes runtime missing hermes-agent tree');
+    if (!runtime.localDesktopManifestPresent) failures.push('standalone Hermes runtime missing local_desktop plugin.yaml');
+    if (!runtime.localDesktopPluginPresent) failures.push('standalone Hermes runtime missing local_desktop adapter.py');
+    const embedded = runtime.runtimeManifestData || {};
+    if (runtime.runtimeManifestValid) {
+      if (!embedded.gitHead) failures.push('standalone Hermes runtime MANIFEST.json missing gitHead');
+      if (!embedded.hermesReleaseGitHead) failures.push('standalone Hermes runtime MANIFEST.json missing hermesReleaseGitHead');
+      if (!embedded.bundledHermesAgentTreeSha256) failures.push('standalone Hermes runtime MANIFEST.json missing bundledHermesAgentTreeSha256');
+      if (runtime.hermesAgentTreeSha256Error) failures.push(`standalone Hermes runtime tree hash failed: ${runtime.hermesAgentTreeSha256Error}`);
+      if (
+        runtime.hermesAgentTreeSha256 &&
+        embedded.bundledHermesAgentTreeSha256 &&
+        runtime.hermesAgentTreeSha256 !== embedded.bundledHermesAgentTreeSha256
+      ) {
+        failures.push('standalone Hermes runtime MANIFEST.json tree hash does not match embedded hermes-agent');
+      }
+    }
+    failures.push(...commandFailure(app.hermesVersion, 'app.hermesVersion'));
+    return failures;
+  }
   return [];
+}
+
+function hermesReleaseEnforcementFailures(app, appMode, mode) {
+  if (appMode !== 'standalone' || mode !== 'developer-id') return [];
+  const failures = [];
+  const runtime = app && app.runtime ? app.runtime : {};
+  const embedded = runtime.runtimeManifestData || {};
+  if (!runtime.runtimeManifestValid) {
+    failures.push('Developer ID standalone build must include a valid embedded Hermes runtime MANIFEST.json');
+    return failures;
+  }
+  if ((embedded.hermesSourcePolicy || '') !== 'release') {
+    failures.push('Developer ID standalone build must use HERMES_BUNDLE_SOURCE_POLICY=release');
+  }
+  if (embedded.hermesSourceDirty) {
+    failures.push('Developer ID standalone build must not bundle a dirty Hermes source');
+  }
+  if (!embedded.hermesSourceIsReleaseHead) {
+    failures.push('Developer ID standalone build must bundle the pinned Hermes release head');
+  }
+  if ((embedded.hermesReleaseTag || '') !== expectedHermesReleaseTag) {
+    failures.push(`Developer ID standalone build must bundle Hermes release tag ${expectedHermesReleaseTag}`);
+  }
+  if ((embedded.hermesReleaseUrl || '') !== expectedHermesReleaseUrl) {
+    failures.push(`Developer ID standalone build must record Hermes release URL ${expectedHermesReleaseUrl}`);
+  }
+  if (!embedded.gitHead || !embedded.hermesReleaseGitHead) {
+    failures.push('Developer ID standalone build must record embedded Hermes gitHead and hermesReleaseGitHead');
+  } else if (embedded.gitHead !== embedded.hermesReleaseGitHead) {
+    failures.push('Developer ID standalone build must embed Hermes gitHead matching hermesReleaseGitHead');
+  }
+  return failures;
 }
 
 function appEnforcementFailures(app, mode, appMode) {
@@ -247,6 +415,7 @@ function appEnforcementFailures(app, mode, appMode) {
   failures.push(...commandFailure(app.codesignDisplay, 'app.codesignDisplay'));
   failures.push(...commandFailure(app.codesignVerify, 'app.codesignVerify'));
   failures.push(...appRuntimeEnforcementFailures(app, appMode));
+  failures.push(...hermesReleaseEnforcementFailures(app, appMode, mode));
   const signing = app.signingIdentity || {};
   if (mode === 'developer-id') {
     if (!signing.developerId) failures.push('app is not signed with Developer ID Application');
@@ -289,105 +458,127 @@ function notarizationStatus(kind, checks, mode) {
   return appStapled ? 'app_stapled' : 'stapler_validation_failed';
 }
 
-const pkg = readJson(path.join(repoRoot, 'package.json'), {});
-const hermesManifest = readJson(path.join(repoRoot, 'build', 'hermes-runtime', 'MANIFEST.json'), {});
-const files = artifactFiles();
-const packageGitStatus = gitStatus(repoRoot);
-
-if (!files.length) {
-  console.error('[agent-ui] no .dmg or .zip artifacts found in dist/');
-  process.exit(1);
+function standaloneRuntimeApp(checks) {
+  return (checks.apps || []).find((app) => app.runtime && app.runtime.hermesRuntimeIncluded) || null;
 }
 
-const manifest = {
-  generatedAt: new Date().toISOString(),
-  package: {
-    name: pkg.name || 'agent-ui',
-    version: pkg.version || 'unknown',
-    gitSha: gitHead(repoRoot),
-    sourceDirty: packageGitStatus.length > 0,
-    gitStatus: packageGitStatus,
-  },
-  hermes: {
-    connectorBaselineRequirement: 'v2026.4.30+',
-    standaloneRuntimeIncluded: true,
-    releaseTag: hermesManifest.hermesReleaseTag || 'v2026.4.30',
-    releaseUrl: hermesManifest.hermesReleaseUrl || 'https://github.com/NousResearch/hermes-agent/releases/tag/v2026.4.30',
-    source: hermesManifest.source || 'unknown',
-    sourcePolicy: hermesManifest.hermesSourcePolicy || 'local',
-    gitSha: hermesManifest.gitHead || 'unknown',
-    releaseGitSha: hermesManifest.hermesReleaseGitHead || 'unknown',
-    sourceDirty: Boolean(hermesManifest.hermesSourceDirty),
-    sourceGitStatus: hermesManifest.hermesSourceGitStatus || [],
-    sourceIsReleaseHead: Boolean(hermesManifest.hermesSourceIsReleaseHead),
-    bundledHermesAgentTreeSha256: hermesManifest.bundledHermesAgentTreeSha256 || 'unknown',
-    platformOverlays: hermesManifest.hermesPlatformOverlays || [],
-    python: hermesManifest.python || {},
-  },
-  environment: {
-    platform: process.platform,
-    arch: process.arch,
-    releaseMode: requestedAppMode,
-    appMode: requestedAppMode,
-    signingMode,
-    requireDeveloperId,
-  },
-  artifacts: [],
-};
+function main() {
+  const pkg = readJson(path.join(repoRoot, 'package.json'), {});
+  const buildHermesManifest = readJson(path.join(repoRoot, 'build', 'hermes-runtime', 'MANIFEST.json'), {});
+  const files = artifactFiles();
+  const packageGitStatus = gitStatus(repoRoot);
 
-let failed = false;
-for (const file of files) {
-  const ext = path.extname(file).slice(1).toLowerCase();
-  const checks = ext === 'dmg' ? inspectDmg(file) : inspectZip(file);
-  const allCommandFailures = commandFailures(checks);
-  const appMode = artifactAppMode(file);
-  const failures = enforcementFailures(ext, checks, signingMode, appMode);
-  const hermesRuntimeIncluded = (checks.apps || []).some((app) => app.runtime && app.runtime.hermesRuntimeIncluded);
-  const record = {
-    file: path.relative(repoRoot, file),
-    name: path.basename(file),
-    kind: ext,
-    appMode,
-    sizeBytes: fs.statSync(file).size,
-    sha256: sha256(file),
-    releaseMode: appMode,
-    signingMode,
-    hermesRuntimeIncluded,
-    hermes: {
-      runtimeIncluded: hermesRuntimeIncluded,
-      baselineRequirement: appMode === 'connector' ? 'v2026.4.30+' : undefined,
-      bundledGitSha: appMode === 'standalone' ? (hermesManifest.gitHead || 'unknown') : undefined,
-      bundledReleaseGitSha: appMode === 'standalone' ? (hermesManifest.hermesReleaseGitHead || 'unknown') : undefined,
-      bundledSourcePolicy: appMode === 'standalone' ? (hermesManifest.hermesSourcePolicy || 'local') : undefined,
-      bundledSourceDirty: appMode === 'standalone' ? Boolean(hermesManifest.hermesSourceDirty) : undefined,
-      bundledHermesAgentTreeSha256: appMode === 'standalone' ? (hermesManifest.bundledHermesAgentTreeSha256 || 'unknown') : undefined,
-    },
-    signing: (checks.apps || []).map((app) => ({
-      appPath: app.appPath,
-      developerId: app.signingIdentity.developerId,
-      teamIdentifier: app.signingIdentity.teamIdentifier,
-      authorities: app.signingIdentity.authorities,
-      adhoc: app.signingIdentity.adhoc,
-    })),
-    notarizationStatus: notarizationStatus(ext, checks, signingMode),
-    checks,
-    allCommandFailures,
-    failures,
-  };
-  manifest.artifacts.push(record);
-  if (failures.length) failed = true;
-}
-
-const out = path.join(distDir, 'release-manifest.json');
-fs.writeFileSync(out, `${JSON.stringify(manifest, null, 2)}\n`);
-console.log(`[agent-ui] wrote ${path.relative(repoRoot, out)}`);
-
-if (failed) {
-  console.error('[agent-ui] release verification failed:');
-  for (const artifact of manifest.artifacts) {
-    for (const failure of artifact.failures) {
-      console.error(`- ${artifact.file}: ${failure}`);
-    }
+  if (!files.length) {
+    console.error('[agent-ui] no .dmg or .zip artifacts found in dist/');
+    process.exit(1);
   }
-  process.exit(1);
+
+  const manifest = {
+    generatedAt: new Date().toISOString(),
+    package: {
+      name: pkg.name || 'agent-ui',
+      version: pkg.version || 'unknown',
+      gitSha: gitHead(repoRoot),
+      sourceDirty: packageGitStatus.length > 0,
+      gitStatus: packageGitStatus,
+    },
+    hermes: {
+      connectorBaselineRequirement: 'v2026.4.30+',
+      standaloneRuntimeIncluded: true,
+      releaseTag: buildHermesManifest.hermesReleaseTag || expectedHermesReleaseTag,
+      releaseUrl: buildHermesManifest.hermesReleaseUrl || expectedHermesReleaseUrl,
+      source: buildHermesManifest.source || 'unknown',
+      sourcePolicy: buildHermesManifest.hermesSourcePolicy || 'local',
+      gitSha: buildHermesManifest.gitHead || 'unknown',
+      releaseGitSha: buildHermesManifest.hermesReleaseGitHead || 'unknown',
+      sourceDirty: Boolean(buildHermesManifest.hermesSourceDirty),
+      sourceGitStatus: buildHermesManifest.hermesSourceGitStatus || [],
+      sourceIsReleaseHead: Boolean(buildHermesManifest.hermesSourceIsReleaseHead),
+      bundledHermesAgentTreeSha256: buildHermesManifest.bundledHermesAgentTreeSha256 || 'unknown',
+      platformOverlays: buildHermesManifest.hermesPlatformOverlays || [],
+      python: buildHermesManifest.python || {},
+    },
+    environment: {
+      platform: process.platform,
+      arch: process.arch,
+      releaseMode: requestedAppMode,
+      appMode: requestedAppMode,
+      signingMode,
+      requireDeveloperId,
+    },
+    artifacts: [],
+  };
+
+  let failed = false;
+  for (const file of files) {
+    const ext = path.extname(file).slice(1).toLowerCase();
+    const checks = ext === 'dmg' ? inspectDmg(file) : inspectZip(file);
+    const allCommandFailures = commandFailures(checks);
+    const appMode = artifactAppMode(file);
+    const failures = enforcementFailures(ext, checks, signingMode, appMode);
+    const hermesRuntimeIncluded = (checks.apps || []).some((app) => app.runtime && app.runtime.hermesRuntimeIncluded);
+    const runtimeApp = standaloneRuntimeApp(checks);
+    const embeddedHermesManifest = runtimeApp && runtimeApp.runtime ? runtimeApp.runtime.runtimeManifestData || {} : {};
+    const record = {
+      file: path.relative(repoRoot, file),
+      name: path.basename(file),
+      kind: ext,
+      appMode,
+      sizeBytes: fs.statSync(file).size,
+      sha256: sha256(file),
+      releaseMode: appMode,
+      signingMode,
+      hermesRuntimeIncluded,
+      hermes: {
+        runtimeIncluded: hermesRuntimeIncluded,
+        baselineRequirement: appMode === 'connector' ? 'v2026.4.30+' : undefined,
+        bundledGitSha: appMode === 'standalone' ? (embeddedHermesManifest.gitHead || 'unknown') : undefined,
+        bundledReleaseGitSha: appMode === 'standalone' ? (embeddedHermesManifest.hermesReleaseGitHead || 'unknown') : undefined,
+        bundledSourcePolicy: appMode === 'standalone' ? (embeddedHermesManifest.hermesSourcePolicy || 'unknown') : undefined,
+        bundledSourceDirty: appMode === 'standalone' ? Boolean(embeddedHermesManifest.hermesSourceDirty) : undefined,
+        bundledHermesAgentTreeSha256: appMode === 'standalone' ? (embeddedHermesManifest.bundledHermesAgentTreeSha256 || 'unknown') : undefined,
+        embeddedRuntimeManifestPath: runtimeApp && runtimeApp.runtime ? runtimeApp.runtime.runtimeManifest : undefined,
+        embeddedRuntimeManifestValid: runtimeApp && runtimeApp.runtime ? runtimeApp.runtime.runtimeManifestValid : undefined,
+      },
+      signing: (checks.apps || []).map((app) => ({
+        appPath: app.appPath,
+        developerId: app.signingIdentity.developerId,
+        teamIdentifier: app.signingIdentity.teamIdentifier,
+        authorities: app.signingIdentity.authorities,
+        adhoc: app.signingIdentity.adhoc,
+      })),
+      notarizationStatus: notarizationStatus(ext, checks, signingMode),
+      checks,
+      allCommandFailures,
+      failures,
+    };
+    manifest.artifacts.push(record);
+    if (failures.length) failed = true;
+  }
+
+  const out = path.join(distDir, 'release-manifest.json');
+  fs.writeFileSync(out, `${JSON.stringify(manifest, null, 2)}\n`);
+  console.log(`[agent-ui] wrote ${path.relative(repoRoot, out)}`);
+
+  if (failed) {
+    console.error('[agent-ui] release verification failed:');
+    for (const artifact of manifest.artifacts) {
+      for (const failure of artifact.failures) {
+        console.error(`- ${artifact.file}: ${failure}`);
+      }
+    }
+    process.exit(1);
+  }
 }
+
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  appRuntimeEnforcementFailures,
+  appRuntimeState,
+  hermesReleaseEnforcementFailures,
+  standaloneRuntimeApp,
+  treeSha256,
+};

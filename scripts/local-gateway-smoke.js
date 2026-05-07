@@ -43,6 +43,25 @@ function request(method, url, { headers = {}, body = '' } = {}) {
   });
 }
 
+function eventStreamProbe(url, token) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(url, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+      timeout: 1500,
+    }, (res) => {
+      const contentType = String(res.headers['content-type'] || '');
+      res.destroy();
+      resolve({ status: res.statusCode || 0, contentType });
+    });
+    req.on('timeout', () => {
+      req.destroy(new Error(`request timed out: ${url}`));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 function portAvailable() {
   return new Promise((resolve) => {
     const server = net.createServer();
@@ -147,6 +166,10 @@ async function waitForGateway(baseUrl, timeoutMs = 15000) {
       schemaProbe.json.error !== 'missing_conversation_id'
     ) {
       fail(`Gateway auth/schema probe failed: ${schemaProbe.status} ${schemaProbe.text}`);
+    }
+    const eventsProbe = await eventStreamProbe(`${baseUrl}/events`, 'agent-ui-smoke-secret');
+    if (eventsProbe.status !== 200 || !/text\/event-stream/i.test(eventsProbe.contentType)) {
+      fail(`Gateway event stream probe failed: ${eventsProbe.status} ${eventsProbe.contentType}`);
     }
     console.log(`[agent-ui] bundled Hermes gateway smoke passed at ${baseUrl}`);
   } catch (error) {

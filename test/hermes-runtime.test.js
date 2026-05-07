@@ -20,6 +20,7 @@ const {
   ensureGatewayProcess,
   gatewayAuthOk,
   gatewayArgsFor,
+  gatewayEventsOk,
   gatewayReadyOk,
   gatewayStartupWaitBudgetMs,
   resolveHermesCommand,
@@ -121,6 +122,7 @@ test('connector discovery prefers Hermes venv over AURA wrapper', () => {
   assert.notEqual(venv, -1);
   assert.notEqual(wrapper, -1);
   assert.equal(venv < wrapper, true);
+  assert.equal(candidates.some((candidate) => candidate.endsWith(path.join('.local', 'bin', 'hermes'))), false);
 });
 
 test('ensureGatewayConfigFile creates local desktop platform config', (t) => {
@@ -409,6 +411,16 @@ test('gateway readiness requires authenticated local desktop message access', as
     if (String(url).endsWith('/health')) {
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     }
+    if (String(url).endsWith('/events')) {
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(': ready\n\n'));
+        },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      });
+    }
     return new Response(JSON.stringify({ ok: false, error: 'missing_conversation_id' }), { status: 400 });
   };
   t.after(() => {
@@ -416,8 +428,28 @@ test('gateway readiness requires authenticated local desktop message access', as
   });
 
   assert.equal(await gatewayAuthOk('http://127.0.0.1:8766', 'secret'), true);
+  assert.equal(await gatewayEventsOk('http://127.0.0.1:8766', 'secret'), true);
   assert.equal(await gatewayReadyOk('http://127.0.0.1:8766', 'secret'), true);
   assert.equal(calls.some((call) => call.method === 'POST' && call.auth === 'Bearer secret' && call.body === '{}'), true);
+  assert.equal(calls.some((call) => call.url.endsWith('/events') && call.auth === 'Bearer secret'), true);
+});
+
+test('gateway readiness rejects immediately closed event stream', async (t) => {
+  isolateEnv(t);
+  global.fetch = async (url) => {
+    if (String(url).endsWith('/events')) {
+      return new Response(new ReadableStream({ start(controller) { controller.close(); } }), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      });
+    }
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  };
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  assert.equal(await gatewayEventsOk('http://127.0.0.1:8766', 'secret', 50), false);
 });
 
 test('gateway readiness rejects unauthenticated local desktop message access', async (t) => {
@@ -433,5 +465,6 @@ test('gateway readiness rejects unauthenticated local desktop message access', a
   });
 
   assert.equal(await gatewayAuthOk('http://127.0.0.1:8766', 'secret'), false);
+  assert.equal(await gatewayEventsOk('http://127.0.0.1:8766', 'secret'), false);
   assert.equal(await gatewayReadyOk('http://127.0.0.1:8766', 'secret'), false);
 });

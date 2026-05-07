@@ -2,6 +2,18 @@
 
 const fs = require('fs');
 const http = require('http');
+const crypto = require('crypto');
+
+function evalToken() {
+  return String(process.env.AGENT_UI_EVAL_TOKEN || '').trim();
+}
+
+function safeCompare(a, b) {
+  const left = Buffer.from(String(a || ''), 'utf8');
+  const right = Buffer.from(String(b || ''), 'utf8');
+  if (left.length !== right.length || left.length === 0) return false;
+  return crypto.timingSafeEqual(left, right);
+}
 
 function readEvalJson(req) {
   return new Promise((resolve, reject) => {
@@ -44,8 +56,21 @@ function writeEvalPortFile(port) {
   fs.writeFileSync(file, `${port}\n`, 'utf8');
 }
 
+function requestAuthorized(req) {
+  const token = evalToken();
+  if (!token) return false;
+  const header = String(req.headers && req.headers.authorization || '').trim();
+  const prefix = 'Bearer ';
+  if (!header.startsWith(prefix)) return false;
+  return safeCompare(header.slice(prefix.length).trim(), token);
+}
+
 async function handleEvalRequest(req, res, handlers) {
   try {
+    if (!requestAuthorized(req)) {
+      sendEvalJson(res, 401, { ok: false, error: 'unauthorized' });
+      return;
+    }
     const url = new URL(req.url || '/', 'http://127.0.0.1');
     if (req.method === 'GET' && url.pathname === '/health') {
       sendEvalJson(res, 200, { ok: true, app: 'agent-UI', eval: true });
@@ -112,6 +137,10 @@ async function handleEvalRequest(req, res, handlers) {
 
 function startAgentUIEvalServer(handlers, log = console) {
   if (process.env.AGENT_UI_EVAL !== '1') return null;
+  if (!evalToken()) {
+    log.warn('[agent-ui] eval server disabled: AGENT_UI_EVAL_TOKEN is required.');
+    return null;
+  }
 
   const server = http.createServer((req, res) => {
     void handleEvalRequest(req, res, handlers);

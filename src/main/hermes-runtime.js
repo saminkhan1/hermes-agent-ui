@@ -721,8 +721,50 @@ async function gatewayAuthOk(baseUrl, key, timeoutMs = 900) {
   }
 }
 
+async function gatewayEventsOk(baseUrl, key, timeoutMs = 900) {
+  const secret = String(key || '').trim();
+  if (!global.fetch || !secret) return false;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const url = `${String(baseUrl).replace(/\/+$/, '')}/events`;
+    const res = await global.fetch(url, {
+      headers: {
+        authorization: `Bearer ${secret}`,
+      },
+      signal: controller.signal,
+    });
+    const contentType = res && res.headers && typeof res.headers.get === 'function'
+      ? String(res.headers.get('content-type') || '')
+      : '';
+    if (!(res && res.ok && /text\/event-stream/i.test(contentType))) return false;
+    if (!res.body || typeof res.body.getReader !== 'function') return false;
+    const reader = res.body.getReader();
+    const probeMs = Math.min(150, Math.max(25, Math.floor(timeoutMs / 3)));
+    const read = reader.read().catch(() => ({ error: true }));
+    let probeTimer = null;
+    const result = await Promise.race([
+      read,
+      new Promise((resolve) => {
+        probeTimer = setTimeout(() => resolve({ pending: true }), probeMs);
+      }),
+    ]);
+    if (probeTimer) clearTimeout(probeTimer);
+    if (result && result.error) return false;
+    if (result && result.done) return false;
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+}
+
 async function gatewayReadyOk(baseUrl, key, timeoutMs = 900) {
-  return await healthOk(baseUrl, timeoutMs) && await gatewayAuthOk(baseUrl, key, timeoutMs);
+  return await healthOk(baseUrl, timeoutMs) &&
+    await gatewayAuthOk(baseUrl, key, timeoutMs) &&
+    await gatewayEventsOk(baseUrl, key, timeoutMs);
 }
 
 function parseGatewayBaseUrl(baseUrl) {
@@ -1058,6 +1100,7 @@ module.exports = {
   connectorPluginInstallCommand,
   executableExists,
   gatewayAuthOk,
+  gatewayEventsOk,
   gatewayReadyOk,
   gatewayArgsFor,
   gatewayStartupWaitBudgetMs,

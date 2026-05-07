@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { HermesGatewayClient } = require('./hermes-gateway-client');
+const { HermesGatewayClient, getAgentUIConfigDir } = require('./hermes-gateway-client');
 const { attachmentDescriptor, normalizeAttachmentType } = require('./hermes-attachments');
 const { isAuthErrorText } = require('./hermes-auth');
 const {
@@ -29,10 +29,14 @@ let onConversationPushed = () => {};
 
 const HERMES_SOURCE = 'agent-ui';
 const MAX_METADATA_BYTES = 16384;
+const DISMISSED_RETENTION_MS = 8 * 24 * 60 * 60 * 1000;
+const DEFAULT_GATEWAY_STREAM_DISCONNECT_GRACE_MS = 15000;
 
 let gatewayClient = null;
 let gatewayNotify = () => {};
 let onAuthRequired = () => {};
+let gatewayDisconnectTimer = null;
+let dismissedGatewayConversations = null;
 
 function setOnConversationPushed(fn) {
   onConversationPushed = typeof fn === 'function' ? fn : () => {};
@@ -44,6 +48,78 @@ function setOnAuthRequired(fn) {
 
 function now() {
   return Date.now();
+}
+
+function gatewayStreamDisconnectGraceMs() {
+  const configured = Number(process.env.AGENT_UI_GATEWAY_STREAM_DISCONNECT_GRACE_MS);
+  return Number.isFinite(configured) && configured >= 0
+    ? Math.trunc(configured)
+    : DEFAULT_GATEWAY_STREAM_DISCONNECT_GRACE_MS;
+}
+
+function dismissedStatePath() {
+  return path.join(getAgentUIConfigDir(), 'dismissed-gateway-conversations.json');
+}
+
+function readDismissedGatewayConversations() {
+  if (dismissedGatewayConversations) return dismissedGatewayConversations;
+  dismissedGatewayConversations = {};
+  try {
+    if (fs.existsSync(dismissedStatePath())) {
+      const parsed = JSON.parse(fs.readFileSync(dismissedStatePath(), 'utf8'));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        dismissedGatewayConversations = parsed;
+      }
+    }
+  } catch {
+    dismissedGatewayConversations = {};
+  }
+  pruneDismissedGatewayConversations();
+  return dismissedGatewayConversations;
+}
+
+function writeDismissedGatewayConversations() {
+  try {
+    fs.mkdirSync(path.dirname(dismissedStatePath()), { recursive: true });
+    fs.writeFileSync(dismissedStatePath(), `${JSON.stringify(readDismissedGatewayConversations(), null, 2)}\n`, 'utf8');
+  } catch {
+    // Dismissal tombstones are a UX guard, not critical state.
+  }
+}
+
+function pruneDismissedGatewayConversations() {
+  const state = dismissedGatewayConversations || {};
+  const cutoff = now() - DISMISSED_RETENTION_MS;
+  let changed = false;
+  for (const [catId, dismissedAt] of Object.entries(state)) {
+    const ts = Number(dismissedAt || 0);
+    if (!Number.isFinite(ts) || ts <= cutoff) {
+      delete state[catId];
+      changed = true;
+    }
+  }
+  if (changed) writeDismissedGatewayConversations();
+}
+
+function isDismissedGatewayConversation(catId) {
+  const id = String(catId || '').trim();
+  if (!id) return false;
+  const state = readDismissedGatewayConversations();
+  const ts = Number(state[id] || 0);
+  return Number.isFinite(ts) && ts > 0 && now() - ts <= DISMISSED_RETENTION_MS;
+}
+
+function rememberDismissedGatewayConversation(catId) {
+  const id = String(catId || '').trim();
+  if (!id) return;
+  const state = readDismissedGatewayConversations();
+  state[id] = now();
+  writeDismissedGatewayConversations();
+}
+
+function clearGatewayDisconnectTimer() {
+  if (gatewayDisconnectTimer) clearTimeout(gatewayDisconnectTimer);
+  gatewayDisconnectTimer = null;
 }
 
 function sha256(value) {
@@ -216,6 +292,102 @@ function finishBubbleLineFromConversation(rec) {
   return undefined;
 }
 
+function latestUserRetry(rec) {
+  if (!rec || !Array.isArray(rec.items)) return { text: rec && rec.prompt ? String(rec.prompt) : '', kind: 'initial' };
+  for (let i = rec.items.length - 1; i >= 0; i--) {
+    const item = rec.items[i];
+    if (item && item.kind === 'user' && item.text) {
+      const text = String(item.text);
+      const prompt = String(rec.prompt || '');
+      return {
+        text,
+        kind: text === prompt ? 'initial' : 'followup',
+      };
+    }
+  }
+  return { text: rec && rec.prompt ? String(rec.prompt) : '', kind: 'initial' };
+}
+
+function appendConversationError(rec, message) {
+  if (!rec || !Array.isArray(rec.items)) return;
+  const text = String(message || '').trim();
+  if (!text) return;
+  const last = rec.items.at(-1);
+  if (last && last.kind === 'error' && last.text === text) return;
+  rec.items.push({ kind: 'error', text, at: now() });
+}
+
+function terminalizeGatewayConversation(catId, rec, message, reason) {
+  if (!rec) return false;
+  const wasRunning = String(rec.runStatus || '').toLowerCase() === 'running' ||
+    !!(rec.typing && rec.typing.active);
+  appendConversationError(rec, message);
+  if (!wasRunning) {
+    persistConversation(catId);
+    onConversationPushed({ catId });
+    return false;
+  }
+  rec.runStatus = 'error';
+  rec.endResult = message;
+  rec.durationMs = rec.startedAt ? now() - rec.startedAt : 0;
+  rec.activeAssistantBubble = false;
+  rec.typing = {
+    ...(rec.typing || {}),
+    active: false,
+    stoppedAt: now(),
+  };
+  persistConversation(catId);
+  onConversationPushed({ catId });
+  recordTrace('gateway_terminalized', {
+    catId,
+    reason,
+    durationMs: rec.durationMs,
+    transport: 'gateway',
+  });
+  gatewayNotify({
+    catId,
+    status: 'error',
+    result: message,
+    durationMs: rec.durationMs,
+    finishBubbleLine: finishBubbleLineFromConversation(rec),
+  });
+  return true;
+}
+
+function terminalizeRunningGatewayConversations(message, reason) {
+  let count = 0;
+  for (const [catId, rec] of conversations.entries()) {
+    if (!rec || rec.transport !== 'gateway') continue;
+    const running = String(rec.runStatus || '').toLowerCase() === 'running' ||
+      !!(rec.typing && rec.typing.active);
+    if (!running) continue;
+    if (terminalizeGatewayConversation(catId, rec, message, reason)) count += 1;
+  }
+  return count;
+}
+
+function handleGatewayConnectionState(state = {}) {
+  const status = String(state.state || '').trim();
+  if (status === 'connected') {
+    clearGatewayDisconnectTimer();
+    return;
+  }
+  if (status !== 'disconnected') return;
+  const hasRunningGatewayConversation = [...conversations.values()].some((rec) => {
+    return rec && rec.transport === 'gateway' &&
+      (String(rec.runStatus || '').toLowerCase() === 'running' || !!(rec.typing && rec.typing.active));
+  });
+  if (!hasRunningGatewayConversation || gatewayDisconnectTimer) return;
+  const message = [
+    'Hermes event stream disconnected; the run may still be active in Hermes, but agent-UI cannot receive updates.',
+    state.error ? `Last error: ${state.error}` : '',
+  ].filter(Boolean).join(' ');
+  gatewayDisconnectTimer = setTimeout(() => {
+    gatewayDisconnectTimer = null;
+    terminalizeRunningGatewayConversations(message, 'gateway-event-stream-disconnected');
+  }, gatewayStreamDisconnectGraceMs());
+}
+
 function getNotify(getMainWindow) {
   return (payload) => {
     const win = getMainWindow && getMainWindow();
@@ -236,6 +408,7 @@ function ensureConversationForGatewayEvent(catId, event = {}) {
   const id = String(catId);
   let rec = conversations.get(id);
   if (rec) return rec;
+  if (isDismissedGatewayConversation(id)) return null;
   rec = {
     runtime: 'local',
     transport: 'gateway',
@@ -262,6 +435,7 @@ function handleGatewayEvent(event = {}) {
   const type = String(event.type || '').trim();
   if (!['message.created', 'message.updated', 'message.deleted', 'attachment.created', 'typing.started', 'typing.stopped'].includes(type)) return;
   const rec = ensureConversationForGatewayEvent(catId, event);
+  if (!rec) return;
 
   if (type === 'message.created' || type === 'message.updated') {
     upsertGatewayAssistantMessage(catId, event);
@@ -335,12 +509,14 @@ function handleGatewayEvent(event = {}) {
       event.metadata && event.metadata.message,
     ].filter(Boolean).join('\n');
     if (status === 'error' && isAuthErrorText(failureText) && !rec.authPrompted) {
+      const retry = latestUserRetry(rec);
       rec.authPrompted = true;
       onAuthRequired({
         catId,
-        prompt: rec.prompt || '',
+        prompt: retry.text || rec.prompt || '',
         launchContext: rec.pointerContext || null,
-        reason: 'gateway-auth-error',
+        reason: 'provider-auth-required',
+        retryKind: retry.kind,
         error: failureText,
       });
     }
@@ -355,20 +531,16 @@ function handleGatewayEvent(event = {}) {
 }
 
 function handleGatewayReplayExpired(error) {
+  const message = 'Hermes event replay window expired; reconnected live, but older missed updates may be unavailable.';
+  let affected = 0;
   for (const [catId, rec] of conversations.entries()) {
     if (rec && rec.transport === 'gateway') {
-      rec.items.push({
-        kind: 'error',
-        text: 'Hermes event replay window expired; reconnected live, but older missed updates may be unavailable.',
-        at: now(),
-      });
-      persistConversation(catId);
-      onConversationPushed({ catId });
-      break;
+      if (terminalizeGatewayConversation(catId, rec, message, 'gateway-replay-expired')) affected += 1;
     }
   }
   recordTrace('gateway_replay_expired', {
     error: error && error.message ? error.message : String(error || ''),
+    terminalized: affected,
   });
 }
 
@@ -382,6 +554,7 @@ function ensureGatewayClient(opts = {}) {
       clientVersion: packageVersion(),
       resetLastSeq,
       onEvent: handleGatewayEvent,
+      onConnectionChange: handleGatewayConnectionState,
       onReplayExpired: handleGatewayReplayExpired,
     });
   }
@@ -599,6 +772,7 @@ async function dismissAgent(catId, opts = {}) {
     return { ok: false, error: 'Dismiss is available after Hermes finishes.' };
   }
   await disposeAgentResources(id, { log });
+  if (rec && rec.transport === 'gateway') rememberDismissedGatewayConversation(id);
   deleteConversationState(id);
   const win = getMainWindow && getMainWindow();
   if (win && !win.isDestroyed()) {
@@ -793,7 +967,7 @@ async function runOnGateway(catId, notify, log, prompt, opts = {}) {
   gatewayNotify = notify || gatewayNotify;
 }
 
-function markGatewayError(catId, error, notify) {
+function markGatewayError(catId, error, notify, opts = {}) {
   const id = String(catId);
   const rec = conversations.get(id);
   const message = error && error.message ? error.message : String(error || 'Hermes gateway is unavailable.');
@@ -815,12 +989,14 @@ function markGatewayError(catId, error, notify) {
     finishBubbleLine: finishBubbleLineFromConversation(rec),
   });
   if (rec && isAuthErrorText(message) && !rec.authPrompted) {
+    const fallbackRetry = latestUserRetry(rec);
     rec.authPrompted = true;
     onAuthRequired({
       catId: id,
-      prompt: rec.prompt || '',
+      prompt: String(opts.retryText || fallbackRetry.text || rec.prompt || ''),
       launchContext: rec.pointerContext || null,
-      reason: 'gateway-auth-error',
+      reason: 'provider-auth-required',
+      retryKind: opts.retryKind || fallbackRetry.kind,
       error: message,
     });
   }
@@ -847,7 +1023,7 @@ async function runAgentLifecycle({ catId, prompt, runtime, pointerContext, notif
       resetGatewayReplay,
     });
   } catch (e) {
-    markGatewayError(id, e, notify);
+    markGatewayError(id, e, notify, { retryText: String(prompt || ''), retryKind: 'initial' });
   }
 }
 
@@ -875,9 +1051,14 @@ async function sendFollowup(catId, text, opts = {}) {
     log.warn('sendFollowup: no conversation', id);
     return { ok: false, error: 'Session is not available.' };
   }
+  if (String(rec.runStatus || '').toLowerCase() === 'running') {
+    return { ok: false, error: 'Follow-up is available after Hermes finishes.' };
+  }
   ensureHermesEntry(id, rec.pointerContext || null);
 
-  rec.items.push({ kind: 'user', text: t, at: now() });
+  if (opts.recordUserItem !== false) {
+    rec.items.push({ kind: 'user', text: t, at: now() });
+  }
   rec.runStatus = 'running';
   rec.endResult = undefined;
   rec.durationMs = undefined;
@@ -892,7 +1073,7 @@ async function sendFollowup(catId, text, opts = {}) {
     await runOnGateway(id, notify, log, t, { includeContext: false, getMainWindow });
     return { ok: true };
   } catch (e) {
-    markGatewayError(id, e, notify);
+    markGatewayError(id, e, notify, { retryText: t, retryKind: 'followup' });
     return { ok: false, error: e && e.message ? e.message : String(e) };
   }
 }
@@ -920,13 +1101,14 @@ async function cancelAgent(catId, opts = {}) {
     await runOnGateway(id, notify, log, '/stop', { includeContext: false, getMainWindow });
     return { ok: true };
   } catch (e) {
-    markGatewayError(id, e, notify);
+    markGatewayError(id, e, notify, { retryText: '/stop', retryKind: 'command' });
     return { ok: false, error: e && e.message ? e.message : String(e) };
   }
 }
 
 function cancelAllAgents() {
   active.clear();
+  clearGatewayDisconnectTimer();
   if (gatewayClient) {
     gatewayClient.stop();
   }
@@ -939,6 +1121,8 @@ function resetGatewayClientForTests() {
   gatewayClient = null;
   gatewayNotify = () => {};
   conversations.clear();
+  dismissedGatewayConversations = null;
+  clearGatewayDisconnectTimer();
 }
 
 module.exports = {

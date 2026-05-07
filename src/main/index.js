@@ -261,6 +261,7 @@ setOnAuthRequired((payload = {}) => {
       runtime: 'local',
       modalContextId: '',
       launchContext: payload.launchContext || null,
+      retryKind: String(payload.retryKind || 'initial'),
     },
     reason: payload.reason || 'gateway-auth-error',
   });
@@ -2255,7 +2256,15 @@ trustedIpcHandle('hermes-auth-finish', () => {
   resetAuthFlow({ clearPending: true });
   closeHermesAuthWindow();
   if (pending) {
-    launchPreparedCatRun(pending, { closeModal: false });
+    if (String(pending.retryKind || '') === 'followup') {
+      void sendFollowup(pending.catId, boundedText(pending.prompt), {
+        getMainWindow: () => mainWindow,
+        log: console,
+        recordUserItem: false,
+      });
+    } else {
+      launchPreparedCatRun(pending, { closeModal: false });
+    }
     return { ok: true, started: true, catId: pending.catId || null };
   }
   return { ok: true, started: false };
