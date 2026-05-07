@@ -62,3 +62,28 @@ test('auth browser handoff has monitor recovery and fallback menu copy', () => {
   assert.match(html, /btn-retry-oauth/);
   assert.match(preload, /checkHermesAuthNow/);
 });
+
+test('privileged preload is bound to trusted renderer origins', () => {
+  assert.match(main, /function trustedRendererDevBaseUrl/);
+  assert.match(main, /app\.isPackaged/);
+  assert.match(main, /function isLoopbackHost/);
+  assert.match(main, /function isTrustedRendererUrl/);
+  assert.match(main, /setWindowOpenHandler\(\(\) => \(\{ action: 'deny' \}\)\)/);
+  assert.match(main, /will-navigate/);
+  assert.match(main, /function isTrustedIpcEvent/);
+  assert.match(main, /function trustedIpcHandle/);
+  assert.match(main, /trustedIpcHandle\('open-external-url'/);
+  assert.doesNotMatch(main, /if \(process\.env\.ELECTRON_RENDERER_URL\)/);
+});
+
+test('global quit shortcut is not registered', () => {
+  assert.match(main, /globalShortcut\.register\(newCatAccelerator/);
+  assert.doesNotMatch(main, /globalShortcut\.register\('Command\+Q'/);
+  assert.doesNotMatch(main, /globalShortcut\.register\('Control\+Q'/);
+});
+
+test('gateway replay hydration is pushed into the overlay on launch', () => {
+  assert.match(main, /hydrateGatewayConversations\(\{ getMainWindow: \(\) => mainWindow, log: console \}\)/);
+  assert.match(main, /function sendConversationToOverlay/);
+  assert.match(main, /sendConversationToOverlay\(_id\)/);
+});

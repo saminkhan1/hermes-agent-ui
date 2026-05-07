@@ -434,6 +434,19 @@ class LocalDesktopAdapter(BasePlatformAdapter):
                 queue.put_nowait(event)
             except asyncio.QueueFull:
                 self._subscribers.discard(queue)
+                self._close_overflowed_subscriber(queue)
+
+    def _close_overflowed_subscriber(self, queue: asyncio.Queue) -> None:
+        logger.warning("[local_desktop] closing slow SSE subscriber after queue overflow")
+        try:
+            while True:
+                queue.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+        try:
+            queue.put_nowait(None)
+        except asyncio.QueueFull:  # pragma: no cover - queue was just drained
+            pass
 
     def _authorized(self, request: "web.Request") -> bool:
         header = request.headers.get("Authorization", "")

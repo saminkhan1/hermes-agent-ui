@@ -18,6 +18,19 @@ function emptySseResponse() {
   });
 }
 
+function sseResponse(frames) {
+  const body = frames.join('\n\n') + '\n\n';
+  return new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(body));
+      controller.close();
+    },
+  }), {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' },
+  });
+}
+
 function setupGatewayEnv(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-agents-'));
   process.env.AGENT_UI_CONFIG_DIR = dir;
@@ -126,6 +139,82 @@ test('gateway follow-up is sent while session is running', async (t) => {
   assert.equal(posts.length, 2);
   assert.equal(posts[1].conversation_id, 'cat-gateway-2');
   assert.equal(posts[1].text, 'plain follow up');
+});
+
+test('first gateway client resets replay cursor when no conversations were hydrated', async (t) => {
+  setupGatewayEnv(t);
+  const statePath = path.join(process.env.AGENT_UI_CONFIG_DIR, 'hermes-gateway.json');
+  fs.writeFileSync(statePath, JSON.stringify({ lastSeq: 55 }), 'utf8');
+  const eventUrls = [];
+  const posts = [];
+  global.fetch = async (url, opts = {}) => {
+    const textUrl = String(url);
+    if (textUrl.includes('/events')) {
+      eventUrls.push(textUrl);
+      return emptySseResponse();
+    }
+    if (textUrl.endsWith('/messages')) {
+      const body = JSON.parse(opts.body);
+      if (!body.conversation_id) {
+        return new Response(JSON.stringify({ ok: false, error: 'missing_conversation_id' }), { status: 400 });
+      }
+      posts.push(body);
+      return new Response(JSON.stringify({ ok: true, accepted: true }), { status: 202 });
+    }
+    return new Response(JSON.stringify({ ok: true, latest_seq: 55 }), { status: 200 });
+  };
+
+  agents.startAgentForCat({
+    catId: 'cat-replay-reset',
+    prompt: 'New prompt',
+    runtime: 'local',
+    pointerContext: null,
+  }, { getMainWindow: () => null, log: { warn() {} } });
+
+  await waitFor(() => posts.length === 1 && eventUrls.length > 0);
+  assert.equal(eventUrls.some((url) => url.includes('last_seq=')), false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')), { lastSeq: 0 });
+});
+
+test('gateway hydration replays retained conversations after restart', async (t) => {
+  setupGatewayEnv(t);
+  const statePath = path.join(process.env.AGENT_UI_CONFIG_DIR, 'hermes-gateway.json');
+  fs.writeFileSync(statePath, JSON.stringify({ lastSeq: 88 }), 'utf8');
+  const eventUrls = [];
+  const pushed = [];
+  agents.setOnConversationPushed(({ catId }) => pushed.push(String(catId)));
+  global.fetch = async (url, opts = {}) => {
+    const textUrl = String(url);
+    if (textUrl.includes('/events')) {
+      eventUrls.push(textUrl);
+      return sseResponse([
+        'id: 89\nevent: message.created\ndata: {"conversation_id":"cat-rehydrated","message_id":"m1","text":"Restored answer"}',
+        'id: 90\nevent: typing.stopped\ndata: {"conversation_id":"cat-rehydrated","outcome":"success"}',
+      ]);
+    }
+    if (textUrl.endsWith('/messages')) {
+      const body = opts.body ? JSON.parse(opts.body) : {};
+      if (!body.conversation_id) {
+        return new Response(JSON.stringify({ ok: false, error: 'missing_conversation_id' }), { status: 400 });
+      }
+      return new Response(JSON.stringify({ ok: true, accepted: true }), { status: 202 });
+    }
+    return new Response(JSON.stringify({ ok: true, latest_seq: 90 }), { status: 200 });
+  };
+
+  const result = await agents.hydrateGatewayConversations({
+    getMainWindow: () => null,
+    log: { warn() {} },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.resetLastSeq, true);
+  await waitFor(() => agents.getAgentConversation('cat-rehydrated').found);
+  const conversation = agents.getAgentConversation('cat-rehydrated');
+  assert.equal(eventUrls.some((url) => url.includes('last_seq=')), false);
+  assert.equal(conversation.runStatus, 'completed');
+  assert.equal(conversation.items[0].text, 'Restored answer');
+  assert.equal(pushed.includes('cat-rehydrated'), true);
 });
 
 test('gateway cancel sends Hermes stop command while session is running', async (t) => {

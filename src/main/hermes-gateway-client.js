@@ -144,10 +144,11 @@ class HermesGatewayClient {
     this.sseDisconnectLogThrottleMs = Math.max(0, Math.trunc(Number(opts.sseDisconnectLogThrottleMs) || 30000));
     const savedState = readJsonFile(this.statePath, {});
     const savedLastSeq = Number(savedState && savedState.lastSeq);
+    const resetLastSeq = !!opts.resetLastSeq;
     const hasStaleStateKeys = !!(savedState && typeof savedState === 'object' &&
       Object.keys(savedState).some((key) => key !== 'lastSeq'));
     this.state = {
-      lastSeq: Number.isFinite(savedLastSeq) && savedLastSeq > 0 ? Math.trunc(savedLastSeq) : 0,
+      lastSeq: !resetLastSeq && Number.isFinite(savedLastSeq) && savedLastSeq > 0 ? Math.trunc(savedLastSeq) : 0,
     };
     this.abortController = null;
     this.streamPromise = null;
@@ -157,7 +158,7 @@ class HermesGatewayClient {
     this.stateDirty = false;
     this.lastSseDisconnectLogAt = 0;
     this.lastSseDisconnectLogKey = '';
-    if (hasStaleStateKeys) this.saveState();
+    if (hasStaleStateKeys || (resetLastSeq && Number.isFinite(savedLastSeq) && savedLastSeq > 0)) this.saveState();
   }
 
   saveState() {

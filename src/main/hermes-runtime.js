@@ -35,6 +35,15 @@ const CONNECTOR_GATEWAY_RESTART_APPROVED_ENV = 'AGENT_UI_CONNECTOR_GATEWAY_RESTA
 let gatewayProcess = null;
 let gatewayStartPromise = null;
 
+function pythonNoBytecodeEnv(extra = {}) {
+  return {
+    ...process.env,
+    PYTHONDONTWRITEBYTECODE: '1',
+    PYTHONNOUSERSITE: '1',
+    ...extra,
+  };
+}
+
 function executableExists(filePath) {
   try {
     const st = fs.statSync(filePath);
@@ -343,7 +352,7 @@ async function bundledVoiceDependenciesAvailable(python) {
       'import importlib.util, json',
       'missing = [name for name in ("sounddevice", "numpy", "faster_whisper") if importlib.util.find_spec(name) is None]',
       'print(json.dumps({"ok": not missing, "missing": missing}))',
-    ].join('\n')], { timeout: 10000 });
+    ].join('\n')], { timeout: 10000, env: pythonNoBytecodeEnv() });
     const result = parseTranscriptionJson(stdout);
     return !!(result && result.ok);
   } catch {
@@ -435,15 +444,13 @@ async function captureAndTranscribeVoice(opts = {}) {
     ].join('\n');
     const stdout = await execFileTextWithJsonEvents(runtime.python, ['-c', code], {
       cwd: runtime.agentRoot,
-      env: {
-        ...process.env,
+      env: pythonNoBytecodeEnv({
         HOME: realUserHomeDir(),
         HERMES_HOME: runtime.hermesHome,
         PATH: SAFE_RUNTIME_PATH,
-        PYTHONNOUSERSITE: '1',
         PYTHONPATH: runtime.agentRoot,
         AGENT_UI_HERMES_PROJECT_ROOT: runtime.projectRoot,
-      },
+      }),
       timeout: opts.timeoutMs || 180000,
     }, (event) => {
       if (onStatus && event.status) onStatus(String(event.status));
@@ -851,6 +858,40 @@ function gatewayStartupWaitBudgetMs() {
   return GATEWAY_READY_ATTEMPTS * GATEWAY_READY_INTERVAL_MS;
 }
 
+function childIsAlive(child) {
+  return !!(child && child.exitCode == null && child.signalCode == null);
+}
+
+function waitForChildExit(child, timeoutMs = 1000) {
+  if (!childIsAlive(child)) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.off('exit', finish);
+      child.off('error', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    child.once('exit', finish);
+    child.once('error', finish);
+  });
+}
+
+async function terminateGatewayChild(child, log = console, reason = 'replace') {
+  if (!childIsAlive(child)) return;
+  if (gatewayProcess === child) gatewayProcess = null;
+  log.warn('[agent-ui] stopping Hermes gateway process', { pid: child.pid || null, reason });
+  try {
+    child.kill('SIGTERM');
+  } catch {
+    // ignore
+  }
+  await waitForChildExit(child);
+}
+
 function appendOutputTail(current, chunk) {
   return `${current}${String(chunk || '')}`.slice(-GATEWAY_OUTPUT_TAIL_CHARS);
 }
@@ -867,7 +908,10 @@ function gatewayStartupFailureMessage(baseUrl, childExit, stdoutTail, stderrTail
   return parts.join(' ');
 }
 
-async function ensureGatewayProcess(log = console) {
+async function ensureGatewayProcess(log = console, opts = {}) {
+  const readyAttempts = Math.max(1, Math.trunc(Number(opts.readyAttempts) || GATEWAY_READY_ATTEMPTS));
+  const readyIntervalMs = Math.max(1, Math.trunc(Number(opts.readyIntervalMs) || GATEWAY_READY_INTERVAL_MS));
+  const readyRequestTimeoutMs = Math.max(1, Math.trunc(Number(opts.readyRequestTimeoutMs) || GATEWAY_READY_REQUEST_TIMEOUT_MS));
   if (!gatewayAutostartEnabled()) return { ok: false, skipped: true, reason: 'autostart disabled' };
   let { env: gatewayEnv } = ensureGatewayEnvFile(gatewayEnvOverridesFromProcess());
   let baseUrl = syncGatewayEnvToProcess(gatewayEnv);
@@ -921,8 +965,13 @@ async function ensureGatewayProcess(log = console) {
   }
 
   ensureGatewayConfigFile(hermesHome);
-  if (gatewayProcess && !gatewayProcess.killed) return { ok: true, starting: true, baseUrl };
   if (gatewayStartPromise) return gatewayStartPromise;
+  if (childIsAlive(gatewayProcess)) {
+    if (await gatewayReadyOk(baseUrl, gatewayEnv.LOCAL_DESKTOP_GATEWAY_KEY, readyRequestTimeoutMs)) {
+      return { ok: true, alreadyRunning: true, baseUrl, pid: gatewayProcess.pid || null };
+    }
+    await terminateGatewayChild(gatewayProcess, log, 'unready');
+  }
 
   gatewayStartPromise = (async () => {
     const { command } = resolveHermesCommand();
@@ -966,12 +1015,15 @@ async function ensureGatewayProcess(log = console) {
       log.warn('[agent-ui] Hermes gateway launch failed', error && error.message ? error.message : error);
     });
 
-    for (let i = 0; i < GATEWAY_READY_ATTEMPTS; i += 1) {
-      if (await gatewayReadyOk(baseUrl, gatewayEnv.LOCAL_DESKTOP_GATEWAY_KEY, GATEWAY_READY_REQUEST_TIMEOUT_MS)) {
+    for (let i = 0; i < readyAttempts; i += 1) {
+      if (await gatewayReadyOk(baseUrl, gatewayEnv.LOCAL_DESKTOP_GATEWAY_KEY, readyRequestTimeoutMs)) {
         return { ok: true, started: true, baseUrl, pid: child.pid || null };
       }
       if (childExit) break;
-      await new Promise((resolve) => setTimeout(resolve, GATEWAY_READY_INTERVAL_MS));
+      await new Promise((resolve) => setTimeout(resolve, readyIntervalMs));
+    }
+    if (childIsAlive(child)) {
+      await terminateGatewayChild(child, log, 'startup-timeout');
     }
     return {
       ok: false,
@@ -989,7 +1041,7 @@ async function ensureGatewayProcess(log = console) {
 function stopGatewayProcess() {
   const child = gatewayProcess;
   gatewayProcess = null;
-  if (!child || child.killed) return;
+  if (!childIsAlive(child)) return;
   try {
     child.kill('SIGTERM');
   } catch {

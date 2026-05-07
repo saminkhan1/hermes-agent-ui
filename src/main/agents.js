@@ -373,13 +373,14 @@ function handleGatewayReplayExpired(error) {
 }
 
 function ensureGatewayClient(opts = {}) {
-  const { getMainWindow, log = console } = opts;
+  const { getMainWindow, log = console, resetLastSeq = false } = opts;
   ensureGatewayEnvFile();
   gatewayNotify = getNotify(getMainWindow);
   if (!gatewayClient) {
     gatewayClient = new HermesGatewayClient({
       log,
       clientVersion: packageVersion(),
+      resetLastSeq,
       onEvent: handleGatewayEvent,
       onReplayExpired: handleGatewayReplayExpired,
     });
@@ -401,6 +402,20 @@ async function ensureGatewayReady(log = console) {
     throw new Error((result && (result.error || result.reason)) || 'Hermes gateway did not become ready.');
   }
   return result;
+}
+
+async function hydrateGatewayConversations(opts = {}) {
+  const { getMainWindow, log = console } = opts;
+  const resetLastSeq = !gatewayClient && conversations.size === 0;
+  try {
+    await ensureGatewayReady(log);
+    ensureGatewayClient({ getMainWindow, log, resetLastSeq });
+    return { ok: true, resetLastSeq };
+  } catch (e) {
+    const error = e && e.message ? e.message : String(e || 'Hermes gateway did not become ready.');
+    log.warn('[agent-ui] gateway replay hydration skipped:', error);
+    return { ok: false, error };
+  }
 }
 
 function notifyRestarted(getMainWindow, catId) {
@@ -724,7 +739,11 @@ async function runOnGateway(catId, notify, log, prompt, opts = {}) {
   const entry = active.get(id) || ensureHermesEntry(id, null);
   const rec = conversations.get(id);
   await ensureGatewayReady(log);
-  const client = ensureGatewayClient({ getMainWindow: opts.getMainWindow, log });
+  const client = ensureGatewayClient({
+    getMainWindow: opts.getMainWindow,
+    log,
+    resetLastSeq: !!opts.resetGatewayReplay,
+  });
   const conversationId = id;
   const includeContext = !!opts.includeContext && !isHermesSlashCommandPrompt(prompt);
   const fullPrompt = includeContext
@@ -809,6 +828,7 @@ function markGatewayError(catId, error, notify) {
 
 async function runAgentLifecycle({ catId, prompt, runtime, pointerContext, notify, log, getMainWindow }) {
   const id = String(catId);
+  const resetGatewayReplay = !gatewayClient && conversations.size === 0;
   initConversationState(id, {
     runtime: runtime || 'local',
     prompt,
@@ -824,6 +844,7 @@ async function runAgentLifecycle({ catId, prompt, runtime, pointerContext, notif
     await runOnGateway(id, notify, log, String(prompt), {
       includeContext: true,
       getMainWindow,
+      resetGatewayReplay,
     });
   } catch (e) {
     markGatewayError(id, e, notify);
@@ -925,6 +946,7 @@ module.exports = {
   cancelAllAgents,
   getAgentConversation,
   listAgentConversations,
+  hydrateGatewayConversations,
   setOnConversationPushed,
   setOnAuthRequired,
   deleteConversationState,

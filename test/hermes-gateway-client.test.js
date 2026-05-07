@@ -220,6 +220,21 @@ test('last sequence persists across client instances without conversation conten
   assert.equal(Object.prototype.hasOwnProperty.call(second.state, 'conversations'), false);
 });
 
+test('last sequence can be reset when local conversations are not hydrated', () => {
+  const statePath = tempStatePath();
+  fs.writeFileSync(statePath, JSON.stringify({ lastSeq: 31 }), 'utf8');
+
+  const client = new HermesGatewayClient({
+    key: 'secret',
+    statePath,
+    fetchImpl: async () => {},
+    resetLastSeq: true,
+  });
+
+  assert.equal(client.state.lastSeq, 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')), { lastSeq: 0 });
+});
+
 test('stale gateway state conversation maps are scrubbed on load', () => {
   const statePath = tempStatePath();
   fs.writeFileSync(statePath, JSON.stringify({

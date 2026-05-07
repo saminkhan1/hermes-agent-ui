@@ -40,6 +40,7 @@ function isolateEnv(t) {
   delete process.env.AGENT_UI_RELEASE_FLAVOR;
   delete process.env.AGENT_UI_CONNECTOR_GATEWAY_RESTART_APPROVED;
   delete process.env.AGENT_UI_CONNECTOR_PLUGIN_INSTALL_APPROVED;
+  delete process.env.AGENT_UI_HERMES_GATEWAY_AUTOSTART;
   delete process.env.HERMES_HOME;
   delete process.env.LOCAL_DESKTOP_GATEWAY_KEY;
   delete process.env.LOCAL_DESKTOP_HOST;
@@ -236,6 +237,43 @@ test('ensureGatewayProcess reconciles direct gateway URL with the Hermes env fil
   assert.equal(process.env.AGENT_UI_HERMES_GATEWAY_URL, `http://127.0.0.1:${directPort}`);
 });
 
+test('ensureGatewayProcess does not report an unready child as ready', async (t) => {
+  isolateEnv(t);
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-runtime-stale-'));
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-runtime-home-'));
+  const bin = path.join(configDir, 'hermes');
+  fs.writeFileSync(bin, [
+    '#!/bin/sh',
+    "trap 'exit 0' TERM INT",
+    'while true; do sleep 0.1 & wait $!; done',
+    '',
+  ].join('\n'), { mode: 0o755 });
+  process.env.AGENT_UI_CONFIG_DIR = configDir;
+  process.env.AGENT_UI_HERMES_HOME = homeDir;
+  process.env.AGENT_UI_HERMES_BIN = bin;
+  global.fetch = async () => new Response(JSON.stringify({ ok: false }), { status: 503 });
+  t.after(() => {
+    stopGatewayProcess();
+    global.fetch = originalFetch;
+  });
+
+  const log = { warn() {}, log() {} };
+  const first = await ensureGatewayProcess(log, {
+    readyAttempts: 2,
+    readyIntervalMs: 5,
+    readyRequestTimeoutMs: 5,
+  });
+  const second = await ensureGatewayProcess(log, {
+    readyAttempts: 2,
+    readyIntervalMs: 5,
+    readyRequestTimeoutMs: 5,
+  });
+
+  assert.equal(first.ok, false);
+  assert.equal(second.ok, false);
+  assert.notEqual(second.starting, true);
+});
+
 test('gateway autostart uses replace mode for quit/reopen recovery', () => {
   assert.deepEqual(gatewayArgsFor('/path/to/hermes'), ['gateway', 'run', '--replace']);
 });
@@ -320,6 +358,28 @@ test('bundled Hermes launcher uses only prebuilt runtime artifacts', () => {
   assert.doesNotMatch(bundler, /pip install "\$package_spec"/);
   assert.match(bundler, /PYTHONDONTWRITEBYTECODE=1/);
   assert.match(bundler, /PYTHONPATH="\$SRC_DIR"/);
+});
+
+test('direct Hermes Python probes disable bytecode writes', () => {
+  const runtime = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'hermes-runtime.js'), 'utf8');
+
+  assert.match(runtime, /function pythonNoBytecodeEnv/);
+  assert.match(runtime, /PYTHONDONTWRITEBYTECODE: '1'/);
+  assert.match(runtime, /execFileText\(python[\s\S]*env: pythonNoBytecodeEnv/);
+  assert.match(runtime, /execFileTextWithJsonEvents\(runtime\.python[\s\S]*env: pythonNoBytecodeEnv/);
+});
+
+test('local desktop adapter closes overflowed SSE subscribers', () => {
+  const adapter = fs.readFileSync(
+    path.join(__dirname, '..', 'vendor', 'hermes-platforms', 'local_desktop', 'adapter.py'),
+    'utf8'
+  );
+
+  assert.match(adapter, /except asyncio\.QueueFull:/);
+  assert.match(adapter, /self\._subscribers\.discard\(queue\)/);
+  assert.match(adapter, /def _close_overflowed_subscriber/);
+  assert.match(adapter, /queue\.get_nowait\(\)/);
+  assert.match(adapter, /queue\.put_nowait\(None\)/);
 });
 
 test('Hermes bundler overlays the app-owned local desktop platform', () => {

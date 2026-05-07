@@ -15,7 +15,7 @@ const {
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { pathToFileURL } = require('url');
+const { fileURLToPath, pathToFileURL } = require('url');
 const { randomUUID, createHash } = require('crypto');
 const { execFile } = require('child_process');
 const {
@@ -30,6 +30,7 @@ const {
   cancelAllAgents,
   getAgentConversation,
   listAgentConversations,
+  hydrateGatewayConversations,
   setOnConversationPushed,
   setOnAuthRequired,
   cancelAgent,
@@ -642,6 +643,97 @@ function evalPayloadWithinLimit(payload) {
   }
 }
 
+const TRUSTED_RENDERER_PAGES = new Set(['index.html', 'modal.html', 'conversation.html', 'auth.html']);
+const TRUSTED_RENDERER_DEV_PATHS = new Set(['/', '/index.html', '/modal.html', '/conversation.html', '/auth.html']);
+
+function isLoopbackHost(hostname) {
+  const host = String(hostname || '').trim().toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+}
+
+function trustedRendererDevBaseUrl() {
+  const raw = String(process.env.ELECTRON_RENDERER_URL || '').trim();
+  if (!raw) return '';
+  if (app.isPackaged) {
+    console.warn('[agent-ui] ignoring ELECTRON_RENDERER_URL in packaged app');
+    return '';
+  }
+  try {
+    const parsed = new URL(raw);
+    if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || !isLoopbackHost(parsed.hostname)) {
+      console.warn('[agent-ui] ignoring untrusted ELECTRON_RENDERER_URL:', raw);
+      return '';
+    }
+    parsed.hash = '';
+    parsed.search = '';
+    parsed.pathname = '/';
+    return parsed.origin;
+  } catch {
+    console.warn('[agent-ui] ignoring invalid ELECTRON_RENDERER_URL:', raw);
+    return '';
+  }
+}
+
+function trustedRendererFileDir() {
+  return path.resolve(__dirname, '../renderer');
+}
+
+function isTrustedRendererUrl(urlValue) {
+  const raw = String(urlValue || '').trim();
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol === 'file:') {
+      const file = path.resolve(fileURLToPath(parsed));
+      return path.dirname(file) === trustedRendererFileDir() &&
+        TRUSTED_RENDERER_PAGES.has(path.basename(file));
+    }
+    const devBase = trustedRendererDevBaseUrl();
+    if (!devBase) return false;
+    const dev = new URL(devBase);
+    return parsed.origin === dev.origin && TRUSTED_RENDERER_DEV_PATHS.has(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function applyTrustedWebContentsPolicy(win) {
+  if (!win || win.isDestroyed()) return;
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  win.webContents.on('will-navigate', (event, urlValue) => {
+    if (!isTrustedRendererUrl(urlValue)) {
+      event.preventDefault();
+    }
+  });
+}
+
+function isTrustedIpcEvent(event, channel) {
+  const urlValue = String(
+    (event && event.senderFrame && event.senderFrame.url) ||
+    (event && event.sender && typeof event.sender.getURL === 'function' ? event.sender.getURL() : '') ||
+    ''
+  );
+  if (isTrustedRendererUrl(urlValue)) return true;
+  console.warn('[agent-ui] rejected IPC from untrusted renderer', { channel, url: urlValue || 'unknown' });
+  return false;
+}
+
+function trustedIpcOn(channel, listener) {
+  ipcMain.on(channel, (event, ...args) => {
+    if (!isTrustedIpcEvent(event, channel)) return;
+    return listener(event, ...args);
+  });
+}
+
+function trustedIpcHandle(channel, listener) {
+  ipcMain.handle(channel, (event, ...args) => {
+    if (!isTrustedIpcEvent(event, channel)) {
+      return { ok: false, error: 'Untrusted renderer.' };
+    }
+    return listener(event, ...args);
+  });
+}
+
 function macPanelWindowOptions() {
   return IS_MAC ? { type: 'panel' } : {};
 }
@@ -1069,6 +1161,7 @@ function createWindow() {
   });
 
   mainWindow.setIgnoreMouseEvents(true, { forward: true });
+  applyTrustedWebContentsPolicy(mainWindow);
   applyOverlayWindowPolicy(mainWindow, { level: PET_OVERLAY_WINDOW_LEVEL });
 
   mainWindow.on('show', () => rebuildAppMenus());
@@ -1084,8 +1177,9 @@ function createWindow() {
     if (petOverlayOpenRequested) openPetOverlay({ persist: false });
   });
 
-  if (process.env.ELECTRON_RENDERER_URL) {
-    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
+  const rendererDevBase = trustedRendererDevBaseUrl();
+  if (rendererDevBase) {
+    mainWindow.loadURL(rendererDevBase);
   } else {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
@@ -1113,6 +1207,24 @@ function sendSpawnCatToOverlay(payload) {
     return;
   }
   mainWindow.webContents.send('spawn-cat', payload);
+}
+
+function conversationSpawnPayload(catId) {
+  const id = normalizeCatId(catId);
+  if (!id) return null;
+  const rec = listAgentConversations().find((item) => String(item.catId) === id);
+  if (!rec) return null;
+  return {
+    catId: id,
+    prompt: rec.prompt || '',
+    runtime: rec.runtime || 'local',
+    status: rec.runStatus || 'running',
+  };
+}
+
+function sendConversationToOverlay(catId) {
+  const payload = conversationSpawnPayload(catId);
+  if (payload) sendSpawnCatToOverlay(payload);
 }
 
 function closeWindowOnEscape(win, closeFn) {
@@ -1175,6 +1287,7 @@ function openNewCatModal(modalContextId, inputMode = selectedInputMode) {
     },
   });
   modalWindow = win;
+  applyTrustedWebContentsPolicy(win);
   applyOverlayWindowPolicy(win, { level: FOCUSED_OVERLAY_WINDOW_LEVEL });
 
   closeWindowOnEscape(win, () => {
@@ -1211,8 +1324,9 @@ function openNewCatModal(modalContextId, inputMode = selectedInputMode) {
     });
   });
 
-  if (process.env.ELECTRON_RENDERER_URL) {
-    const base = process.env.ELECTRON_RENDERER_URL.replace(/\/?$/, '');
+  const rendererDevBase = trustedRendererDevBaseUrl();
+  if (rendererDevBase) {
+    const base = rendererDevBase;
     win.loadURL(`${base}/modal.html?${new URLSearchParams({
       modalContextId: modalContextId || '',
       inputMode: normalizedInputMode,
@@ -1268,6 +1382,7 @@ function openConversationWindow(catId) {
   });
   conversationWindow = win;
   activeConversationCatId = q.catId;
+  applyTrustedWebContentsPolicy(win);
   applyOverlayWindowPolicy(win, { level: FOCUSED_OVERLAY_WINDOW_LEVEL });
 
   closeWindowOnEscape(win, () => {
@@ -1287,8 +1402,9 @@ function openConversationWindow(catId) {
     if (cleared) activeConversationCatId = null;
   });
 
-  if (process.env.ELECTRON_RENDERER_URL) {
-    const base = process.env.ELECTRON_RENDERER_URL.replace(/\/?$/, '');
+  const rendererDevBase = trustedRendererDevBaseUrl();
+  if (rendererDevBase) {
+    const base = rendererDevBase;
     void win.loadURL(
       `${base}/conversation.html?${new URLSearchParams(q).toString()}`
     );
@@ -1341,6 +1457,7 @@ function openHermesAuthWindow({ pendingRun = null, reason = '' } = {}) {
     },
   });
   authWindow = win;
+  applyTrustedWebContentsPolicy(win);
   applyOverlayWindowPolicy(win, { level: FOCUSED_OVERLAY_WINDOW_LEVEL });
 
   closeWindowOnEscape(win, () => {
@@ -1372,8 +1489,9 @@ function openHermesAuthWindow({ pendingRun = null, reason = '' } = {}) {
     pending: pendingAuthRun ? '1' : '',
     reason: String(reason || ''),
   };
-  if (process.env.ELECTRON_RENDERER_URL) {
-    const base = process.env.ELECTRON_RENDERER_URL.replace(/\/?$/, '');
+  const rendererDevBase = trustedRendererDevBaseUrl();
+  if (rendererDevBase) {
+    const base = rendererDevBase;
     void win.loadURL(`${base}/auth.html?${new URLSearchParams(query).toString()}`);
   } else {
     void win.loadFile(path.join(__dirname, '../renderer/auth.html'), { query });
@@ -1839,7 +1957,7 @@ async function handleNewCatShortcut(source = 'shortcut') {
   }
 }
 
-ipcMain.on('overlay-ready', () => {
+trustedIpcOn('overlay-ready', () => {
   overlayReady = true;
   sendPetCharacterToRenderer();
   flushPendingSpawnCats();
@@ -1926,17 +2044,17 @@ function launchPreparedCatRun(prepared = {}, opts = {}) {
   );
 }
 
-ipcMain.on('new-cat-submit', (_event, payload) => {
+trustedIpcOn('new-cat-submit', (_event, payload) => {
   void startCatRunFromPayload(payload, { closeModal: true });
 });
 
-ipcMain.on('new-cat-cancel', () => {
+trustedIpcOn('new-cat-cancel', () => {
   if (modalWindow && !modalWindow.isDestroyed()) {
     modalWindow.close();
   }
 });
 
-ipcMain.on('cat-counts', (_event, payload) => {
+trustedIpcOn('cat-counts', (_event, payload) => {
   if (!payload || typeof payload !== 'object') return;
   const active = Number(payload.active);
   const inReview = Number(payload.inReview);
@@ -1949,19 +2067,19 @@ ipcMain.on('cat-counts', (_event, payload) => {
   updateTrayTitle();
 });
 
-ipcMain.on('pet-overlay-toggle', () => {
+trustedIpcOn('pet-overlay-toggle', () => {
   togglePetOverlay();
 });
 
-ipcMain.handle('get-pet-characters', () => {
+trustedIpcHandle('get-pet-characters', () => {
   return petCharactersPayload();
 });
 
-ipcMain.on('pet-characters-refresh', () => {
+trustedIpcOn('pet-characters-refresh', () => {
   refreshPetCharacterOptions({ notify: true });
 });
 
-ipcMain.on('pet-context-menu', () => {
+trustedIpcOn('pet-context-menu', () => {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   Menu.buildFromTemplate([
     {
@@ -1977,29 +2095,29 @@ ipcMain.on('pet-context-menu', () => {
   ]).popup({ window: mainWindow });
 });
 
-ipcMain.on('pet-pointer-interaction-changed', (_event, payload = {}) => {
+trustedIpcOn('pet-pointer-interaction-changed', (_event, payload = {}) => {
   setPetPointerInteraction(!!payload.active);
 });
 
-ipcMain.on('pet-drag-start', (_event, payload = {}) => {
+trustedIpcOn('pet-drag-start', (_event, payload = {}) => {
   const safePayload = normalizedDragStartPayload(payload);
   if (safePayload) startPetDrag(safePayload);
 });
 
-ipcMain.on('pet-drag-move', () => {
+trustedIpcOn('pet-drag-move', () => {
   movePetDrag();
 });
 
-ipcMain.on('pet-drag-end', () => {
+trustedIpcOn('pet-drag-end', () => {
   endPetDrag();
 });
 
-ipcMain.on('pet-drag-release', (_event, payload = {}) => {
+trustedIpcOn('pet-drag-release', (_event, payload = {}) => {
   const safePayload = normalizedDragReleasePayload(payload);
   if (safePayload) throwPetWithVelocity(safePayload.velocityX, safePayload.velocityY);
 });
 
-ipcMain.on('pet-element-size-changed', (_event, payload = {}) => {
+trustedIpcOn('pet-element-size-changed', (_event, payload = {}) => {
   if (!payload || typeof payload !== 'object') return;
   cancelPetMomentum();
   const mascot = payload.mascot && typeof payload.mascot === 'object' ? payload.mascot : null;
@@ -2018,19 +2136,19 @@ ipcMain.on('pet-element-size-changed', (_event, payload = {}) => {
   applyPetLayout(undefined, { persist: false });
 });
 
-ipcMain.on('open-cat-conversation', (_e, { catId } = {}) => {
+trustedIpcOn('open-cat-conversation', (_e, { catId } = {}) => {
   const id = normalizeCatId(catId);
   if (!id) return;
   openConversationWindow(id);
 });
 
-ipcMain.on('close-conversation-window', () => {
+trustedIpcOn('close-conversation-window', () => {
   if (conversationWindow && !conversationWindow.isDestroyed()) {
     conversationWindow.close();
   }
 });
 
-ipcMain.on('dismiss-cat', async (_e, { catId } = {}) => {
+trustedIpcOn('dismiss-cat', async (_e, { catId } = {}) => {
   const id = normalizeCatId(catId);
   if (!id) return;
   const result = await dismissAgent(id, { getMainWindow: () => mainWindow, log: console });
@@ -2040,19 +2158,19 @@ ipcMain.on('dismiss-cat', async (_e, { catId } = {}) => {
   }
 });
 
-ipcMain.handle('agent-followup', (_e, { catId, text } = {}) => {
+trustedIpcHandle('agent-followup', (_e, { catId, text } = {}) => {
   const id = normalizeCatId(catId);
   if (!id) return { ok: false, error: 'Missing session id.' };
   return sendFollowup(id, boundedText(text), { getMainWindow: () => mainWindow, log: console });
 });
 
-ipcMain.handle('agent-cancel', (_e, { catId } = {}) => {
+trustedIpcHandle('agent-cancel', (_e, { catId } = {}) => {
   const id = normalizeCatId(catId);
   if (!id) return { ok: false, error: 'Missing session id.' };
   return cancelAgent(id, { getMainWindow: () => mainWindow, log: console });
 });
 
-ipcMain.handle('open-agent-attachment', async (_e, { url } = {}) => {
+trustedIpcHandle('open-agent-attachment', async (_e, { url } = {}) => {
   const value = boundedText(url, 4096).trim();
   if (!value) return { ok: false, error: 'Missing attachment URL.' };
   try {
@@ -2073,7 +2191,7 @@ ipcMain.handle('open-agent-attachment', async (_e, { url } = {}) => {
   return { ok: false, error: 'Unsupported attachment URL.' };
 });
 
-ipcMain.handle('open-external-url', async (_e, { url } = {}) => {
+trustedIpcHandle('open-external-url', async (_e, { url } = {}) => {
   const value = boundedText(url, 4096).trim();
   if (!value) return { ok: false, error: 'Missing URL.' };
   try {
@@ -2088,19 +2206,19 @@ ipcMain.handle('open-external-url', async (_e, { url } = {}) => {
   }
 });
 
-ipcMain.handle('clipboard-write-text', (_e, { text } = {}) => {
+trustedIpcHandle('clipboard-write-text', (_e, { text } = {}) => {
   const value = boundedText(text, 20000);
   if (!value) return { ok: false, error: 'Missing text.' };
   clipboard.writeText(value);
   return { ok: true };
 });
 
-ipcMain.handle('get-agent-conversation', (_e, catId) => {
+trustedIpcHandle('get-agent-conversation', (_e, catId) => {
   const id = normalizeCatId(catId);
   return id ? getAgentConversation(id) : { found: false, items: [] };
 });
 
-ipcMain.handle('hermes-auth-status', async () => {
+trustedIpcHandle('hermes-auth-status', async () => {
   try {
     return await hermesAuth.getAuthStatus();
   } catch (error) {
@@ -2108,31 +2226,31 @@ ipcMain.handle('hermes-auth-status', async () => {
   }
 });
 
-ipcMain.handle('hermes-auth-add-api-key', async (_e, payload = {}) => {
+trustedIpcHandle('hermes-auth-add-api-key', async (_e, payload = {}) => {
   return hermesAuth.addApiKeyCredential(payload);
 });
 
-ipcMain.handle('hermes-auth-save-model', async (_e, payload = {}) => {
+trustedIpcHandle('hermes-auth-save-model', async (_e, payload = {}) => {
   return hermesAuth.saveModelSelection(payload);
 });
 
-ipcMain.handle('hermes-auth-oauth-start', (_e, payload = {}) => {
+trustedIpcHandle('hermes-auth-oauth-start', (_e, payload = {}) => {
   return startHermesOAuthFlow(payload);
 });
 
-ipcMain.handle('hermes-auth-oauth-input', (_e, payload = {}) => {
+trustedIpcHandle('hermes-auth-oauth-input', (_e, payload = {}) => {
   return hermesAuth.sendOAuthInput(payload);
 });
 
-ipcMain.handle('hermes-auth-oauth-cancel', (_e, payload = {}) => {
+trustedIpcHandle('hermes-auth-oauth-cancel', (_e, payload = {}) => {
   return cancelHermesOAuthFlow(payload, { clearPending: true });
 });
 
-ipcMain.handle('hermes-auth-check-now', async () => {
+trustedIpcHandle('hermes-auth-check-now', async () => {
   return await checkHermesAuthFlow('check-now');
 });
 
-ipcMain.handle('hermes-auth-finish', () => {
+trustedIpcHandle('hermes-auth-finish', () => {
   const pending = pendingAuthRun;
   resetAuthFlow({ clearPending: true });
   closeHermesAuthWindow();
@@ -2143,15 +2261,15 @@ ipcMain.handle('hermes-auth-finish', () => {
   return { ok: true, started: false };
 });
 
-ipcMain.on('hermes-auth-close', () => {
+trustedIpcOn('hermes-auth-close', () => {
   closeHermesAuthWindow();
 });
 
-ipcMain.handle('hermes-auth-dismiss', () => {
+trustedIpcHandle('hermes-auth-dismiss', () => {
   return dismissHermesAuthWindow();
 });
 
-ipcMain.on('hermes-auth-open', () => {
+trustedIpcOn('hermes-auth-open', () => {
   openHermesAuthWindow({ reason: 'renderer' });
 });
 
@@ -2310,14 +2428,14 @@ async function startVoiceSessionFromShortcut(win, modalContextId) {
   });
 }
 
-ipcMain.on('eval-trace-event', (_event, payload = {}) => {
+trustedIpcOn('eval-trace-event', (_event, payload = {}) => {
   if (!evalPayloadWithinLimit(payload)) return;
   const type = payload && payload.type ? payload.type : 'renderer_event';
   const { type: _type, ...rest } = payload && typeof payload === 'object' ? payload : {};
   recordTrace(type, rest);
 });
 
-ipcMain.on('eval-ui-state', (_event, payload = {}) => {
+trustedIpcOn('eval-ui-state', (_event, payload = {}) => {
   if (!evalTraceEnabled || !payload || typeof payload !== 'object') return;
   if (!evalPayloadWithinLimit(payload)) return;
   const surface = String(payload.surface || '').trim();
@@ -2423,11 +2541,14 @@ app.whenReady().then(() => {
 
   setOnConversationPushed(({ catId, streamBubble }) => {
     const _id = String(catId);
+    sendConversationToOverlay(_id);
     if (conversationWindow && !conversationWindow.isDestroyed()) {
       conversationWindow.webContents.send('conversation-updated', { catId: _id });
     }
     if (streamBubble) sendStreamBubbleThrottled(_id, streamBubble);
   });
+
+  void hydrateGatewayConversations({ getMainWindow: () => mainWindow, log: console });
 
   const reclampPetOverlay = () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -2443,15 +2564,6 @@ app.whenReady().then(() => {
   screen.on('display-added', reclampPetOverlay);
   screen.on('display-removed', reclampPetOverlay);
   screen.on('display-metrics-changed', reclampPetOverlay);
-
-  const quit = () => {
-    app.quit();
-  };
-  if (process.platform === 'darwin') {
-    globalShortcut.register('Command+Q', quit);
-  } else {
-    globalShortcut.register('Control+Q', quit);
-  }
 
   const newCatAccelerator =
     process.platform === 'darwin' ? 'CommandOrControl+Shift+C' : 'Control+Shift+C';
