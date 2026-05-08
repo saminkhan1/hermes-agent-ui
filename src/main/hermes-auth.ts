@@ -1,5 +1,8 @@
 'use strict';
 
+import type { ChildProcessWithoutNullStreams } from 'child_process';
+import type { AgentUIPayload, MutableJsonObject } from '../shared/contracts.ts';
+
 const { EventEmitter } = require('events');
 const fs = require('fs');
 const path = require('path');
@@ -22,7 +25,29 @@ const MAX_MODEL_CHARS = 256;
 const MAX_OUTPUT_CHARS = 120000;
 
 const events = new EventEmitter();
-const sessions = new Map();
+
+type RunHermesOptions = {
+  timeoutMs?: number;
+};
+type HermesCommandError = Error & {
+  stdout?: string;
+  stderr?: string;
+};
+type OAuthSession = {
+  child: ChildProcessWithoutNullStreams;
+  provider: string;
+  stdout: string;
+  stderr: string;
+  startedAt: number;
+};
+type ReadinessSnapshot = {
+  ok?: boolean;
+  ready?: boolean;
+  needs_auth?: boolean;
+  needs_model?: boolean;
+};
+
+const sessions = new Map<string, OAuthSession>();
 
 function boundedText(value, max = 4096) {
   const out = value == null ? '' : String(value);
@@ -111,7 +136,7 @@ function pythonRuntimeForHermes(command) {
   return null;
 }
 
-function hermesEnv(extra = {}) {
+function hermesEnv(extra: Record<string, string> = {}) {
   return {
     ...process.env,
     ...extra,
@@ -147,7 +172,7 @@ function redact(value) {
     .replace(/([A-Za-z0-9_-]{12})[A-Za-z0-9_-]{28,}/g, '$1...');
 }
 
-function runHermesPythonJson(code, payload = {}, opts = {}) {
+function runHermesPythonJson(code: string, payload: AgentUIPayload = {}, opts: RunHermesOptions = {}): Promise<MutableJsonObject> {
   return new Promise((resolve, reject) => {
     let runtime;
     try {
@@ -184,7 +209,7 @@ function runHermesPythonJson(code, payload = {}, opts = {}) {
     child.on('close', (codeNum, signal) => {
       if (timer) clearTimeout(timer);
       if (codeNum !== 0) {
-        const err = new Error(redact(stderr.trim() || stdout.trim() || `Hermes exited with code ${codeNum}${signal ? ` (${signal})` : ''}.`));
+        const err: HermesCommandError = new Error(redact(stderr.trim() || stdout.trim() || `Hermes exited with code ${codeNum}${signal ? ` (${signal})` : ''}.`));
         err.stdout = redact(stdout);
         err.stderr = redact(stderr);
         reject(err);
@@ -356,7 +381,7 @@ print(json.dumps({
 }, separators=(",", ":"), sort_keys=True))
 `;
 
-function readinessFromSnapshot(snapshot = {}) {
+function readinessFromSnapshot(snapshot: ReadinessSnapshot = {}) {
   if (!snapshot || snapshot.ok === false) return { ready: false, reason: 'status_error' };
   if (snapshot.ready) return { ready: true, reason: 'ready' };
   if (snapshot.needs_auth) return { ready: false, reason: 'needs_auth' };
@@ -406,7 +431,7 @@ async function ensureReadyForRun() {
   }
 }
 
-async function addApiKeyCredential(payload = {}) {
+async function addApiKeyCredential(payload: AgentUIPayload = {}) {
   const provider = normalizeProvider(payload.provider);
   const apiKey = boundedText(payload.apiKey || payload.api_key, MAX_API_KEY_CHARS).trim();
   const label = normalizeLabel(payload.label);
@@ -419,7 +444,7 @@ async function addApiKeyCredential(payload = {}) {
   }
 }
 
-async function saveModelSelection(payload = {}) {
+async function saveModelSelection(payload: AgentUIPayload = {}) {
   const provider = normalizeProvider(payload.provider);
   const model = normalizeModel(payload.model);
   if (!provider) return { ok: false, error: 'Choose a provider.' };
@@ -435,7 +460,7 @@ function emitSessionEvent(event) {
   events.emit('event', event);
 }
 
-function startOAuthSession(payload = {}) {
+function startOAuthSession(payload: AgentUIPayload = {}) {
   const provider = normalizeProvider(payload.provider);
   if (!provider) return { ok: false, error: 'Choose a provider.' };
   let command;
@@ -502,7 +527,7 @@ function startOAuthSession(payload = {}) {
   return { ok: true, sessionId, provider };
 }
 
-function sendOAuthInput(payload = {}) {
+function sendOAuthInput(payload: AgentUIPayload = {}) {
   const sessionId = boundedText(payload.sessionId, 128).trim();
   const input = boundedText(payload.input, 10000);
   const rec = sessions.get(sessionId);
@@ -511,7 +536,7 @@ function sendOAuthInput(payload = {}) {
   return { ok: true };
 }
 
-function cancelOAuthSession(payload = {}) {
+function cancelOAuthSession(payload: AgentUIPayload = {}) {
   const sessionId = boundedText(payload.sessionId, 128).trim();
   const rec = sessions.get(sessionId);
   if (!rec || !rec.child || rec.child.killed) return { ok: true };

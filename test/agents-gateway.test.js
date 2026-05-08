@@ -638,15 +638,16 @@ test('auth-required follow-up recovery uses failed follow-up text', async (t) =>
 });
 
 test('conversation window does not disable web security', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'index.js'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8');
   assert.equal(source.includes('webSecurity: false'), false);
 });
 
-test('electron build copies gateway client into main output', () => {
+test('electron build emits gateway client as a main-process entry', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'electron.vite.config.mjs'), 'utf8');
-  assert.match(source, /hermes-gateway-client\.js/);
-  assert.match(source, /hermes-release\.js/);
-  assert.match(source, /hermes-attachments\.js/);
-  assert.match(source, /hermes-auth\.js/);
-  assert.match(source, /window-lifecycle\.js/);
+  assert.match(source, /hermes-gateway-client/);
+  assert.match(source, /hermes-release/);
+  assert.match(source, /hermes-attachments/);
+  assert.match(source, /hermes-auth/);
+  assert.match(source, /window-lifecycle/);
+  assert.match(source, /src\/main\/\$\{name\}\.ts/);
 });

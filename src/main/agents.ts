@@ -1,5 +1,19 @@
 'use strict';
 
+import type {
+  AgentConversationItem,
+  AgentConversationItemKind,
+  AgentConversationSnapshot,
+  AgentTypingState,
+  JsonObject,
+  LocalDesktopAttachmentEvent,
+  LocalDesktopGatewayEvent,
+  LocalDesktopMessageDeletedEvent,
+  LocalDesktopMessageEvent,
+  LocalDesktopTypingEvent,
+  MutableJsonObject,
+} from '../shared/contracts.ts';
+
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -18,25 +32,56 @@ const {
   writeArtifactJson,
 } = require('./eval-trace');
 
-/** @type {Map<string, Record<string, any>>} */
-const active = new Map();
+type ConversationRecord = MutableJsonObject & {
+  runtime?: string;
+  transport?: string;
+  prompt?: string;
+  pointerContext?: JsonObject | null;
+  items: AgentConversationItem[];
+  runStatus?: string;
+  typing?: AgentTypingState;
+  activeAssistantBubble?: boolean;
+  startedAt?: number;
+};
+type ActiveRecord = MutableJsonObject & {
+  runtime?: string;
+  transport?: string;
+  busy?: boolean;
+  gatewayConversationId?: string;
+  startedAt?: number;
+  pointerContext?: JsonObject | null;
+};
+type NotifyPayload = MutableJsonObject & {
+  catId: string;
+};
+type ConversationPushInfo = {
+  catId: string;
+  streamBubble?: string | null;
+};
+type AgentOptions = {
+  getMainWindow?: () => any;
+  log?: Console;
+  resetLastSeq?: boolean;
+  resetGatewayReplay?: boolean;
+  includeContext?: boolean;
+  recordUserItem?: boolean;
+};
 
-/** @type {Map<string, Record<string, any>>} */
-const conversations = new Map();
+const active = new Map<string, ActiveRecord>();
+const conversations = new Map<string, ConversationRecord>();
 
-/** @type {(info: { catId: string, streamBubble?: string | null }) => void} */
-let onConversationPushed = () => {};
+let onConversationPushed: (info: ConversationPushInfo) => void = () => {};
 
 const HERMES_SOURCE = 'agent-ui';
 const MAX_METADATA_BYTES = 16384;
 const DISMISSED_RETENTION_MS = 8 * 24 * 60 * 60 * 1000;
 const DEFAULT_GATEWAY_STREAM_DISCONNECT_GRACE_MS = 15000;
 
-let gatewayClient = null;
-let gatewayNotify = () => {};
-let onAuthRequired = () => {};
-let gatewayDisconnectTimer = null;
-let dismissedGatewayConversations = null;
+let gatewayClient: any = null;
+let gatewayNotify: (payload: NotifyPayload) => void = () => {};
+let onAuthRequired: (payload: JsonObject) => void = () => {};
+let gatewayDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let dismissedGatewayConversations: Record<string, number> | null = null;
 
 function setOnConversationPushed(fn) {
   onConversationPushed = typeof fn === 'function' ? fn : () => {};
@@ -150,7 +195,7 @@ function textMeta(value, max = 180) {
   };
 }
 
-function jsonClone(value, fallback = null) {
+function jsonClone(value, fallback: any = null) {
   try {
     const cloned = JSON.parse(JSON.stringify(value));
     return cloned == null ? fallback : cloned;
@@ -159,7 +204,7 @@ function jsonClone(value, fallback = null) {
   }
 }
 
-function sanitizeMetadata(value) {
+function sanitizeMetadata(value): JsonObject {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   const cloned = jsonClone(value, {});
   try {
@@ -171,7 +216,7 @@ function sanitizeMetadata(value) {
   return { truncated: true };
 }
 
-function eventTimeMs(event = {}) {
+function eventTimeMs(event: MutableJsonObject = {}) {
   const createdAt = Number(event.created_at || event.createdAt || 0);
   if (Number.isFinite(createdAt) && createdAt > 0) {
     return createdAt < 100000000000 ? Math.round(createdAt * 1000) : Math.round(createdAt);
@@ -184,10 +229,10 @@ function safeText(value, max = 200000) {
   return out.length > max ? out.slice(0, max) : out;
 }
 
-function normalizeConversationItem(item = {}) {
-  const kind = String(item.kind || '').trim();
+function normalizeConversationItem(item: AgentConversationItem | MutableJsonObject = {}): AgentConversationItem | null {
+  const kind = String(item.kind || '').trim() as AgentConversationItemKind;
   if (!['user', 'assistant', 'error', 'attachment'].includes(kind)) return null;
-  const out = {
+  const out: AgentConversationItem = {
     kind,
     at: Number(item.at || 0) || now(),
   };
@@ -206,7 +251,7 @@ function normalizeConversationItem(item = {}) {
   return out;
 }
 
-function publicItem(item = {}) {
+function publicItem(item: AgentConversationItem | MutableJsonObject = {}) {
   const out = normalizeConversationItem(item);
   if (!out) return null;
   if (out.kind === 'attachment') {
@@ -215,7 +260,7 @@ function publicItem(item = {}) {
   return out;
 }
 
-function conversationSnapshot(catId, rec = {}) {
+function conversationSnapshot(catId, rec: ConversationRecord = { items: [] }): AgentConversationSnapshot {
   return {
     catId: String(catId),
     runtime: rec.runtime || 'local',
@@ -317,7 +362,7 @@ function appendConversationError(rec, message) {
   rec.items.push({ kind: 'error', text, at: now() });
 }
 
-function terminalizeGatewayConversation(catId, rec, message, reason) {
+function terminalizeGatewayConversation(catId, rec: ConversationRecord, message, reason) {
   if (!rec) return false;
   const wasRunning = String(rec.runStatus || '').toLowerCase() === 'running' ||
     !!(rec.typing && rec.typing.active);
@@ -366,7 +411,7 @@ function terminalizeRunningGatewayConversations(message, reason) {
   return count;
 }
 
-function handleGatewayConnectionState(state = {}) {
+function handleGatewayConnectionState(state: MutableJsonObject = {}) {
   const status = String(state.state || '').trim();
   if (status === 'connected') {
     clearGatewayDisconnectTimer();
@@ -388,8 +433,8 @@ function handleGatewayConnectionState(state = {}) {
   }, gatewayStreamDisconnectGraceMs());
 }
 
-function getNotify(getMainWindow) {
-  return (payload) => {
+function getNotify(getMainWindow?: () => any) {
+  return (payload: NotifyPayload) => {
     const win = getMainWindow && getMainWindow();
     if (win && !win.isDestroyed()) {
       win.webContents.send('agent-finished', payload);
@@ -404,7 +449,7 @@ function statusFromGatewayOutcome(outcome) {
   return 'completed';
 }
 
-function ensureConversationForGatewayEvent(catId, event = {}) {
+function ensureConversationForGatewayEvent(catId, event: MutableJsonObject = {}) {
   const id = String(catId);
   let rec = conversations.get(id);
   if (rec) return rec;
@@ -429,7 +474,7 @@ function ensureConversationForGatewayEvent(catId, event = {}) {
   return rec;
 }
 
-function handleGatewayEvent(event = {}) {
+function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject = {}) {
   const catId = String(event.conversation_id || '').trim();
   if (!catId) return;
   const type = String(event.type || '').trim();
@@ -438,57 +483,59 @@ function handleGatewayEvent(event = {}) {
   if (!rec) return;
 
   if (type === 'message.created' || type === 'message.updated') {
-    upsertGatewayAssistantMessage(catId, event);
+    upsertGatewayAssistantMessage(catId, event as LocalDesktopMessageEvent | MutableJsonObject);
     return;
   }
   if (type === 'message.deleted') {
-    deleteGatewayMessage(catId, event);
+    deleteGatewayMessage(catId, event as LocalDesktopMessageDeletedEvent | MutableJsonObject);
     return;
   }
   if (type === 'attachment.created') {
-    appendGatewayAttachment(catId, event);
+    appendGatewayAttachment(catId, event as LocalDesktopAttachmentEvent | MutableJsonObject);
     return;
   }
   if (type === 'typing.started') {
+    const typingEvent = event as LocalDesktopTypingEvent | MutableJsonObject;
     rec.runStatus = 'running';
     rec.endResult = undefined;
     rec.durationMs = undefined;
     rec.typing = {
       active: true,
-      startedAt: eventTimeMs(event),
-      messageId: event.message_id == null ? null : String(event.message_id),
-      seq: Number(event.seq || 0) || undefined,
-      metadata: sanitizeMetadata(event.metadata),
+      startedAt: eventTimeMs(typingEvent),
+      messageId: typingEvent.message_id == null ? null : String(typingEvent.message_id),
+      seq: Number(typingEvent.seq || 0) || undefined,
+      metadata: sanitizeMetadata(typingEvent.metadata),
     };
     persistConversation(catId);
     onConversationPushed({ catId });
     return;
   }
   if (type === 'typing.stopped') {
-    if (event.transient && !event.outcome) {
+    const typingEvent = event as LocalDesktopTypingEvent | MutableJsonObject;
+    if (typingEvent.transient && !typingEvent.outcome) {
       rec.typing = {
         ...(rec.typing || {}),
         active: false,
-        stoppedAt: eventTimeMs(event),
-        seq: Number(event.seq || 0) || (rec.typing && rec.typing.seq) || undefined,
+        stoppedAt: eventTimeMs(typingEvent),
+        seq: Number(typingEvent.seq || 0) || (rec.typing && rec.typing.seq) || undefined,
       };
       persistConversation(catId);
       onConversationPushed({ catId });
       return;
     }
-    const seq = Number(event.seq || 0);
+    const seq = Number(typingEvent.seq || 0);
     if (seq && rec.lastGatewayStopSeq === seq) return;
     if (seq) rec.lastGatewayStopSeq = seq;
-    const status = statusFromGatewayOutcome(event.outcome);
+    const status = statusFromGatewayOutcome(typingEvent.outcome);
     rec.runStatus = status;
-    rec.endResult = event.outcome ? `gateway ${event.outcome}` : 'gateway completed';
+    rec.endResult = typingEvent.outcome ? `gateway ${typingEvent.outcome}` : 'gateway completed';
     rec.durationMs = rec.startedAt ? now() - rec.startedAt : undefined;
     rec.activeAssistantBubble = false;
     rec.typing = {
       ...(rec.typing || {}),
       active: false,
-      stoppedAt: eventTimeMs(event),
-      messageId: event.message_id == null ? (rec.typing && rec.typing.messageId) || null : String(event.message_id),
+      stoppedAt: eventTimeMs(typingEvent),
+      messageId: typingEvent.message_id == null ? (rec.typing && rec.typing.messageId) || null : String(typingEvent.message_id),
       seq: seq || (rec.typing && rec.typing.seq) || undefined,
     };
     persistConversation(catId);
@@ -502,11 +549,8 @@ function handleGatewayEvent(event = {}) {
       gatewaySeq: seq || null,
     });
     const failureText = [
-      event.error,
-      event.message,
-      event.text,
-      event.metadata && event.metadata.error,
-      event.metadata && event.metadata.message,
+      typingEvent.metadata && typingEvent.metadata.error,
+      typingEvent.metadata && typingEvent.metadata.message,
     ].filter(Boolean).join('\n');
     if (status === 'error' && isAuthErrorText(failureText) && !rec.authPrompted) {
       const retry = latestUserRetry(rec);
@@ -544,7 +588,7 @@ function handleGatewayReplayExpired(error) {
   });
 }
 
-function ensureGatewayClient(opts = {}) {
+function ensureGatewayClient(opts: AgentOptions = {}) {
   const { getMainWindow, log = console, resetLastSeq = false } = opts;
   ensureGatewayEnvFile();
   gatewayNotify = getNotify(getMainWindow);
@@ -577,14 +621,14 @@ async function ensureGatewayReady(log = console) {
   return result;
 }
 
-async function hydrateGatewayConversations(opts = {}) {
+async function hydrateGatewayConversations(opts: AgentOptions = {}) {
   const { getMainWindow, log = console } = opts;
   const resetLastSeq = !gatewayClient && conversations.size === 0;
   try {
     await ensureGatewayReady(log);
     ensureGatewayClient({ getMainWindow, log, resetLastSeq });
     return { ok: true, resetLastSeq };
-  } catch (e) {
+  } catch (e: any) {
     const error = e && e.message ? e.message : String(e || 'Hermes gateway did not become ready.');
     log.warn('[agent-ui] gateway replay hydration skipped:', error);
     return { ok: false, error };
@@ -598,7 +642,7 @@ function notifyRestarted(getMainWindow, catId) {
   }
 }
 
-async function disposeAgentResources(catId, opts = {}) {
+async function disposeAgentResources(catId, opts: AgentOptions = {}) {
   const { log = console } = opts;
   const id = String(catId);
   const entry = active.get(id);
@@ -622,7 +666,7 @@ function persistConversation(catId) {
   }
 }
 
-function upsertGatewayAssistantMessage(catId, event = {}) {
+function upsertGatewayAssistantMessage(catId, event: LocalDesktopMessageEvent | MutableJsonObject = {}) {
   const id = String(catId);
   const rec = conversations.get(id);
   if (!rec) return;
@@ -635,7 +679,7 @@ function upsertGatewayAssistantMessage(catId, event = {}) {
     target = rec.items.find((it) => it && it.kind === 'assistant' && it.messageId === messageId);
   }
   if (!target) {
-    target = { kind: 'assistant', text, at: eventTimeMs(event) };
+    target = { kind: 'assistant', text, at: eventTimeMs(event) } as AgentConversationItem;
     if (messageId) target.messageId = messageId;
     rec.items.push(target);
   } else {
@@ -652,7 +696,7 @@ function upsertGatewayAssistantMessage(catId, event = {}) {
   onConversationPushed({ catId: id, streamBubble: leadAssistantBubbleText(text) });
 }
 
-function deleteGatewayMessage(catId, event = {}) {
+function deleteGatewayMessage(catId, event: LocalDesktopMessageDeletedEvent | MutableJsonObject = {}) {
   const id = String(catId);
   const rec = conversations.get(id);
   if (!rec) return;
@@ -666,7 +710,7 @@ function deleteGatewayMessage(catId, event = {}) {
   }
 }
 
-function appendGatewayAttachment(catId, event = {}) {
+function appendGatewayAttachment(catId, event: LocalDesktopAttachmentEvent | MutableJsonObject = {}) {
   const id = String(catId);
   const rec = conversations.get(id);
   if (!rec) return;
@@ -674,7 +718,7 @@ function appendGatewayAttachment(catId, event = {}) {
   const caption = String(event.caption || '').trim();
   const ref = String(event.ref || '').trim();
   const text = caption || `${label} attachment`;
-  const item = {
+  const item: AgentConversationItem = {
     kind: 'attachment',
     attachmentType: label,
     ref,
@@ -756,7 +800,7 @@ function deleteConversationState(catId) {
   conversations.delete(String(catId));
 }
 
-async function dismissAgent(catId, opts = {}) {
+async function dismissAgent(catId, opts: AgentOptions = {}) {
   const { getMainWindow, log = console } = opts;
   const id = String(catId);
   const rec = conversations.get(id);
@@ -828,7 +872,7 @@ function hermesMetadataFromContext(context) {
   const display = c.display && typeof c.display === 'object' ? c.display : null;
   const missingContext = Array.isArray(c.missingContext) ? c.missingContext.map(String) : [];
 
-  const metadata = {
+  const metadata: JsonObject = {
     captured_at: String(c.capturedAt || new Date().toISOString()),
     active_app: String(owner.name || 'Unknown'),
     bundle_id: String(owner.bundleId || owner.path || 'Unknown'),
@@ -878,7 +922,7 @@ function isHermesSlashCommandPrompt(prompt) {
   return String(prompt || '').trimStart().startsWith('/');
 }
 
-function ensureHermesEntry(catId, pointerContext) {
+function ensureHermesEntry(catId, pointerContext): ActiveRecord {
   const id = String(catId);
   const existing = active.get(id);
   if (existing) {
@@ -886,7 +930,7 @@ function ensureHermesEntry(catId, pointerContext) {
     return existing;
   }
 
-  const entry = {
+  const entry: ActiveRecord = {
     runtime: 'local',
     transport: 'gateway',
     busy: false,
@@ -908,7 +952,7 @@ function getAgentArtifacts(catId) {
   };
 }
 
-async function runOnGateway(catId, notify, log, prompt, opts = {}) {
+async function runOnGateway(catId, notify, log, prompt, opts: AgentOptions = {}) {
   const id = String(catId);
   const entry = active.get(id) || ensureHermesEntry(id, null);
   const rec = conversations.get(id);
@@ -967,7 +1011,7 @@ async function runOnGateway(catId, notify, log, prompt, opts = {}) {
   gatewayNotify = notify || gatewayNotify;
 }
 
-function markGatewayError(catId, error, notify, opts = {}) {
+function markGatewayError(catId, error: any, notify, opts: MutableJsonObject = {}) {
   const id = String(catId);
   const rec = conversations.get(id);
   const message = error && error.message ? error.message : String(error || 'Hermes gateway is unavailable.');
@@ -1022,12 +1066,12 @@ async function runAgentLifecycle({ catId, prompt, runtime, pointerContext, notif
       getMainWindow,
       resetGatewayReplay,
     });
-  } catch (e) {
+  } catch (e: any) {
     markGatewayError(id, e, notify, { retryText: String(prompt || ''), retryKind: 'initial' });
   }
 }
 
-function startAgentForCat({ catId, prompt, runtime, pointerContext }, { getMainWindow, log = console } = {}) {
+function startAgentForCat({ catId, prompt, runtime, pointerContext }, { getMainWindow, log = console }: AgentOptions = {}) {
   const notify = getNotify(getMainWindow);
   void runAgentLifecycle({
     catId: String(catId),
@@ -1040,7 +1084,7 @@ function startAgentForCat({ catId, prompt, runtime, pointerContext }, { getMainW
   });
 }
 
-async function sendFollowup(catId, text, opts = {}) {
+async function sendFollowup(catId, text, opts: AgentOptions = {}) {
   const { getMainWindow, log = console } = opts;
   const id = String(catId);
   const t = String(text || '');
@@ -1069,13 +1113,13 @@ async function sendFollowup(catId, text, opts = {}) {
   try {
     await runOnGateway(id, notify, log, t, { includeContext: false, getMainWindow });
     return { ok: true };
-  } catch (e) {
+  } catch (e: any) {
     markGatewayError(id, e, notify, { retryText: t, retryKind: 'followup' });
     return { ok: false, error: e && e.message ? e.message : String(e) };
   }
 }
 
-async function cancelAgent(catId, opts = {}) {
+async function cancelAgent(catId, opts: AgentOptions = {}) {
   const { getMainWindow, log = console } = opts;
   const id = String(catId);
   const rec = conversations.get(id);
@@ -1097,7 +1141,7 @@ async function cancelAgent(catId, opts = {}) {
   try {
     await runOnGateway(id, notify, log, '/stop', { includeContext: false, getMainWindow });
     return { ok: true };
-  } catch (e) {
+  } catch (e: any) {
     markGatewayError(id, e, notify, { retryText: '/stop', retryKind: 'command' });
     return { ok: false, error: e && e.message ? e.message : String(e) };
   }

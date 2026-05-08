@@ -1,7 +1,12 @@
 /* global agentUI */
 
-import { activeElementForEval, rectForEvalElement, visibleTextForEval } from './eval-ui-state.js';
-import { insertNewlineAtCursor } from './insert-newline-at-cursor.js';
+import { activeElementForEval, rectForEvalElement, visibleTextForEval } from './eval-ui-state.ts';
+import { insertNewlineAtCursor } from './insert-newline-at-cursor.ts';
+import type {
+  AgentConversationItem as ConversationItem,
+  AgentConversationSnapshot,
+  AgentTypingState,
+} from '../../shared/contracts.ts';
 
 const params = new URLSearchParams(window.location.search);
 const catId = params.get('catId');
@@ -9,14 +14,26 @@ const logEl = document.getElementById('log');
 const metaEl = document.getElementById('meta');
 const statusEl = document.getElementById('typing-status');
 const closeBtn = document.getElementById('btn-close');
-const cancelBtn = document.getElementById('btn-cancel');
-const dismissBtn = document.getElementById('btn-dismiss');
-const followupInput = document.getElementById('followup-input');
-const sendBtn = document.getElementById('btn-send');
+const cancelBtn = document.getElementById('btn-cancel') as HTMLButtonElement | null;
+const dismissBtn = document.getElementById('btn-dismiss') as HTMLButtonElement | null;
+const followupInput = document.getElementById('followup-input') as HTMLTextAreaElement | null;
+const sendBtn = document.getElementById('btn-send') as HTMLButtonElement | null;
 const composerError = document.getElementById('composer-error');
 
-let unsubUpdated = null;
-let lastData = null;
+type ConversationData = Partial<AgentConversationSnapshot> & {
+  found?: boolean;
+  locationLabel?: string;
+  launchContext?: unknown;
+  items?: ConversationItem[];
+  typing?: AgentTypingState;
+};
+
+type ConversationUpdatedEvent = {
+  catId?: unknown;
+};
+
+let unsubUpdated: null | (() => void) = null;
+let lastData: ConversationData | null = null;
 
 function reportEvalUiState() {
   if (!window.agentUI || typeof window.agentUI.reportEvalUiState !== 'function') return;
@@ -39,7 +56,7 @@ function reportEvalUiState() {
   });
 }
 
-function kindToLabel(k, item = {}) {
+function kindToLabel(k: string, item: Partial<ConversationItem> = {}) {
   if (k === 'attachment') {
     const type = String(item.attachmentType || '').trim().toLowerCase();
     if (type === 'image') return 'Image';
@@ -56,12 +73,12 @@ function kindToLabel(k, item = {}) {
   );
 }
 
-function kindClass(k) {
+function kindClass(k: string) {
   const safe = String(k).replace(/[^a-z0-9-]/gi, '') || 'item';
   return `line--${safe}`;
 }
 
-function attachmentStateText(reason) {
+function attachmentStateText(reason: unknown) {
   return (
     {
       missing: 'Attachment unavailable',
@@ -74,12 +91,12 @@ function attachmentStateText(reason) {
   );
 }
 
-function attachmentName(item = {}) {
+function attachmentName(item: Partial<ConversationItem> = {}) {
   const descriptor = item.attachment || {};
   return String(descriptor.fileName || item.caption || `${item.attachmentType || 'file'} attachment`);
 }
 
-function renderAttachmentContent(item = {}) {
+function renderAttachmentContent(item: Partial<ConversationItem> = {}) {
   const descriptor = item.attachment || {};
   const type = String(item.attachmentType || '').toLowerCase();
   const wrap = document.createElement('div');
@@ -156,7 +173,7 @@ function renderAttachmentContent(item = {}) {
   return wrap;
 }
 
-function isAuthErrorText(value) {
+function isAuthErrorText(value: unknown) {
   const text = String(value || '').toLowerCase();
   return [
     'provider authentication failed',
@@ -187,7 +204,7 @@ function renderAuthErrorAction() {
   return wrap;
 }
 
-function renderLogItems(items) {
+function renderLogItems(items: ConversationItem[] = []) {
   logEl.replaceChildren();
   for (const item of items || []) {
     if (!item || !['user', 'assistant', 'error', 'attachment'].includes(item.kind)) continue;
@@ -215,16 +232,16 @@ function renderLogItems(items) {
   }
 }
 
-function isDismissibleConversation(data) {
+function isDismissibleConversation(data: ConversationData | null) {
   const status = String((data && data.runStatus) || '').toLowerCase();
   return status === 'completed' || status === 'error' || status === 'failed' || status === 'cancelled' || status === 'canceled';
 }
 
-function isCancelableConversation(data) {
+function isCancelableConversation(data: ConversationData | null) {
   return String((data && data.runStatus) || '').toLowerCase() === 'running';
 }
 
-function updateComposerFromData(data) {
+function updateComposerFromData(data: ConversationData | null) {
   if (!followupInput || !sendBtn) return;
   const ok = data && data.found;
   const canFollowup = ok;
@@ -244,7 +261,7 @@ function updateComposerFromData(data) {
   }
 }
 
-function updateStatusFromData(data) {
+function updateStatusFromData(data: ConversationData | null) {
   if (!statusEl) return;
   if (!data || !data.found) {
     statusEl.hidden = true;
@@ -268,7 +285,7 @@ function updateStatusFromData(data) {
   statusEl.textContent = label;
 }
 
-function setComposerError(message) {
+function setComposerError(message: unknown) {
   if (!composerError) return;
   const text = String(message || '').trim();
   composerError.hidden = !text;
@@ -283,7 +300,7 @@ async function render() {
     reportEvalUiState();
     return;
   }
-  const data = await window.agentUI.getAgentConversation(catId);
+  const data = await window.agentUI.getAgentConversation(catId) as ConversationData | null;
   lastData = data;
   if (!data || !data.found) {
     logEl.textContent = 'This conversation is not available yet, or the agent was not started.';
@@ -352,7 +369,7 @@ async function cancelRun() {
 if (catId) {
   void render();
   if (typeof window.agentUI.onConversationUpdated === 'function') {
-    unsubUpdated = window.agentUI.onConversationUpdated((ev) => {
+    unsubUpdated = window.agentUI.onConversationUpdated((ev: ConversationUpdatedEvent) => {
       if (ev && String(ev.catId) === String(catId)) {
         void render();
       }

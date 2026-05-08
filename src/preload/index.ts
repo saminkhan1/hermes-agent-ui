@@ -1,8 +1,13 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+import type { AgentUIPayload } from '../shared/contracts.ts';
+
 const MAX_CAT_ID_LENGTH = 128;
 const MAX_TEXT_CHARS = 200000;
 const MAX_EVAL_PAYLOAD_BYTES = 65536;
+
+type SafeCallback = (payload: unknown) => void;
+type PayloadMapper = (payload: unknown) => unknown | typeof SKIP_PAYLOAD;
 
 function text(value, maxChars = MAX_TEXT_CHARS) {
   const out = value == null ? '' : String(value);
@@ -31,8 +36,12 @@ function payloadWithinLimit(payload) {
 
 const SKIP_PAYLOAD = Symbol('skip-payload');
 
-function onSafe(channel, callback, mapPayload = (payload) => payload) {
-  const listener = (_event, payload) => {
+function payloadObject(value: unknown): AgentUIPayload {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as AgentUIPayload : {};
+}
+
+function onSafe(channel: string, callback: SafeCallback, mapPayload: PayloadMapper = (payload) => payload) {
+  const listener = (_event: unknown, payload: unknown) => {
     try {
       const mappedPayload = mapPayload(payload);
       if (mappedPayload === SKIP_PAYLOAD) return;
@@ -53,20 +62,21 @@ contextBridge.exposeInMainWorld('agentUI', {
     const safePayload = { surface: text(surface, 64), payload };
     if (payloadWithinLimit(safePayload)) ipcRenderer.send('eval-ui-state', safePayload);
   },
-  submitNewCat: (payload = {}) => ipcRenderer.send('new-cat-submit', {
+  submitNewCat: (payload: AgentUIPayload = {}) => ipcRenderer.send('new-cat-submit', {
     modalContextId: catId(payload.modalContextId),
     prompt: text(payload.prompt),
     runtime: 'local',
   }),
   cancelNewCat: () => ipcRenderer.send('new-cat-cancel'),
-  onVoiceInputStatus: (callback) => onSafe('voice-input-status', callback, (payload = {}) => {
+  onVoiceInputStatus: (callback: SafeCallback) => onSafe('voice-input-status', callback, (payload: unknown = {}) => {
     if (!payload || typeof payload !== 'object') return SKIP_PAYLOAD;
+    const safePayload = payloadObject(payload);
     return {
-      modalContextId: catId(payload.modalContextId),
-      state: text(payload.state, 64),
-      transcript: text(payload.transcript),
-      error: text(payload.error, 4096),
-      provider: text(payload.provider, 128),
+      modalContextId: catId(safePayload.modalContextId),
+      state: text(safePayload.state, 64),
+      transcript: text(safePayload.transcript),
+      error: text(safePayload.error, 4096),
+      provider: text(safePayload.provider, 128),
     };
   }),
   overlayReady: () => ipcRenderer.send('overlay-ready'),
@@ -74,7 +84,7 @@ contextBridge.exposeInMainWorld('agentUI', {
   getPetCharacters: () => ipcRenderer.invoke('get-pet-characters'),
   refreshPetCharacters: () => ipcRenderer.send('pet-characters-refresh'),
   showPetContextMenu: () => ipcRenderer.send('pet-context-menu'),
-  startPetDrag: (payload = {}) => {
+  startPetDrag: (payload: AgentUIPayload = {}) => {
     const pointerWindowX = number(payload.pointerWindowX);
     const pointerWindowY = number(payload.pointerWindowY);
     if (pointerWindowX == null || pointerWindowY == null) return;
@@ -82,7 +92,7 @@ contextBridge.exposeInMainWorld('agentUI', {
   },
   movePetDrag: () => ipcRenderer.send('pet-drag-move'),
   endPetDrag: () => ipcRenderer.send('pet-drag-end'),
-  releasePetDrag: (payload = {}) => {
+  releasePetDrag: (payload: AgentUIPayload = {}) => {
     const velocityX = number(payload.velocityX, 5000);
     const velocityY = number(payload.velocityY, 5000);
     if (velocityX == null || velocityY == null) return;
@@ -126,24 +136,24 @@ contextBridge.exposeInMainWorld('agentUI', {
     return ipcRenderer.invoke('clipboard-write-text', { text: text(value, 20000) });
   },
   getHermesAuthStatus: () => ipcRenderer.invoke('hermes-auth-status'),
-  addHermesApiKey: (payload = {}) => ipcRenderer.invoke('hermes-auth-add-api-key', {
+  addHermesApiKey: (payload: AgentUIPayload = {}) => ipcRenderer.invoke('hermes-auth-add-api-key', {
     provider: text(payload.provider, 96),
     apiKey: text(payload.apiKey, 20000),
     label: text(payload.label, 80),
   }),
-  saveHermesModel: (payload = {}) => ipcRenderer.invoke('hermes-auth-save-model', {
+  saveHermesModel: (payload: AgentUIPayload = {}) => ipcRenderer.invoke('hermes-auth-save-model', {
     provider: text(payload.provider, 96),
     model: text(payload.model, 256),
   }),
-  startHermesOAuth: (payload = {}) => ipcRenderer.invoke('hermes-auth-oauth-start', {
+  startHermesOAuth: (payload: AgentUIPayload = {}) => ipcRenderer.invoke('hermes-auth-oauth-start', {
     provider: text(payload.provider, 96),
     retry: !!payload.retry,
   }),
-  sendHermesOAuthInput: (payload = {}) => ipcRenderer.invoke('hermes-auth-oauth-input', {
+  sendHermesOAuthInput: (payload: AgentUIPayload = {}) => ipcRenderer.invoke('hermes-auth-oauth-input', {
     sessionId: text(payload.sessionId, 128),
     input: text(payload.input, 10000),
   }),
-  cancelHermesOAuth: (payload = {}) => ipcRenderer.invoke('hermes-auth-oauth-cancel', {
+  cancelHermesOAuth: (payload: AgentUIPayload = {}) => ipcRenderer.invoke('hermes-auth-oauth-cancel', {
     sessionId: text(payload.sessionId, 128),
   }),
   finishHermesAuth: () => ipcRenderer.invoke('hermes-auth-finish'),

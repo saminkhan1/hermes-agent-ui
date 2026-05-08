@@ -223,7 +223,7 @@ function resolveLocalDescriptor(type, ref) {
   };
 }
 
-function attachmentDescriptor(item = {}) {
+function attachmentDescriptor(item: any = {}) {
   const type = normalizeAttachmentType(item.attachmentType || item.attachment_type);
   const ref = text(item.ref);
   if (!ref) return blockedDescriptor('missing_ref', type, ref);

@@ -1,5 +1,14 @@
 'use strict';
 
+import type {
+  JsonObject,
+  LocalDesktopErrorResponse,
+  LocalDesktopGatewayEvent,
+  LocalDesktopHealthResponse,
+  LocalDesktopInboundMessage,
+  LocalDesktopMessageAcceptedResponse,
+} from '../shared/contracts.ts';
+
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
@@ -10,6 +19,45 @@ const {
 } = require('./hermes-release');
 
 const DEFAULT_POST_TIMEOUT_MS = 15000;
+
+type GatewayFetch = typeof fetch;
+type GatewayLog = Pick<Console, 'warn'>;
+type GatewayClientOptions = {
+  baseUrl?: string;
+  key?: string;
+  statePath?: string;
+  fetchImpl?: GatewayFetch;
+  log?: GatewayLog;
+  onEvent?: (event: JsonObject) => void;
+  onConnectionChange?: (state: JsonObject) => void;
+  onReplayExpired?: (error: Error) => void;
+  clientVersion?: string;
+  postTimeoutMs?: number;
+  stateSaveDebounceMs?: number;
+  sseDisconnectLogThrottleMs?: number;
+  resetLastSeq?: boolean;
+};
+type GatewayState = {
+  lastSeq: number;
+};
+type PostMessageInput = {
+  conversationId?: unknown;
+  messageId?: unknown;
+  text?: unknown;
+  chatName?: unknown;
+  metadata?: JsonObject;
+  retries?: number;
+  timeoutMs?: number;
+};
+type HealthOptions = {
+  timeoutMs?: number;
+};
+type GatewayError = Error & {
+  cause?: unknown;
+  code?: string;
+  status?: number;
+  body?: unknown;
+};
 
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -34,10 +82,10 @@ function unquoteEnvValue(value) {
   return text;
 }
 
-function readGatewayEnvFile(file = defaultGatewayEnvPath()) {
+function readGatewayEnvFile(file = defaultGatewayEnvPath()): Record<string, string> {
   try {
     if (!fs.existsSync(file)) return {};
-    const out = {};
+    const out: Record<string, string> = {};
     for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith('#')) continue;
@@ -93,19 +141,19 @@ function isRetryableStatus(status) {
   return code === 429 || (code >= 500 && code <= 599);
 }
 
-function gatewayConnectionErrorMessage(error, baseUrl) {
+function gatewayConnectionErrorMessage(error: any, baseUrl) {
   const raw = error && error.message ? error.message : String(error || 'disconnected');
   const cause = error && error.cause && error.cause.message ? ` (${error.cause.message})` : '';
   return `${raw}${cause}. Check that Hermes gateway is running at ${baseUrl}.`;
 }
 
 function gatewayConnectionError(error, baseUrl) {
-  const wrapped = new Error(gatewayConnectionErrorMessage(error, baseUrl));
+  const wrapped: GatewayError = new Error(gatewayConnectionErrorMessage(error, baseUrl));
   wrapped.cause = error;
   return wrapped;
 }
 
-function parseSseFrame(frame) {
+function parseSseFrame(frame): LocalDesktopGatewayEvent | JsonObject | null {
   const event = { event: 'message', data: '', id: '' };
   for (const rawLine of String(frame || '').split(/\r?\n/)) {
     if (!rawLine || rawLine.startsWith(':')) continue;
@@ -118,7 +166,7 @@ function parseSseFrame(frame) {
     if (field === 'data') event.data = event.data ? `${event.data}\n${value}` : value;
   }
   if (!event.data) return null;
-  let payload;
+  let payload: JsonObject;
   try {
     payload = JSON.parse(event.data);
   } catch {
@@ -133,7 +181,29 @@ function parseSseFrame(frame) {
 }
 
 class HermesGatewayClient {
-  constructor(opts = {}) {
+  baseUrl: string;
+  key: string;
+  statePath: string;
+  fetchImpl?: GatewayFetch;
+  log: GatewayLog;
+  onEvent: (event: JsonObject) => void;
+  onConnectionChange: (state: JsonObject) => void;
+  onReplayExpired: (error: Error) => void;
+  clientVersion: string;
+  postTimeoutMs: number;
+  stateSaveDebounceMs: number;
+  sseDisconnectLogThrottleMs: number;
+  state: GatewayState;
+  abortController: AbortController | null;
+  streamPromise: Promise<void> | null;
+  running: boolean;
+  reconnectTimer: ReturnType<typeof setTimeout> | null;
+  stateSaveTimer: ReturnType<typeof setTimeout> | null;
+  stateDirty: boolean;
+  lastSseDisconnectLogAt: number;
+  lastSseDisconnectLogKey: string;
+
+  constructor(opts: GatewayClientOptions = {}) {
     this.baseUrl = String(opts.baseUrl || gatewayBaseUrlFromEnv()).replace(/\/+$/, '');
     this.key = String(opts.key || gatewayKeyFromEnv()).trim();
     this.statePath = opts.statePath || defaultStatePath();
@@ -206,7 +276,7 @@ class HermesGatewayClient {
     this.log.warn('[agent-ui] Hermes gateway SSE disconnected:', message);
   }
 
-  reportConnection(state, error = null) {
+  reportConnection(state: string, error: any = null) {
     try {
       this.onConnectionChange({
         state,
@@ -222,7 +292,7 @@ class HermesGatewayClient {
     return `${prefix}-${Date.now()}-${randomUUID()}`;
   }
 
-  authHeaders(extra = {}) {
+  authHeaders(extra: Record<string, string> = {}) {
     if (!this.key) throw new Error('Missing LOCAL_DESKTOP_GATEWAY_KEY for Hermes gateway. Set LOCAL_DESKTOP_GATEWAY_KEY, AGENT_UI_HERMES_GATEWAY_KEY, or create the active Hermes .env file.');
     return {
       ...extra,
@@ -230,22 +300,22 @@ class HermesGatewayClient {
     };
   }
 
-  async health({ timeoutMs = 2500 } = {}) {
+  async health({ timeoutMs = 2500 }: HealthOptions = {}): Promise<LocalDesktopHealthResponse> {
     if (!this.fetchImpl) throw new Error('fetch is not available.');
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await this.fetchImpl(`${this.baseUrl}/health`, { signal: controller.signal });
       if (!res || !res.ok) throw new Error(`Gateway health failed: ${res ? res.status : 'no response'}`);
-      return await res.json();
+      return await res.json() as LocalDesktopHealthResponse;
     } finally {
       clearTimeout(timer);
     }
   }
 
-  async postMessage({ conversationId, messageId, text, chatName, metadata = {}, retries = 1, timeoutMs = this.postTimeoutMs }) {
+  async postMessage({ conversationId, messageId, text, chatName, metadata = {}, retries = 1, timeoutMs = this.postTimeoutMs }: PostMessageInput): Promise<LocalDesktopMessageAcceptedResponse | JsonObject> {
     if (!this.fetchImpl) throw new Error('fetch is not available.');
-    const payload = {
+    const payload: LocalDesktopInboundMessage = {
       conversation_id: String(conversationId || '').trim(),
       message_id: String(messageId || this.createMessageId('msg')).trim(),
       text: String(text || ''),
@@ -258,7 +328,7 @@ class HermesGatewayClient {
     };
     const bodyText = JSON.stringify(payload);
     const attempts = Math.max(1, Math.trunc(Number(retries) || 0) + 1);
-    let lastError = null;
+    let lastError: unknown = null;
     for (let attempt = 0; attempt < attempts; attempt++) {
       const controller = Number(timeoutMs) > 0 ? new AbortController() : null;
       let timer = null;
@@ -272,28 +342,33 @@ class HermesGatewayClient {
         request.catch(() => {});
         const res = controller ? await Promise.race([
           request,
-          new Promise((_, reject) => {
+          new Promise<never>((_, reject) => {
             timer = setTimeout(() => {
               controller.abort();
-              const timeoutError = new Error(`Gateway message timed out after ${Number(timeoutMs)}ms`);
+              const timeoutError: GatewayError = new Error(`Gateway message timed out after ${Number(timeoutMs)}ms`);
               timeoutError.code = 'ETIMEDOUT';
               reject(timeoutError);
             }, Number(timeoutMs));
           }),
         ]) : await request;
-        let body = null;
+        let body: (LocalDesktopMessageAcceptedResponse | LocalDesktopErrorResponse | JsonObject | null) = null;
         try {
           body = await res.json();
         } catch {
           body = null;
         }
         if (res.ok) return body || { ok: true };
-        const error = new Error((body && (body.message || body.error)) || `Gateway message failed: ${res.status}`);
+        const errorText = body && 'message' in body
+          ? body.message
+          : body && 'error' in body
+            ? body.error
+            : '';
+        const error: GatewayError = new Error(errorText ? String(errorText) : `Gateway message failed: ${res.status}`);
         error.status = res.status;
         error.body = body;
         if (!isRetryableStatus(res.status) || attempt === attempts - 1) throw error;
         lastError = error;
-      } catch (e) {
+      } catch (e: any) {
         if (e && e.status && !isRetryableStatus(e.status)) throw e;
         const actionable = e && e.status ? e : gatewayConnectionError(e, this.baseUrl);
         if (attempt === attempts - 1) throw actionable;
@@ -332,7 +407,7 @@ class HermesGatewayClient {
       try {
         await this.openEventStream();
         delayMs = 500;
-      } catch (e) {
+      } catch (e: any) {
         if (!this.running) return;
         if (e && e.status === 409 && e.code === 'replay_window_expired') {
           this.state.lastSeq = 0;
@@ -365,7 +440,7 @@ class HermesGatewayClient {
     });
     if (res.status === 409) {
       const body = await res.json().catch(() => ({}));
-      const error = new Error((body && body.message) || 'SSE replay window expired.');
+      const error: GatewayError = new Error((body && body.message) || 'SSE replay window expired.');
       error.status = 409;
       error.code = body && body.error;
       throw error;
@@ -401,7 +476,7 @@ class HermesGatewayClient {
     }
   }
 
-  handleEvent(event) {
+  handleEvent(event: JsonObject) {
     const seq = Number(event && event.seq);
     if (Number.isFinite(seq)) {
       const nextSeq = Math.trunc(seq);

@@ -254,9 +254,9 @@ These files are the current port surface:
 - `assets/pets/goblin/pet.json` and `assets/pets/goblin/spritesheet.webp`: bundled Codex-format package.
 - `assets/pets/i-rocky/pet.json` and `assets/pets/i-rocky/spritesheet.webp`: bundled Codex-format package.
 - `assets/pets/teemo/pet.json` and `assets/pets/teemo/spritesheet.webp`: bundled Codex-format package.
-- `src/main/index.js`: package scanning, sprite dimension parsing, `CODEX_HOME` pet folder handling, selected pet persistence, app/context menu actions, renderer IPC, drag anchoring, and momentum.
-- `src/preload/index.js`: safe bridge for pet characters, refresh, drag start/move/end/release, layout, pointer, and keyboard interaction.
-- `src/renderer/src/renderer.js`: Codex sprite grid/timing, data URL sprite selection, preloading, `.codex-avatar-root` animation, pointer-capture drag sampling, horizontal running state, fling velocity calculation, and mascot rendering.
+- `src/main/index.ts`: package scanning, sprite dimension parsing, `CODEX_HOME` pet folder handling, selected pet persistence, app/context menu actions, renderer IPC, drag anchoring, and momentum.
+- `src/preload/index.ts`: safe bridge for pet characters, refresh, drag start/move/end/release, layout, pointer, and keyboard interaction.
+- `src/renderer/src/renderer.ts`: Codex sprite grid/timing, data URL sprite selection, preloading, `.codex-avatar-root` animation, pointer-capture drag sampling, horizontal running state, fling velocity calculation, and mascot rendering.
 - `src/renderer/src/styles.css`: live Codex sizing and CSS behavior for `.pet-stage`, `.pet-mascot`, and `.codex-avatar-root`.
 - `docs/pet-stack-port-evidence.md`: this evidence ledger and repeatable playbook.
 

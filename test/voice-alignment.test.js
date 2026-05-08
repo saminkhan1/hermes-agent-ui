@@ -13,8 +13,8 @@ function read(relPath) {
 }
 
 test('voice input is backed by Hermes voice-mode capture and transcription', () => {
-  const runtime = read('src/main/hermes-runtime.js');
-  const main = read('src/main/index.js');
+  const runtime = read('src/main/hermes-runtime.ts');
+  const main = read('src/main/index.ts');
 
   assert.match(runtime, /from tools\.voice_mode import check_voice_requirements, create_audio_recorder, play_beep, transcribe_recording/);
   assert.match(runtime, /silence_threshold = int\(cfg\.get\("silence_threshold", 200\)\)/);
@@ -32,10 +32,10 @@ test('voice input is backed by Hermes voice-mode capture and transcription', () 
 });
 
 test('voice and text are direct menu-selected input modes', () => {
-  const main = read('src/main/index.js');
-  const preload = read('src/preload/index.js');
+  const main = read('src/main/index.ts');
+  const preload = read('src/preload/index.ts');
   const modalHtml = read('src/renderer/modal.html');
-  const modal = read('src/renderer/src/modal.js');
+  const modal = read('src/renderer/src/modal.ts');
 
   assert.match(main, /const INPUT_MODE_TEXT = 'text'/);
   assert.match(main, /const INPUT_MODE_VOICE = 'voice'/);
@@ -70,10 +70,10 @@ test('voice and text are direct menu-selected input modes', () => {
 
 test('voice input has no legacy Apple Speech or browser MediaRecorder fallback', () => {
   const files = [
-    'src/main/index.js',
-    'src/main/hermes-runtime.js',
-    'src/preload/index.js',
-    'src/renderer/src/modal.js',
+    'src/main/index.ts',
+    'src/main/hermes-runtime.ts',
+    'src/preload/index.ts',
+    'src/renderer/src/modal.ts',
     'src/renderer/modal.html',
     'package.json',
   ];

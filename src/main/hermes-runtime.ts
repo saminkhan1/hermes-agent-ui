@@ -1,5 +1,8 @@
 'use strict';
 
+import type { ChildProcess, ExecFileOptionsWithStringEncoding } from 'child_process';
+import type { MutableJsonObject } from '../shared/contracts.ts';
+
 const fs = require('fs');
 const path = require('path');
 const net = require('net');
@@ -26,6 +29,40 @@ const LOCAL_DESKTOP_PLATFORM = 'local_desktop';
 const LOCAL_DESKTOP_HOME_CHANNEL = 'agent-ui';
 const LOCAL_DESKTOP_HOME_CHANNEL_NAME = 'Agent UI';
 const SAFE_RUNTIME_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
+
+type CommandError = Error & {
+  stdout?: string;
+  stderr?: string;
+};
+type ExecTextOptions = ExecFileOptionsWithStringEncoding & {
+  timeout?: number;
+};
+type JsonEventOptions = {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  timeout?: number;
+};
+type CaptureVoiceOptions = {
+  timeoutMs?: number;
+  onStatus?: (status: string) => void;
+};
+type GatewayEnv = Record<string, string>;
+type GatewayEnvOverrides = {
+  LOCAL_DESKTOP_HOST?: string;
+  LOCAL_DESKTOP_PORT?: string;
+  host?: string | number;
+  port?: string | number;
+};
+type GatewayReadyOptions = {
+  readyAttempts?: number;
+  readyIntervalMs?: number;
+  readyRequestTimeoutMs?: number;
+};
+type StreamProbeResult = {
+  error?: boolean;
+  done?: boolean;
+  pending?: boolean;
+};
 const GATEWAY_READY_ATTEMPTS = 80;
 const GATEWAY_READY_INTERVAL_MS = 250;
 const GATEWAY_READY_REQUEST_TIMEOUT_MS = 500;
@@ -72,13 +109,14 @@ function executableExists(filePath) {
   }
 }
 
-function execFileText(command, args, opts = {}) {
+function execFileText(command, args, opts: ExecTextOptions = { encoding: 'utf8' }) {
   return new Promise((resolve, reject) => {
     execFile(command, args, { encoding: 'utf8', timeout: 5000, ...opts }, (err, stdout, stderr) => {
       if (err) {
-        err.stdout = stdout;
-        err.stderr = stderr;
-        reject(err);
+        const commandError = err as CommandError;
+        commandError.stdout = stdout;
+        commandError.stderr = stderr;
+        reject(commandError);
         return;
       }
       resolve(String(stdout || ''));
@@ -86,7 +124,7 @@ function execFileText(command, args, opts = {}) {
   });
 }
 
-function execFileTextWithJsonEvents(command, args, opts = {}, onJsonLine) {
+function execFileTextWithJsonEvents(command, args, opts: JsonEventOptions = {}, onJsonLine) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: opts.cwd,
@@ -127,9 +165,10 @@ function execFileTextWithJsonEvents(command, args, opts = {}, onJsonLine) {
     });
     child.on('error', (err) => {
       if (timer) clearTimeout(timer);
-      err.stdout = stdout;
-      err.stderr = stderr;
-      reject(err);
+      const commandError = err as CommandError;
+      commandError.stdout = stdout;
+      commandError.stderr = stderr;
+      reject(commandError);
     });
     child.on('close', (code, signal) => {
       if (timer) clearTimeout(timer);
@@ -144,7 +183,7 @@ function execFileTextWithJsonEvents(command, args, opts = {}, onJsonLine) {
         }
       }
       if (code !== 0) {
-        const err = new Error(`Process exited with code ${code}${signal ? ` (${signal})` : ''}`);
+      const err: CommandError = new Error(`Process exited with code ${code}${signal ? ` (${signal})` : ''}`);
         err.stdout = stdout;
         err.stderr = stderr;
         reject(err);
@@ -165,8 +204,9 @@ function packageRootFromMainDir(mainDir = __dirname) {
 
 function bundledHermesCommand() {
   const candidates = [];
-  if (process.resourcesPath) {
-    candidates.push(path.join(process.resourcesPath, 'hermes-runtime', 'bin', 'hermes'));
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  if (resourcesPath) {
+    candidates.push(path.join(resourcesPath, 'hermes-runtime', 'bin', 'hermes'));
   }
   candidates.push(path.join(packageRootFromMainDir(), 'build', 'hermes-runtime', 'bin', 'hermes'));
   for (const candidate of candidates) {
@@ -387,7 +427,7 @@ function formatVoiceCaptureErrorForUser(value) {
   return raw;
 }
 
-async function captureAndTranscribeVoice(opts = {}) {
+async function captureAndTranscribeVoice(opts: CaptureVoiceOptions = {}) {
   const { command } = resolveHermesCommand();
   if (!command || !executableExists(command)) {
     return { ok: false, error: 'Hermes executable is missing. Bundle Hermes with npm run bundle:hermes or set AGENT_UI_HERMES_BIN.' };
@@ -466,7 +506,7 @@ async function captureAndTranscribeVoice(opts = {}) {
         AGENT_UI_HERMES_PROJECT_ROOT: runtime.projectRoot,
       }),
       timeout: opts.timeoutMs || 180000,
-    }, (event) => {
+    }, (event: MutableJsonObject) => {
       if (onStatus && event.status) onStatus(String(event.status));
     });
     const result = parseTranscriptionJson(stdout);
@@ -482,7 +522,8 @@ async function captureAndTranscribeVoice(opts = {}) {
       raw: result,
     };
   } catch (e) {
-    return { ok: false, error: formatVoiceCaptureErrorForUser((e && (e.stderr || e.message)) || String(e)) };
+    const error = e as CommandError;
+    return { ok: false, error: formatVoiceCaptureErrorForUser((error && (error.stderr || error.message)) || String(e)) };
   }
 }
 
@@ -663,7 +704,7 @@ function upsertGatewayEnvText(current, gatewayEnv) {
   return `${output.join('\n')}\n`;
 }
 
-function ensureGatewayEnvFile(overrides = {}) {
+function ensureGatewayEnvFile(overrides: GatewayEnvOverrides = {}) {
   const file = defaultGatewayEnvPath();
   const currentText = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   const current = readGatewayEnvFile(file);
@@ -685,14 +726,14 @@ function ensureGatewayEnvFile(overrides = {}) {
   return { file, env: merged };
 }
 
-function gatewayBaseUrlForEnv(env = {}) {
+function gatewayBaseUrlForEnv(env: GatewayEnv = {}) {
   const host = String(env.LOCAL_DESKTOP_HOST || '127.0.0.1').trim() || '127.0.0.1';
   const port = String(env.LOCAL_DESKTOP_PORT || '8766').trim() || '8766';
   return `http://${host}:${port}`;
 }
 
 function gatewayEnvOverridesFromProcess() {
-  const overrides = {};
+  const overrides: GatewayEnvOverrides = {};
   const directUrl = String(process.env.AGENT_UI_HERMES_GATEWAY_URL || '').trim();
   if (directUrl) {
     const parsed = parseGatewayBaseUrl(directUrl);
@@ -704,7 +745,7 @@ function gatewayEnvOverridesFromProcess() {
   return overrides;
 }
 
-function syncGatewayEnvToProcess(gatewayEnv) {
+function syncGatewayEnvToProcess(gatewayEnv: GatewayEnv) {
   const baseUrl = gatewayBaseUrlForEnv(gatewayEnv);
   process.env.LOCAL_DESKTOP_GATEWAY_KEY = gatewayEnv.LOCAL_DESKTOP_GATEWAY_KEY;
   process.env.LOCAL_DESKTOP_HOST = gatewayEnv.LOCAL_DESKTOP_HOST;
@@ -785,11 +826,11 @@ async function gatewayEventsOk(baseUrl, key, timeoutMs = 900) {
     if (!res.body || typeof res.body.getReader !== 'function') return false;
     const reader = res.body.getReader();
     const probeMs = Math.min(150, Math.max(25, Math.floor(timeoutMs / 3)));
-    const read = reader.read().catch(() => ({ error: true }));
+    const read: Promise<StreamProbeResult> = reader.read().catch(() => ({ error: true }));
     let probeTimer = null;
-    const result = await Promise.race([
+    const result = await Promise.race<StreamProbeResult>([
       read,
-      new Promise((resolve) => {
+      new Promise<StreamProbeResult>((resolve) => {
         probeTimer = setTimeout(() => resolve({ pending: true }), probeMs);
       }),
     ]);
@@ -872,9 +913,9 @@ function childIsAlive(child) {
   return !!(child && child.exitCode == null && child.signalCode == null);
 }
 
-function waitForChildExit(child, timeoutMs = 1000) {
+function waitForChildExit(child: ChildProcess, timeoutMs = 1000) {
   if (!childIsAlive(child)) return Promise.resolve();
-  return new Promise((resolve) => {
+  return new Promise<void>((resolve) => {
     let settled = false;
     const finish = () => {
       if (settled) return;
@@ -918,7 +959,7 @@ function gatewayStartupFailureMessage(baseUrl, childExit, stdoutTail, stderrTail
   return parts.join(' ');
 }
 
-async function ensureGatewayProcess(log = console, opts = {}) {
+async function ensureGatewayProcess(log = console, opts: GatewayReadyOptions = {}) {
   const readyAttempts = Math.max(1, Math.trunc(Number(opts.readyAttempts) || GATEWAY_READY_ATTEMPTS));
   const readyIntervalMs = Math.max(1, Math.trunc(Number(opts.readyIntervalMs) || GATEWAY_READY_INTERVAL_MS));
   const readyRequestTimeoutMs = Math.max(1, Math.trunc(Number(opts.readyRequestTimeoutMs) || GATEWAY_READY_REQUEST_TIMEOUT_MS));

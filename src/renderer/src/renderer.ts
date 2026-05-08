@@ -1,6 +1,7 @@
 /* global agentUI */
 
-import { rectForEvalElement } from './eval-ui-state.js';
+import { rectForEvalElement } from './eval-ui-state.ts';
+import type { AgentUIPayload } from '../../shared/contracts.ts';
 
 const root = document.getElementById('pet-root');
 const shell = document.getElementById('pet-shell');
@@ -591,7 +592,7 @@ function styleBox(el, box) {
 
 function ensureMascotAvatar() {
   if (!mascot) return null;
-  let avatar = mascot.querySelector('.codex-avatar-root');
+  let avatar = mascot.querySelector('.codex-avatar-root') as HTMLElement | null;
   if (!avatar) {
     mascot.textContent = '';
     avatar = document.createElement('div');
@@ -608,7 +609,7 @@ function renderMascot(list) {
   const meta = statusMeta(top ? top.level : 'idle');
   const state = petDragAvatarState || (mascotHover ? 'jumping' : meta.mascotState);
   const pet = currentPetOption();
-  const stage = mascot ? mascot.closest('.pet-stage') : null;
+  const stage = mascot ? mascot.closest('.pet-stage') as HTMLElement | null : null;
   styleBox(stage, layout.mascot);
   if (stage) {
     stage.dataset.avatarOverlayHitRegion = 'mascot';
@@ -1006,7 +1007,7 @@ function renderAll() {
   renderFrame = window.requestAnimationFrame(renderAllNow);
 }
 
-function finishLineFromPayload(payload = {}) {
+function finishLineFromPayload(payload: AgentUIPayload = {}) {
   for (const key of ['finishBubbleLine', 'result']) {
     const value = payload[key] != null ? String(payload[key]).trim() : '';
     if (value) return value;
@@ -1014,7 +1015,7 @@ function finishLineFromPayload(payload = {}) {
   return '';
 }
 
-function upsertSession(payload = {}) {
+function upsertSession(payload: AgentUIPayload = {}) {
   const catId = String(payload.catId || '').trim();
   if (!catId) return null;
   const existing = sessions.get(catId) || {
@@ -1035,7 +1036,7 @@ function upsertSession(payload = {}) {
   return existing;
 }
 
-function applyStreamBubble(ev = {}) {
+function applyStreamBubble(ev: AgentUIPayload = {}) {
   const catId = String(ev.catId || '').trim();
   if (!catId) return;
   const session = sessions.get(catId) || upsertSession({ catId, status: 'running' });
@@ -1051,7 +1052,7 @@ function applyStreamBubble(ev = {}) {
   renderAll();
 }
 
-function applyFinish(ev = {}) {
+function applyFinish(ev: AgentUIPayload = {}) {
   const catId = String(ev.catId || '').trim();
   if (!catId) return;
   const session = sessions.get(catId) || upsertSession({ catId });

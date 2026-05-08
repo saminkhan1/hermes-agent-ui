@@ -459,7 +459,7 @@ test('bundled Hermes launcher uses only prebuilt runtime artifacts', () => {
 });
 
 test('direct Hermes Python probes disable bytecode writes', () => {
-  const runtime = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'hermes-runtime.js'), 'utf8');
+  const runtime = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'hermes-runtime.ts'), 'utf8');
 
   assert.match(runtime, /function pythonNoBytecodeEnv/);
   assert.match(runtime, /PYTHONDONTWRITEBYTECODE: '1'/);

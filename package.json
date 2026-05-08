@@ -30,7 +30,9 @@
     "dist:mac:connector:developer-id": "node scripts/assert-mac-release-env.js developer-id connector && npm run build && electron-builder --config packaging/electron-builder.connector.cjs --mac dmg zip --publish never",
     "dist:mac:standalone:developer-id": "node scripts/assert-mac-release-env.js developer-id standalone && HERMES_BUNDLE_SOURCE_POLICY=release npm run bundle:hermes && npm run build && electron-builder --config packaging/electron-builder.standalone.cjs --mac dmg zip --publish never",
     "dist:mac:local": "npm run dist:mac:bootstrap",
-    "verify": "npm test && npm run build",
+    "typecheck": "tsc --noEmit",
+    "verify:hermes-contracts": "node scripts/verify-hermes-contracts.cjs",
+    "verify": "npm run verify:hermes-contracts && npm run typecheck && npm test && npm run build",
     "release:manifest": "node scripts/release-manifest.js",
     "release:verify": "npm run release:verify:bootstrap",
     "release:verify:bootstrap": "RELEASE_VERIFY_SIGNING_MODE=bootstrap RELEASE_VERIFY_APP_MODE=all node scripts/release-manifest.js",
@@ -41,7 +43,7 @@
     "smoke:installed-release": "node scripts/installed-app-release-smoke.js",
     "tart:manual-gui": "bash scripts/tart-gui-manual.sh",
     "start": "electron-vite preview",
-    "test": "node --test test/*.test.js",
+    "test": "node --import tsx --test test/*.test.js",
     "prepare": "electron-vite build"
   },
   "keywords": [
@@ -53,10 +55,13 @@
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
+    "@types/node": "^25.6.2",
+    "electron": "^42.0.0",
     "electron-builder": "^26.0.12",
     "electron-vite": "^5.0.0",
-    "electron": "^41.5.0",
-    "vite": "^7.3.2"
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "vite": "^7.3.3"
   },
   "dependencies": {
     "get-windows": "^9.3.0"

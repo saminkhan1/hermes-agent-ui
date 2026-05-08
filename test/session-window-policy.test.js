@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'index.js'), 'utf8');
+const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8');
 
 function functionBody(name) {
   const start = main.indexOf(`function ${name}`);
@@ -35,8 +35,8 @@ test('opening a conversation focuses existing session window instead of replacin
 
 test('auth window dismisses without clearing pending auth work', () => {
   const body = functionBody('openHermesAuthWindow');
-  const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'auth.js'), 'utf8');
-  const preload = fs.readFileSync(path.join(__dirname, '..', 'src', 'preload', 'index.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'auth.ts'), 'utf8');
+  const preload = fs.readFileSync(path.join(__dirname, '..', 'src', 'preload', 'index.ts'), 'utf8');
 
   assert.match(body, /dismissHermesAuthWindow\(\)/);
   assert.doesNotMatch(body, /pendingAuthRun = null/);
@@ -49,7 +49,7 @@ test('auth browser handoff has monitor recovery and fallback menu copy', () => {
   const authHelpers = main.slice(main.indexOf('function idleAuthFlow'), main.indexOf('function getPetOverlayStatePath'));
   const menuBody = functionBody('hermesLoginMenuItem');
   const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'auth.html'), 'utf8');
-  const preload = fs.readFileSync(path.join(__dirname, '..', 'src', 'preload', 'index.js'), 'utf8');
+  const preload = fs.readFileSync(path.join(__dirname, '..', 'src', 'preload', 'index.ts'), 'utf8');
 
   assert.match(authHelpers, /AUTH_MONITOR_INTERVAL_MS/);
   assert.match(authHelpers, /AUTH_STALE_MS/);

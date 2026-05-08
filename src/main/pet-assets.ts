@@ -117,7 +117,7 @@ function petSpriteUrl(id) {
 
 function petMetadata(pet, { includeSprite = false } = {}) {
   if (!pet) return null;
-  const out = {
+  const out: any = {
     assetRef: pet.assetRef,
     description: pet.description,
     displayName: pet.displayName,

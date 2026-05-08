@@ -12,12 +12,29 @@ const {
   protocol,
   net,
 } = require('electron');
+
+import type { MutableJsonObject } from '../shared/contracts.ts';
+
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { fileURLToPath, pathToFileURL } = require('url');
 const { randomUUID, createHash } = require('crypto');
 const { execFile } = require('child_process');
+
+type IpcListener = (event: any, ...args: any[]) => void;
+type IpcHandler = (event: any, ...args: any[]) => any;
+type PreparedCatRun = MutableJsonObject & {
+  catId?: string;
+  prompt?: string;
+  modalContextId?: string;
+  launchContext?: MutableJsonObject | null;
+  closeModal?: boolean;
+};
+
+function asPayload(value: unknown): MutableJsonObject {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as MutableJsonObject : {};
+}
 const {
   recordTrace,
   getTrace,
@@ -250,7 +267,7 @@ hermesAuth.onSessionEvent((payload) => {
   handleHermesAuthSessionEvent(payload);
 });
 
-setOnAuthRequired((payload = {}) => {
+setOnAuthRequired((payload: MutableJsonObject = {}) => {
   const catId = normalizeCatId(payload.catId);
   const prompt = boundedText(payload.prompt || '');
   if (!catId || !prompt.trim()) return;
@@ -302,7 +319,7 @@ function sendHermesAuthContext(reason = '') {
   authWindow.webContents.send('hermes-auth-context', authContextPayload(reason));
 }
 
-function sendHermesAuthEvent(payload = {}) {
+function sendHermesAuthEvent(payload: MutableJsonObject = {}) {
   if (!authWindow || authWindow.isDestroyed()) return;
   authWindow.webContents.send('hermes-auth-event', {
     ...payload,
@@ -324,14 +341,14 @@ function startAuthMonitor() {
   void checkHermesAuthFlow('start');
 }
 
-function authStatusHasProvider(status = {}, provider = '') {
+function authStatusHasProvider(status: MutableJsonObject = {}, provider = '') {
   const target = String(provider || '').trim();
   const providers = Array.isArray(status.providers) ? status.providers : [];
   if (!target) return providers.length > 0;
   return providers.some((entry) => String(entry?.slug || entry?.id || '').trim() === target);
 }
 
-function markAuthFlow(state, patch = {}) {
+function markAuthFlow(state: string, patch: MutableJsonObject = {}) {
   authFlow = {
     ...authFlow,
     ...patch,
@@ -404,7 +421,7 @@ async function checkHermesAuthFlow(reason = 'check') {
   return authContextPayload(reason);
 }
 
-function startHermesOAuthFlow(payload = {}) {
+function startHermesOAuthFlow(payload: MutableJsonObject = {}) {
   const retry = !!payload.retry;
   if (retry && authFlow.sessionId) {
     ignoredAuthSessionIds.add(authFlow.sessionId);
@@ -428,7 +445,7 @@ function startHermesOAuthFlow(payload = {}) {
   return { ...result, authFlow: { ...authFlow }, hasPendingRun: !!pendingAuthRun };
 }
 
-function cancelHermesOAuthFlow(payload = {}, { clearPending = true } = {}) {
+function cancelHermesOAuthFlow(payload: MutableJsonObject = {}, { clearPending = true } = {}) {
   const sessionId = String(payload.sessionId || authFlow.sessionId || '').trim();
   if (sessionId) {
     ignoredAuthSessionIds.add(sessionId);
@@ -438,7 +455,7 @@ function cancelHermesOAuthFlow(payload = {}, { clearPending = true } = {}) {
   return { ok: true };
 }
 
-function handleHermesAuthSessionEvent(payload = {}) {
+function handleHermesAuthSessionEvent(payload: MutableJsonObject = {}) {
   const sessionId = String(payload.sessionId || '').trim();
   if (sessionId && ignoredAuthSessionIds.has(sessionId)) {
     if (payload.type === 'exit' || payload.type === 'error') ignoredAuthSessionIds.delete(sessionId);
@@ -609,7 +626,7 @@ function finiteNumberInRange(value, maxAbs = MAX_DRAG_COORDINATE) {
   return n;
 }
 
-function normalizedDragStartPayload(payload = {}) {
+function normalizedDragStartPayload(payload: MutableJsonObject = {}) {
   if (!payload || typeof payload !== 'object') return null;
   const pointerWindowX = finiteNumberInRange(payload.pointerWindowX);
   const pointerWindowY = finiteNumberInRange(payload.pointerWindowY);
@@ -617,7 +634,7 @@ function normalizedDragStartPayload(payload = {}) {
   return { pointerWindowX, pointerWindowY };
 }
 
-function normalizedDragReleasePayload(payload = {}) {
+function normalizedDragReleasePayload(payload: MutableJsonObject = {}) {
   if (!payload || typeof payload !== 'object') return null;
   const velocityX = finiteNumberInRange(payload.velocityX, 5000);
   const velocityY = finiteNumberInRange(payload.velocityY, 5000);
@@ -714,14 +731,14 @@ function isTrustedIpcEvent(event, channel) {
   return false;
 }
 
-function trustedIpcOn(channel, listener) {
+function trustedIpcOn(channel: string, listener: IpcListener) {
   ipcMain.on(channel, (event, ...args) => {
     if (!isTrustedIpcEvent(event, channel)) return;
     return listener(event, ...args);
   });
 }
 
-function trustedIpcHandle(channel, listener) {
+function trustedIpcHandle(channel: string, listener: IpcHandler) {
   ipcMain.handle(channel, (event, ...args) => {
     if (!isTrustedIpcEvent(event, channel)) {
       return { ok: false, error: 'Untrusted renderer.' };
@@ -960,7 +977,7 @@ function movePetDragToCurrentCursor() {
   applyPetLayout(displayBounds, { persist: false });
 }
 
-function startPetDrag({ pointerWindowX, pointerWindowY } = {}) {
+function startPetDrag({ pointerWindowX, pointerWindowY }: MutableJsonObject = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const x = Number(pointerWindowX);
   const y = Number(pointerWindowY);
@@ -1952,7 +1969,7 @@ function getAgentUIConfigDir() {
   return dir;
 }
 
-async function startCatRunFromPayload(payload = {}, opts = {}) {
+async function startCatRunFromPayload(payload: MutableJsonObject = {}, opts: MutableJsonObject = {}) {
   const catId = opts.catId ? normalizeCatId(opts.catId) : randomUUID();
   const modalContextId =
     normalizeCatId(opts.modalContextId) ||
@@ -1993,7 +2010,7 @@ async function startCatRunFromPayload(payload = {}, opts = {}) {
   return { ok: true, catId, runtime };
 }
 
-function launchPreparedCatRun(prepared = {}, opts = {}) {
+function launchPreparedCatRun(prepared: PreparedCatRun = {}, opts: MutableJsonObject = {}) {
   const catId = normalizeCatId(prepared.catId) || randomUUID();
   const prompt = boundedText(prepared.prompt);
   const runtime = 'local';
@@ -2071,11 +2088,11 @@ trustedIpcOn('pet-context-menu', () => {
   ]).popup({ window: mainWindow });
 });
 
-trustedIpcOn('pet-pointer-interaction-changed', (_event, payload = {}) => {
+trustedIpcOn('pet-pointer-interaction-changed', (_event, payload: MutableJsonObject = {}) => {
   setPetPointerInteraction(!!payload.active);
 });
 
-trustedIpcOn('pet-drag-start', (_event, payload = {}) => {
+trustedIpcOn('pet-drag-start', (_event, payload: MutableJsonObject = {}) => {
   const safePayload = normalizedDragStartPayload(payload);
   if (safePayload) startPetDrag(safePayload);
 });
@@ -2088,16 +2105,16 @@ trustedIpcOn('pet-drag-end', () => {
   endPetDrag();
 });
 
-trustedIpcOn('pet-drag-release', (_event, payload = {}) => {
+trustedIpcOn('pet-drag-release', (_event, payload: MutableJsonObject = {}) => {
   const safePayload = normalizedDragReleasePayload(payload);
   if (safePayload) throwPetWithVelocity(safePayload.velocityX, safePayload.velocityY);
 });
 
-trustedIpcOn('pet-element-size-changed', (_event, payload = {}) => {
+trustedIpcOn('pet-element-size-changed', (_event, payload: MutableJsonObject = {}) => {
   if (!payload || typeof payload !== 'object') return;
   cancelPetMomentum();
-  const mascot = payload.mascot && typeof payload.mascot === 'object' ? payload.mascot : null;
-  const trayPayload = payload.tray && typeof payload.tray === 'object' ? payload.tray : null;
+  const mascot = payload.mascot && typeof payload.mascot === 'object' ? payload.mascot as MutableJsonObject : null;
+  const trayPayload = payload.tray && typeof payload.tray === 'object' ? payload.tray as MutableJsonObject : null;
   const mascotWidth = mascot ? normalizedSize(mascot.width) : null;
   const mascotHeight = mascot ? normalizedSize(mascot.height) : null;
   if (mascotWidth != null && mascotHeight != null) {
@@ -2112,7 +2129,7 @@ trustedIpcOn('pet-element-size-changed', (_event, payload = {}) => {
   applyPetLayout(undefined, { persist: false });
 });
 
-trustedIpcOn('open-cat-conversation', (_e, { catId } = {}) => {
+trustedIpcOn('open-cat-conversation', (_e, { catId }: MutableJsonObject = {}) => {
   const id = normalizeCatId(catId);
   if (!id) return;
   openConversationWindow(id);
@@ -2124,7 +2141,7 @@ trustedIpcOn('close-conversation-window', () => {
   }
 });
 
-trustedIpcOn('dismiss-cat', async (_e, { catId } = {}) => {
+trustedIpcOn('dismiss-cat', async (_e, { catId }: MutableJsonObject = {}) => {
   const id = normalizeCatId(catId);
   if (!id) return;
   const result = await dismissAgent(id, { getMainWindow: () => mainWindow, log: console });
@@ -2134,19 +2151,19 @@ trustedIpcOn('dismiss-cat', async (_e, { catId } = {}) => {
   }
 });
 
-trustedIpcHandle('agent-followup', (_e, { catId, text } = {}) => {
+trustedIpcHandle('agent-followup', (_e, { catId, text }: MutableJsonObject = {}) => {
   const id = normalizeCatId(catId);
   if (!id) return { ok: false, error: 'Missing session id.' };
   return sendFollowup(id, boundedText(text), { getMainWindow: () => mainWindow, log: console });
 });
 
-trustedIpcHandle('agent-cancel', (_e, { catId } = {}) => {
+trustedIpcHandle('agent-cancel', (_e, { catId }: MutableJsonObject = {}) => {
   const id = normalizeCatId(catId);
   if (!id) return { ok: false, error: 'Missing session id.' };
   return cancelAgent(id, { getMainWindow: () => mainWindow, log: console });
 });
 
-trustedIpcHandle('open-agent-attachment', async (_e, { url } = {}) => {
+trustedIpcHandle('open-agent-attachment', async (_e, { url }: MutableJsonObject = {}) => {
   const value = boundedText(url, 4096).trim();
   if (!value) return { ok: false, error: 'Missing attachment URL.' };
   try {
@@ -2167,7 +2184,7 @@ trustedIpcHandle('open-agent-attachment', async (_e, { url } = {}) => {
   return { ok: false, error: 'Unsupported attachment URL.' };
 });
 
-trustedIpcHandle('open-external-url', async (_e, { url } = {}) => {
+trustedIpcHandle('open-external-url', async (_e, { url }: MutableJsonObject = {}) => {
   const value = boundedText(url, 4096).trim();
   if (!value) return { ok: false, error: 'Missing URL.' };
   try {
@@ -2182,7 +2199,7 @@ trustedIpcHandle('open-external-url', async (_e, { url } = {}) => {
   }
 });
 
-trustedIpcHandle('clipboard-write-text', (_e, { text } = {}) => {
+trustedIpcHandle('clipboard-write-text', (_e, { text }: MutableJsonObject = {}) => {
   const value = boundedText(text, 20000);
   if (!value) return { ok: false, error: 'Missing text.' };
   clipboard.writeText(value);
@@ -2202,23 +2219,23 @@ trustedIpcHandle('hermes-auth-status', async () => {
   }
 });
 
-trustedIpcHandle('hermes-auth-add-api-key', async (_e, payload = {}) => {
+trustedIpcHandle('hermes-auth-add-api-key', async (_e, payload: MutableJsonObject = {}) => {
   return hermesAuth.addApiKeyCredential(payload);
 });
 
-trustedIpcHandle('hermes-auth-save-model', async (_e, payload = {}) => {
+trustedIpcHandle('hermes-auth-save-model', async (_e, payload: MutableJsonObject = {}) => {
   return hermesAuth.saveModelSelection(payload);
 });
 
-trustedIpcHandle('hermes-auth-oauth-start', (_e, payload = {}) => {
+trustedIpcHandle('hermes-auth-oauth-start', (_e, payload: MutableJsonObject = {}) => {
   return startHermesOAuthFlow(payload);
 });
 
-trustedIpcHandle('hermes-auth-oauth-input', (_e, payload = {}) => {
+trustedIpcHandle('hermes-auth-oauth-input', (_e, payload: MutableJsonObject = {}) => {
   return hermesAuth.sendOAuthInput(payload);
 });
 
-trustedIpcHandle('hermes-auth-oauth-cancel', (_e, payload = {}) => {
+trustedIpcHandle('hermes-auth-oauth-cancel', (_e, payload: MutableJsonObject = {}) => {
   return cancelHermesOAuthFlow(payload, { clearPending: true });
 });
 
@@ -2302,7 +2319,7 @@ async function closeEvalModal() {
   return { ok: true };
 }
 
-async function waitForEvalCat({ catId, timeoutMs = 180000 } = {}) {
+async function waitForEvalCat({ catId, timeoutMs = 180000 }: MutableJsonObject = {}) {
   const started = Date.now();
   const id = catId ? String(catId) : '';
   while (Date.now() - started <= Number(timeoutMs || 180000)) {
@@ -2367,7 +2384,7 @@ async function captureVoicePromptTranscript(onStatus) {
   return result;
 }
 
-function sendVoiceInputStatus(win, modalContextId, payload = {}) {
+function sendVoiceInputStatus(win, modalContextId, payload: MutableJsonObject = {}) {
   const state = String(payload.state || '').trim();
   if (!state || !isCurrentWindow(win, () => modalWindow)) return;
   win.webContents.send('voice-input-status', {
@@ -2412,14 +2429,14 @@ async function startVoiceSessionFromShortcut(win, modalContextId) {
   });
 }
 
-trustedIpcOn('eval-trace-event', (_event, payload = {}) => {
+trustedIpcOn('eval-trace-event', (_event, payload: MutableJsonObject = {}) => {
   if (!evalPayloadWithinLimit(payload)) return;
   const type = payload && payload.type ? payload.type : 'renderer_event';
   const { type: _type, ...rest } = payload && typeof payload === 'object' ? payload : {};
   recordTrace(type, rest);
 });
 
-trustedIpcOn('eval-ui-state', (_event, payload = {}) => {
+trustedIpcOn('eval-ui-state', (_event, payload: MutableJsonObject = {}) => {
   if (!evalTraceEnabled || !payload || typeof payload !== 'object') return;
   if (!evalPayloadWithinLimit(payload)) return;
   const surface = String(payload.surface || '').trim();
@@ -2450,37 +2467,37 @@ app.whenReady().then(() => {
       },
       listConversations: async () => ({ ok: true, conversations: listAgentConversations() }),
       getUiTargets: async () => getEvalUiTargets(),
-      start: async (payload = {}) => {
+      start: async (payload: MutableJsonObject = {}) => {
         const catId = normalizeCatId(payload.catId);
         return startCatRunFromPayload(payload, {
           catId: catId || undefined,
           closeModal: payload.closeModal !== false,
         });
       },
-      followup: async ({ catId, text } = {}) => {
+      followup: async ({ catId, text }: MutableJsonObject = {}) => {
         const id = normalizeCatId(catId);
         if (!id) return { ok: false, error: 'missing cat id' };
         return sendFollowup(id, boundedText(text), { getMainWindow: () => mainWindow, log: console });
       },
-      cancel: async ({ catId } = {}) => {
+      cancel: async ({ catId }: MutableJsonObject = {}) => {
         const id = normalizeCatId(catId);
         if (!id) return { ok: false, error: 'missing cat id' };
         return cancelAgent(id, { getMainWindow: () => mainWindow, log: console });
       },
-      openConversation: async ({ catId } = {}) => {
+      openConversation: async ({ catId }: MutableJsonObject = {}) => {
         const id = normalizeCatId(catId);
         if (!id) return { ok: false, error: 'missing cat id' };
         openConversationWindow(id);
         return { ok: true, catId: id };
       },
-      setInputMode: async ({ mode } = {}) => {
+      setInputMode: async ({ mode }: MutableJsonObject = {}) => {
         setSelectedInputMode(mode);
         return { ok: true, inputMode: selectedInputMode };
       },
-      wait: async (payload = {}) => waitForEvalCat(payload),
+      wait: async (payload: MutableJsonObject = {}) => waitForEvalCat(payload),
       getTrace: async () => getTrace(),
       closeModal: async () => closeEvalModal(),
-      dismiss: async ({ catId } = {}) => {
+      dismiss: async ({ catId }: MutableJsonObject = {}) => {
         if (!catId) return { ok: false, error: 'missing cat id' };
         const result = await dismissAgent(String(catId), { getMainWindow: () => mainWindow, log: console });
         recordTrace('cleanup_dismiss_completed', {

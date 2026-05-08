@@ -1,18 +1,19 @@
 /* global agentUI */
 
-import { activeElementForEval, rectForEvalElement, visibleTextForEval } from './eval-ui-state.js';
-import { insertNewlineAtCursor } from './insert-newline-at-cursor.js';
+import { activeElementForEval, rectForEvalElement, visibleTextForEval } from './eval-ui-state.ts';
+import { insertNewlineAtCursor } from './insert-newline-at-cursor.ts';
+import type { AgentUIPayload } from '../../shared/contracts.ts';
 
 const params = new URLSearchParams(window.location.search);
 const modalContextId = params.get('modalContextId') || '';
 const inputMode = params.get('inputMode') === 'voice' ? 'voice' : 'text';
 
-const promptEl = document.getElementById('prompt');
+const promptEl = document.getElementById('prompt') as HTMLTextAreaElement | null;
 const headerAppIcon = document.getElementById('header-app-icon');
 const errorEl = document.getElementById('error');
 const hintEl = document.getElementById('spawn-hint');
 const promptSendHintEl = document.getElementById('prompt-send-hint');
-const btnCreateCat = document.getElementById('btn-create-cat');
+const btnCreateCat = document.getElementById('btn-create-cat') as HTMLButtonElement | null;
 
 const isApple =
   /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
@@ -46,7 +47,7 @@ async function loadHeaderAppIcon() {
   }
 }
 
-function traceEvalEvent(type, payload = {}) {
+function traceEvalEvent(type: string, payload: AgentUIPayload = {}) {
   if (!window.agentUI || typeof window.agentUI.traceEvalEvent !== 'function') return;
   window.agentUI.traceEvalEvent({ type, modalContextId: modalContextId || null, ...payload });
 }
@@ -65,7 +66,7 @@ function reportEvalUiState() {
   });
 }
 
-function setError(msg) {
+function setError(msg: unknown) {
   if (!errorEl) return;
   if (!msg) {
     errorEl.hidden = true;
@@ -74,22 +75,22 @@ function setError(msg) {
     return;
   }
   errorEl.hidden = false;
-  errorEl.textContent = msg;
+  errorEl.textContent = String(msg);
   reportEvalUiState();
 }
 
-function setPromptDisabled(disabled) {
+function setPromptDisabled(disabled: boolean) {
   if (!promptEl) return;
   promptEl.disabled = !!disabled;
   promptEl.setAttribute('aria-busy', disabled ? 'true' : 'false');
 }
 
-function setSubmitDisabled(disabled) {
+function setSubmitDisabled(disabled: boolean) {
   if (!btnCreateCat) return;
   btnCreateCat.disabled = !!disabled;
 }
 
-function setVoiceStatus(message) {
+function setVoiceStatus(message: string) {
   if (!promptSendHintEl) return;
   promptSendHintEl.textContent = message;
   reportEvalUiState();
@@ -100,7 +101,7 @@ function setVoiceProgressPlaceholder() {
   promptEl.placeholder = '';
 }
 
-function applyVoiceStatus(payload = {}) {
+function applyVoiceStatus(payload: AgentUIPayload = {}) {
   if (payload.modalContextId && modalContextId && payload.modalContextId !== modalContextId) return;
   const state = String(payload.state || '').trim();
   traceEvalEvent('voice_modal_status', { state });

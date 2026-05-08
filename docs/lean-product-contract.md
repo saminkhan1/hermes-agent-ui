@@ -347,7 +347,7 @@ Product acceptance:
 Technical acceptance:
 
 - No primary-flow folder UI remains in `modal.html`.
-- `modal.js` no longer validates any folder state.
+- `modal.ts` no longer validates any folder state.
 - `startCatRunFromPayload` accepts a folderless payload.
 - Trigger-time context is captured before `openNewCatModal`.
 - First prompt posts to Hermes `local_desktop` `/messages`.

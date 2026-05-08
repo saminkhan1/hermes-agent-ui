@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.resolve(__dirname, '..');
-const helperPath = path.join(root, 'src/renderer/src/eval-ui-state.js');
+const helperPath = path.join(root, 'src/renderer/src/eval-ui-state.ts');
 
 async function loadHelper() {
   const source = fs.readFileSync(helperPath, 'utf8');

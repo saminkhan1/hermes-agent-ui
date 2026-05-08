@@ -1,5 +1,13 @@
 /* global agentUI */
 
+import type {
+  HermesAuthContext as AuthContext,
+  HermesAuthEvent as AuthEvent,
+  HermesAuthFlow as AuthFlow,
+  HermesAuthProvider as Provider,
+  HermesAuthStatus as AuthStatus,
+} from '../../shared/contracts.ts';
+
 const params = new URLSearchParams(window.location.search);
 
 const headerAppIcon = document.getElementById('header-app-icon');
@@ -7,37 +15,37 @@ const subtitleEl = document.getElementById('subtitle');
 const closeBtn = document.getElementById('btn-close');
 const connectStep = document.getElementById('connect-step');
 const modelStep = document.getElementById('model-step');
-const providerSelect = document.getElementById('provider-select');
-const oauthBtn = document.getElementById('btn-oauth');
-const apiModeBtn = document.getElementById('btn-api-mode');
+const providerSelect = document.getElementById('provider-select') as HTMLSelectElement | null;
+const oauthBtn = document.getElementById('btn-oauth') as HTMLButtonElement | null;
+const apiModeBtn = document.getElementById('btn-api-mode') as HTMLButtonElement | null;
 const apiPanel = document.getElementById('api-panel');
-const apiKeyInput = document.getElementById('api-key-input');
-const labelInput = document.getElementById('label-input');
-const saveKeyBtn = document.getElementById('btn-save-key');
+const apiKeyInput = document.getElementById('api-key-input') as HTMLInputElement | null;
+const labelInput = document.getElementById('label-input') as HTMLInputElement | null;
+const saveKeyBtn = document.getElementById('btn-save-key') as HTMLButtonElement | null;
 const oauthPanel = document.getElementById('oauth-panel');
 const oauthStatus = document.getElementById('oauth-status');
-const startOauthBtn = document.getElementById('btn-start-oauth');
+const startOauthBtn = document.getElementById('btn-start-oauth') as HTMLButtonElement | null;
 const oauthSummary = document.getElementById('oauth-summary');
-const oauthUrlEl = document.getElementById('oauth-url');
-const oauthCodeEl = document.getElementById('oauth-code');
+const oauthUrlEl = document.getElementById('oauth-url') as HTMLInputElement | null;
+const oauthCodeEl = document.getElementById('oauth-code') as HTMLInputElement | null;
 const oauthOutput = document.getElementById('oauth-output');
-const openLinkBtn = document.getElementById('btn-open-link');
-const checkOauthBtn = document.getElementById('btn-check-oauth');
-const retryOauthBtn = document.getElementById('btn-retry-oauth');
-const cancelOauthBtn = document.getElementById('btn-cancel-oauth');
-const copyLinkBtn = document.getElementById('btn-copy-link');
-const copyCodeBtn = document.getElementById('btn-copy-code');
-const modelProviderSelect = document.getElementById('model-provider-select');
-const modelSelect = document.getElementById('model-select');
+const openLinkBtn = document.getElementById('btn-open-link') as HTMLButtonElement | null;
+const checkOauthBtn = document.getElementById('btn-check-oauth') as HTMLButtonElement | null;
+const retryOauthBtn = document.getElementById('btn-retry-oauth') as HTMLButtonElement | null;
+const cancelOauthBtn = document.getElementById('btn-cancel-oauth') as HTMLButtonElement | null;
+const copyLinkBtn = document.getElementById('btn-copy-link') as HTMLButtonElement | null;
+const copyCodeBtn = document.getElementById('btn-copy-code') as HTMLButtonElement | null;
+const modelProviderSelect = document.getElementById('model-provider-select') as HTMLSelectElement | null;
+const modelSelect = document.getElementById('model-select') as HTMLSelectElement | null;
 const customModelLabel = document.getElementById('custom-model-label');
-const customModelInput = document.getElementById('custom-model-input');
+const customModelInput = document.getElementById('custom-model-input') as HTMLInputElement | null;
 const modelNote = document.getElementById('model-note');
 const errorEl = document.getElementById('error');
 const hintEl = document.getElementById('hint');
-const backBtn = document.getElementById('btn-back');
-const primaryBtn = document.getElementById('btn-primary');
+const backBtn = document.getElementById('btn-back') as HTMLButtonElement | null;
+const primaryBtn = document.getElementById('btn-primary') as HTMLButtonElement | null;
 
-let status = null;
+let status: AuthStatus | null = null;
 let mode = '';
 let step = 'connect';
 let hasPendingRun = params.get('pending') === '1';
@@ -69,11 +77,11 @@ function extractUserCode(value) {
   return inline ? inline[1].trim() : '';
 }
 
-function providerLabel(provider = {}) {
+function providerLabel(provider: Provider = {}) {
   return String(provider.name || provider.id || provider.slug || '').trim();
 }
 
-function providerId(provider = {}) {
+function providerId(provider: Provider = {}) {
   return String(provider.id || provider.slug || '').trim();
 }
 
@@ -97,14 +105,14 @@ function selectedCatalogProvider() {
   return sortedCatalog().find((provider) => providerId(provider) === id) || null;
 }
 
-function setError(message) {
+function setError(message: unknown) {
   const text = String(message || '').trim();
   if (!errorEl) return;
   errorEl.hidden = !text;
   errorEl.textContent = text;
 }
 
-function setBusy(busy, label = '') {
+function setBusy(busy: boolean, label = '') {
   for (const el of [providerSelect, oauthBtn, apiModeBtn, startOauthBtn, checkOauthBtn, retryOauthBtn, saveKeyBtn, modelProviderSelect, modelSelect, customModelInput, primaryBtn, backBtn]) {
     if (el) el.disabled = !!busy;
   }
@@ -143,14 +151,14 @@ function syncFooter() {
   }
 }
 
-function showStep(nextStep) {
+function showStep(nextStep: string) {
   step = nextStep;
   if (connectStep) connectStep.hidden = step !== 'connect';
   if (modelStep) modelStep.hidden = step !== 'model';
   syncFooter();
 }
 
-function setMode(nextMode) {
+function setMode(nextMode: string) {
   mode = nextMode;
   if (oauthBtn) oauthBtn.classList.toggle('is-selected', mode === 'oauth');
   if (apiModeBtn) apiModeBtn.classList.toggle('is-selected', mode === 'api');
@@ -188,7 +196,7 @@ function syncProviderMode() {
   }
 }
 
-function providerBySlug(slug) {
+function providerBySlug(slug: unknown) {
   return (status?.providers || []).find((provider) => String(provider.slug || '') === String(slug || '')) || null;
 }
 
@@ -290,12 +298,12 @@ function appendOauthOutput(text) {
   updateOauthSummary();
 }
 
-function setOauthMessage(message) {
+function setOauthMessage(message: unknown) {
   if (!oauthOutput) return;
   oauthOutput.textContent = String(message || '').trim();
 }
 
-function setOauthStatus(message) {
+function setOauthStatus(message: unknown) {
   if (!oauthStatus) return;
   oauthStatus.textContent = String(message || '').trim();
 }
@@ -339,12 +347,12 @@ function updateOauthSummary() {
   }
 }
 
-function resetCopyButton(button) {
+function resetCopyButton(button: HTMLButtonElement | null) {
   if (!button) return;
   button.textContent = 'Copy';
 }
 
-async function copyText(value, button) {
+async function copyText(value: unknown, button: HTMLButtonElement | null) {
   const text = String(value || '').trim();
   if (!text) return;
   try {
@@ -359,11 +367,12 @@ async function copyText(value, button) {
       window.setTimeout(() => resetCopyButton(button), 1200);
     }
   } catch (error) {
-    setError(error && error.message ? error.message : 'Could not copy.');
+    const err = error as Error;
+    setError(err && err.message ? err.message : 'Could not copy.');
   }
 }
 
-async function applyAuthFlowSnapshot(flow = {}, reason = '') {
+async function applyAuthFlowSnapshot(flow: AuthFlow = {}, reason = '') {
   if (!flow || typeof flow !== 'object') return;
   const nextState = String(flow.state || 'idle');
   oauthMonitorState = nextState;
@@ -407,7 +416,7 @@ async function applyAuthFlowSnapshot(flow = {}, reason = '') {
   syncFooter();
 }
 
-async function startOAuth(opts = {}) {
+async function startOAuth(opts: { retry?: boolean } = {}) {
   if (activeOauthSessionId && !opts.retry) return;
   const provider = providerSelect?.value || '';
   setMode('oauth');
@@ -585,7 +594,7 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-window.agentUI?.onHermesAuthEvent?.((event = {}) => {
+window.agentUI?.onHermesAuthEvent?.((event: AuthEvent = {}) => {
   void (async () => {
     if (event.sessionId && activeOauthSessionId && event.sessionId !== activeOauthSessionId) return;
     if (event.authFlow) {
@@ -614,7 +623,7 @@ window.agentUI?.onHermesAuthEvent?.((event = {}) => {
   })();
 });
 
-window.agentUI?.onHermesAuthContext?.((payload = {}) => {
+window.agentUI?.onHermesAuthContext?.((payload: AuthContext = {}) => {
   hasPendingRun = !!payload.hasPendingRun;
   if (payload.authFlow) void applyAuthFlowSnapshot(payload.authFlow, payload.reason || '');
 });
