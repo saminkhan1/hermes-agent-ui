@@ -29,6 +29,22 @@ function payloadWithinLimit(payload) {
   }
 }
 
+const SKIP_PAYLOAD = Symbol('skip-payload');
+
+function onSafe(channel, callback, mapPayload = (payload) => payload) {
+  const listener = (_event, payload) => {
+    try {
+      const mappedPayload = mapPayload(payload);
+      if (mappedPayload === SKIP_PAYLOAD) return;
+      callback(mappedPayload);
+    } catch {
+      // ignore renderer callback errors
+    }
+  };
+  ipcRenderer.on(channel, listener);
+  return () => ipcRenderer.removeListener(channel, listener);
+}
+
 contextBridge.exposeInMainWorld('agentUI', {
   traceEvalEvent: (payload) => {
     if (payloadWithinLimit(payload)) ipcRenderer.send('eval-trace-event', payload);
@@ -43,24 +59,16 @@ contextBridge.exposeInMainWorld('agentUI', {
     runtime: 'local',
   }),
   cancelNewCat: () => ipcRenderer.send('new-cat-cancel'),
-  onVoiceInputStatus: (callback) => {
-    const listener = (_event, payload = {}) => {
-      if (!payload || typeof payload !== 'object') return;
-      try {
-        callback({
-          modalContextId: catId(payload.modalContextId),
-          state: text(payload.state, 64),
-          transcript: text(payload.transcript),
-          error: text(payload.error, 4096),
-          provider: text(payload.provider, 128),
-        });
-      } catch {
-        // ignore
-      }
+  onVoiceInputStatus: (callback) => onSafe('voice-input-status', callback, (payload = {}) => {
+    if (!payload || typeof payload !== 'object') return SKIP_PAYLOAD;
+    return {
+      modalContextId: catId(payload.modalContextId),
+      state: text(payload.state, 64),
+      transcript: text(payload.transcript),
+      error: text(payload.error, 4096),
+      provider: text(payload.provider, 128),
     };
-    ipcRenderer.on('voice-input-status', listener);
-    return () => ipcRenderer.removeListener('voice-input-status', listener);
-  },
+  }),
   overlayReady: () => ipcRenderer.send('overlay-ready'),
   togglePetOverlay: () => ipcRenderer.send('pet-overlay-toggle'),
   getPetCharacters: () => ipcRenderer.invoke('get-pet-characters'),
@@ -84,77 +92,17 @@ contextBridge.exposeInMainWorld('agentUI', {
     if (payload && typeof payload === 'object') ipcRenderer.send('pet-element-size-changed', payload);
   },
   setPetPointerInteraction: (active) => ipcRenderer.send('pet-pointer-interaction-changed', { active: !!active }),
-  onPetLayoutChanged: (callback) => {
-    const listener = (_event, payload) => {
-      try {
-        callback(payload);
-      } catch {
-        // ignore
-      }
-    };
-    ipcRenderer.on('pet-layout-changed', listener);
-    return () => ipcRenderer.removeListener('pet-layout-changed', listener);
-  },
-  onPetCharacterChanged: (callback) => {
-    const listener = (_event, payload) => {
-      try {
-        callback(payload);
-      } catch {
-        // ignore
-      }
-    };
-    ipcRenderer.on('pet-character-changed', listener);
-    return () => ipcRenderer.removeListener('pet-character-changed', listener);
-  },
-  onSpawnCat: (callback) => {
-    const listener = (_event, payload) => {
-      try {
-        callback(payload);
-      } catch {
-        // ignore
-      }
-    };
-    ipcRenderer.on('spawn-cat', listener);
-    return () => ipcRenderer.removeListener('spawn-cat', listener);
-  },
-  onAgentFinished: (callback) => {
-    const listener = (_event, payload) => {
-      try {
-        callback(payload);
-      } catch {
-        // ignore
-      }
-    };
-    ipcRenderer.on('agent-finished', listener);
-    return () => ipcRenderer.removeListener('agent-finished', listener);
-  },
-  onAgentStreamBubble: (callback) => {
-    const listener = (_event, payload) => {
-      try {
-        callback(payload);
-      } catch {
-        // ignore
-      }
-    };
-    ipcRenderer.on('agent-stream-bubble', listener);
-    return () => ipcRenderer.removeListener('agent-stream-bubble', listener);
-  },
+  onPetLayoutChanged: (callback) => onSafe('pet-layout-changed', callback),
+  onPetCharacterChanged: (callback) => onSafe('pet-character-changed', callback),
+  onSpawnCat: (callback) => onSafe('spawn-cat', callback),
+  onAgentFinished: (callback) => onSafe('agent-finished', callback),
+  onAgentStreamBubble: (callback) => onSafe('agent-stream-bubble', callback),
   openCatConversation: (value) => {
     const id = catId(value);
     if (id) ipcRenderer.send('open-cat-conversation', { catId: id });
   },
   getAgentConversation: (value) => ipcRenderer.invoke('get-agent-conversation', catId(value)),
-  onConversationUpdated: (callback) => {
-    const listener = (_event, payload) => {
-      try {
-        callback(payload);
-      } catch {
-        // ignore
-      }
-    };
-    ipcRenderer.on('conversation-updated', listener);
-    return () => ipcRenderer.removeListener('conversation-updated', listener);
-  },
+  onConversationUpdated: (callback) => onSafe('conversation-updated', callback),
   closeConversationWindow: () => {
     ipcRenderer.send('close-conversation-window');
   },
@@ -203,50 +151,10 @@ contextBridge.exposeInMainWorld('agentUI', {
   checkHermesAuthNow: () => ipcRenderer.invoke('hermes-auth-check-now'),
   closeHermesAuth: () => ipcRenderer.send('hermes-auth-close'),
   openHermesAuth: () => ipcRenderer.send('hermes-auth-open'),
-  onHermesAuthEvent: (callback) => {
-    const listener = (_event, payload) => {
-      try {
-        callback(payload);
-      } catch {
-        // ignore
-      }
-    };
-    ipcRenderer.on('hermes-auth-event', listener);
-    return () => ipcRenderer.removeListener('hermes-auth-event', listener);
-  },
-  onHermesAuthContext: (callback) => {
-    const listener = (_event, payload) => {
-      try {
-        callback(payload);
-      } catch {
-        // ignore
-      }
-    };
-    ipcRenderer.on('hermes-auth-context', listener);
-    return () => ipcRenderer.removeListener('hermes-auth-context', listener);
-  },
-  onAgentRestarted: (callback) => {
-    const listener = (_event, payload) => {
-      try {
-        callback(payload);
-      } catch {
-        // ignore
-      }
-    };
-    ipcRenderer.on('agent-restarted', listener);
-    return () => ipcRenderer.removeListener('agent-restarted', listener);
-  },
-  onRemoveCat: (callback) => {
-    const listener = (_event, payload) => {
-      try {
-        callback(payload);
-      } catch {
-        // ignore
-      }
-    };
-    ipcRenderer.on('remove-cat', listener);
-    return () => ipcRenderer.removeListener('remove-cat', listener);
-  },
+  onHermesAuthEvent: (callback) => onSafe('hermes-auth-event', callback),
+  onHermesAuthContext: (callback) => onSafe('hermes-auth-context', callback),
+  onAgentRestarted: (callback) => onSafe('agent-restarted', callback),
+  onRemoveCat: (callback) => onSafe('remove-cat', callback),
   reportCatCounts: (counts) => {
     ipcRenderer.send('cat-counts', counts);
   },

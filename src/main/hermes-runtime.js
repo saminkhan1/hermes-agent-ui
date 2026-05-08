@@ -856,7 +856,7 @@ function gatewayAutostartEnabled() {
   return envFlag(GATEWAY_AUTOSTART_ENV, true);
 }
 
-function gatewayArgsFor(command) {
+function gatewayArgsFor() {
   return ['gateway', 'run', '--replace'];
 }
 
@@ -978,7 +978,7 @@ async function ensureGatewayProcess(log = console, opts = {}) {
       PATH: SAFE_RUNTIME_PATH,
       PYTHONNOUSERSITE: '1',
     };
-    const child = spawn(command, gatewayArgsFor(command), {
+    const child = spawn(command, gatewayArgsFor(), {
       cwd: hermesCwd(command),
       env,
       windowsHide: true,

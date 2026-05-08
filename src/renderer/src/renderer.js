@@ -334,20 +334,6 @@ function statusMeta(status) {
   return STATUS_META[normalizeStatus(status)] || STATUS_META.idle;
 }
 
-function sessionPriority(session) {
-  return STATUS_PRIORITY[normalizeStatus(session.status)] ?? STATUS_PRIORITY.idle;
-}
-
-function sortedSessions() {
-  return [...sessions.values()].sort((a, b) => {
-    const pa = sessionPriority(a);
-    const pb = sessionPriority(b);
-    if (pa !== pb) return pa - pb;
-    const updated = Number(b.updatedAt || 0) - Number(a.updatedAt || 0);
-    return updated === 0 ? String(a.catId).localeCompare(String(b.catId)) : updated;
-  });
-}
-
 function sessionTitle(session) {
   const title = summarize(session.prompt, 48);
   return title || 'New session';
@@ -387,7 +373,7 @@ function notificationForSession(session) {
 }
 
 function notifications() {
-  return sortedSessions()
+  return [...sessions.values()]
     .map((session) => notificationForSession(session))
     .filter(Boolean)
     .sort((a, b) => {
@@ -695,6 +681,8 @@ function makeRow(notification, index) {
   const canExpand = notificationCanExpand(notification);
   row.dataset.canExpand = canExpand ? 'true' : 'false';
 
+  const bodyText = rowBody(notification);
+
   const card = document.createElement('div');
   card.className = 'pet-row-card';
 
@@ -703,7 +691,7 @@ function makeRow(notification, index) {
   action.tabIndex = notification.action ? 0 : -1;
   if (notification.action) {
     action.setAttribute('role', 'button');
-    action.setAttribute('aria-label', `${notification.title}. ${statusMeta(notification.level).label}. ${rowBody(notification)}. Open notification`);
+    action.setAttribute('aria-label', `${notification.title}. ${statusMeta(notification.level).label}. ${bodyText}. Open notification`);
     action.addEventListener('click', () => openSessionConversation(notification.action.catId));
     action.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -721,7 +709,7 @@ function makeRow(notification, index) {
 
   const body = document.createElement('div');
   body.className = 'pet-row-body';
-  body.textContent = rowBody(notification);
+  body.textContent = bodyText;
   const isExpanded = expandedRows.has(notification.id);
   body.style.maxHeight = `${isExpanded ? EXPANDED_BODY_MAX_HEIGHT : COLLAPSED_BODY_MAX_HEIGHT}px`;
   if (isExpanded) body.dataset.expanded = 'true';
@@ -729,7 +717,7 @@ function makeRow(notification, index) {
   const measure = document.createElement('div');
   measure.className = 'pet-row-measure';
   measure.setAttribute('aria-hidden', 'true');
-  measure.textContent = rowBody(notification);
+  measure.textContent = bodyText;
 
   action.append(titleWrap, body);
   card.append(action, measure, makeStatusIcon(notification));

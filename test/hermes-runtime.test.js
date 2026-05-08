@@ -366,7 +366,7 @@ test('ensureGatewayProcess does not report an unready child as ready', async (t)
 });
 
 test('gateway autostart uses replace mode for quit/reopen recovery', () => {
-  assert.deepEqual(gatewayArgsFor('/path/to/hermes'), ['gateway', 'run', '--replace']);
+  assert.deepEqual(gatewayArgsFor(), ['gateway', 'run', '--replace']);
 });
 
 test('connector mode does not install or copy local desktop plugins', async (t) => {
