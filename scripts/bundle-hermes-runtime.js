@@ -23,6 +23,7 @@ const pythonRoot = path.join(outRoot, 'python');
 const hermesReleaseTag = 'v2026.4.30';
 const hermesReleaseUrl = 'https://github.com/NousResearch/hermes-agent/releases/tag/v2026.4.30';
 const platformOverlayRoot = path.join(repoRoot, 'vendor', 'hermes-platforms');
+const toolOverlayRoot = path.join(repoRoot, 'vendor', 'hermes-tool-overlays');
 const defaultHermesSource = path.join(realUserHomeDir(), 'Documents', 'hermes', 'hermes-agent');
 const source = path.resolve(
   process.env.HERMES_BUNDLE_SOURCE ||
@@ -111,7 +112,6 @@ function treeSha256(root) {
         continue;
       }
       if (st.isDirectory()) {
-        hash.update(`D\0${rel}\0`);
         walk(full);
         continue;
       }
@@ -151,31 +151,98 @@ function copyVendoredPlatformOverlays(hermesRoot) {
   const copied = [];
   for (const overlay of overlays) {
     const dst = path.join(hermesRoot, 'plugins', 'platforms', overlay.name);
-    if (fs.existsSync(dst)) {
-      const manifest = path.join(dst, 'plugin.yaml');
-      const init = path.join(dst, '__init__.py');
-      if (!fs.existsSync(manifest) || !fs.existsSync(init)) {
-        throw new Error(`Hermes source already contains plugins/platforms/${overlay.name}, but it is missing plugin.yaml or __init__.py.`);
-      }
-      copied.push({
-        name: overlay.name,
-        source: 'hermes-source',
-        sourcePath: path.relative(outRoot, dst),
-        target: path.relative(outRoot, dst),
-        sha256: treeSha256(dst),
-        vendoredSha256: overlay.sha256,
-        action: 'kept-source',
-      });
-      continue;
-    }
+    const sourceAction = fs.existsSync(dst) ? 'replaced-source' : 'copied-vendored';
+    rmrf(dst);
     copyTree(overlay.source, dst);
     copied.push({
       ...overlay,
       target: path.relative(outRoot, dst),
+      action: sourceAction,
+    });
+  }
+  return copied;
+}
+
+function vendoredToolOverlays() {
+  if (!fs.existsSync(toolOverlayRoot)) return [];
+  const overlays = [];
+  for (const entry of fs.readdirSync(toolOverlayRoot).sort()) {
+    const src = path.join(toolOverlayRoot, entry);
+    if (!fs.lstatSync(src).isDirectory()) continue;
+    const toolsDir = path.join(src, 'tools');
+    if (!fs.existsSync(toolsDir) || !fs.lstatSync(toolsDir).isDirectory()) {
+      throw new Error(`Hermes tool overlay ${entry} must contain a tools/ directory`);
+    }
+    overlays.push({
+      name: entry,
+      source: src,
+      sha256: treeSha256(src),
+    });
+  }
+  return overlays;
+}
+
+function copyVendoredToolOverlays(hermesRoot) {
+  const overlays = vendoredToolOverlays();
+  const copied = [];
+  for (const overlay of overlays) {
+    const srcTools = path.join(overlay.source, 'tools');
+    const dstTools = path.join(hermesRoot, 'tools');
+    copyTree(srcTools, dstTools);
+    copied.push({
+      ...overlay,
+      target: path.relative(outRoot, dstTools),
       action: 'copied-vendored',
     });
   }
   return copied;
+}
+
+function patchTextFile(file, patches) {
+  let body = fs.readFileSync(file, 'utf8');
+  for (const patch of patches) {
+    if (patch.present.test(body)) continue;
+    if (!patch.find.test(body)) {
+      throw new Error(`Cannot patch ${path.relative(repoRoot, file)}: missing ${patch.label}`);
+    }
+    body = body.replace(patch.find, patch.replace);
+  }
+  fs.writeFileSync(file, body);
+}
+
+function patchHermesComputerUseToolset(hermesRoot) {
+  const toolsetsPath = path.join(hermesRoot, 'toolsets.py');
+  const toolsConfigPath = path.join(hermesRoot, 'hermes_cli', 'tools_config.py');
+
+  patchTextFile(toolsetsPath, [
+    {
+      label: '_HERMES_CORE_TOOLS computer_use entry',
+      present: /"computer_use",\s*# macOS desktop control via cua-driver/,
+      find: /(# Browser automation\n(?:\s+"browser_[^"]+",?[^\n]*\n)+)/,
+      replace: `$1    # macOS desktop control via cua-driver\n    "computer_use",\n`,
+    },
+    {
+      label: 'computer_use standalone toolset',
+      present: /"computer_use":\s*{\s*"description":\s*"macOS desktop control via cua-driver"/,
+      find: /(\n\s+"cronjob":\s*{\n\s*"description":\s*"Cronjob management tool[\s\S]*?\n\s+},\n)/,
+      replace: `$1\n    "computer_use": {\n        "description": "macOS desktop control via cua-driver",\n        "tools": ["computer_use"],\n        "includes": [],\n    },\n`,
+    },
+  ]);
+
+  patchTextFile(toolsConfigPath, [
+    {
+      label: 'CONFIGURABLE_TOOLSETS computer_use entry',
+      present: /\("computer_use",\s*"🖥️\s+Computer Use"/,
+      find: /(\("browser",\s+"🌐 Browser Automation",\s+"navigate, click, type, scroll"\),\n)/,
+      replace: `$1    ("computer_use",     "🖥️  Computer Use",            "control local macOS apps via cua-driver"),\n`,
+    },
+    {
+      label: 'local_desktop computer_use default',
+      present: /if platform == "local_desktop":\n\s+enabled_toolsets\.add\("computer_use"\)/,
+      find: /(\s+# Honor agent\.disabled_toolsets from config\.yaml)/,
+      replace: `\n    # local_desktop is the Hermes platform that represents the user's Mac.\n    # Give it computer_use by default when the tool is bundled and its check_fn passes.\n    if platform == "local_desktop":\n        enabled_toolsets.add("computer_use")\n\n$1`,
+    },
+  ]);
 }
 
 function gitHead(dir) {
@@ -246,7 +313,7 @@ function createBuildVenv(venvDir) {
 
 function installRuntimeDeps(venvDir) {
   const py = runtimePython(venvDir);
-  const packageSpec = `${path.join(outRoot, 'hermes-agent')}[voice,messaging]`;
+  const packageSpec = `${path.join(outRoot, 'hermes-agent')}[voice,messaging,mcp]`;
   if (spawnSync('uv', ['--version'], { encoding: 'utf8' }).status === 0) {
     runChecked('uv', ['pip', 'install', '--python', py, '--link-mode', 'copy', '--compile-bytecode', packageSpec]);
     return;
@@ -257,7 +324,7 @@ function installRuntimeDeps(venvDir) {
 function verifyRuntimeDeps(venvDir) {
   runChecked(runtimePython(venvDir), ['-c', [
     'import importlib.util',
-    'missing = [name for name in ("aiohttp", "yaml", "openai", "rich", "sounddevice", "numpy", "faster_whisper") if importlib.util.find_spec(name) is None]',
+    'missing = [name for name in ("aiohttp", "yaml", "openai", "rich", "sounddevice", "numpy", "faster_whisper", "mcp") if importlib.util.find_spec(name) is None]',
     'raise SystemExit("missing runtime deps: " + ", ".join(missing) if missing else 0)',
   ].join('\n')]);
 }
@@ -348,7 +415,7 @@ function buildEmbeddedPython() {
   verifyNoEscapingSymlinks(pythonRoot);
   runChecked(path.join(pythonRoot, 'bin', 'python3'), ['-c', [
     'import importlib.util, json, sys',
-    'missing = [name for name in ("aiohttp", "yaml", "openai", "rich", "sounddevice", "numpy", "faster_whisper") if importlib.util.find_spec(name) is None]',
+    'missing = [name for name in ("aiohttp", "yaml", "openai", "rich", "sounddevice", "numpy", "faster_whisper", "mcp") if importlib.util.find_spec(name) is None]',
     'print(json.dumps({"ok": not missing, "missing": missing, "version": sys.version}))',
     'raise SystemExit(1 if missing else 0)',
   ].join('\n')]);
@@ -396,8 +463,12 @@ ensureDir(outRoot);
 const hermesRoot = path.join(outRoot, 'hermes-agent');
 copyTree(source, hermesRoot);
 const hermesPlatformOverlays = copyVendoredPlatformOverlays(hermesRoot);
-const bundledHermesAgentTreeSha256 = treeSha256(hermesRoot);
+const hermesToolOverlays = copyVendoredToolOverlays(hermesRoot);
+if (hermesToolOverlays.some((overlay) => overlay.name === 'computer_use')) {
+  patchHermesComputerUseToolset(hermesRoot);
+}
 const embeddedPython = buildEmbeddedPython();
+const bundledHermesAgentTreeSha256 = treeSha256(hermesRoot);
 writeLauncher();
 fs.writeFileSync(path.join(outRoot, 'MANIFEST.json'), JSON.stringify({
   version: require(path.join(repoRoot, 'package.json')).version,
@@ -412,6 +483,7 @@ fs.writeFileSync(path.join(outRoot, 'MANIFEST.json'), JSON.stringify({
   hermesSourceIsReleaseHead: hermesSourceState.isReleaseHead,
   bundledHermesAgentTreeSha256,
   hermesPlatformOverlays,
+  hermesToolOverlays,
   appGitHead: gitHead(repoRoot),
   python: embeddedPython,
   builtAt: new Date().toISOString(),
@@ -419,5 +491,8 @@ fs.writeFileSync(path.join(outRoot, 'MANIFEST.json'), JSON.stringify({
 console.log(`[agent-ui] Bundled Hermes runtime from ${source}`);
 if (hermesPlatformOverlays.length) {
   console.log(`[agent-ui] Added Hermes platform overlays: ${hermesPlatformOverlays.map((overlay) => overlay.name).join(', ')}`);
+}
+if (hermesToolOverlays.length) {
+  console.log(`[agent-ui] Added Hermes tool overlays: ${hermesToolOverlays.map((overlay) => overlay.name).join(', ')}`);
 }
 console.log(`[agent-ui] Wrote ${outRoot}`);

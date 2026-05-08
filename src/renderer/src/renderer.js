@@ -1033,6 +1033,14 @@ function renderAll() {
   renderFrame = window.requestAnimationFrame(renderAllNow);
 }
 
+function finishLineFromPayload(payload = {}) {
+  for (const key of ['finishBubbleLine', 'result']) {
+    const value = payload[key] != null ? String(payload[key]).trim() : '';
+    if (value) return value;
+  }
+  return '';
+}
+
 function upsertSession(payload = {}) {
   const catId = String(payload.catId || '').trim();
   if (!catId) return null;
@@ -1048,8 +1056,7 @@ function upsertSession(payload = {}) {
   existing.prompt = payload.prompt != null ? String(payload.prompt) : existing.prompt;
   existing.kind = payload.kind != null ? String(payload.kind) : existing.kind;
   existing.status = payload.status != null ? String(payload.status) : existing.status || 'running';
-  if (payload.result != null && String(payload.result).trim()) existing.finishLine = String(payload.result).trim();
-  if (payload.finishBubbleLine != null && String(payload.finishBubbleLine).trim()) existing.finishLine = String(payload.finishBubbleLine).trim();
+  existing.finishLine = finishLineFromPayload(payload) || existing.finishLine;
   existing.updatedAt = Date.now();
   sessions.set(catId, existing);
   return existing;
@@ -1077,8 +1084,7 @@ function applyFinish(ev = {}) {
   const session = sessions.get(catId) || upsertSession({ catId });
   if (!session) return;
   session.status = ev.status != null ? String(ev.status) : session.status;
-  if (ev.result != null && String(ev.result).trim()) session.finishLine = String(ev.result).trim();
-  if (ev.finishBubbleLine != null && String(ev.finishBubbleLine).trim()) session.finishLine = String(ev.finishBubbleLine).trim();
+  session.finishLine = finishLineFromPayload(ev) || session.finishLine;
   session.streamBubble = '';
   session.updatedAt = Date.now();
   sessions.set(catId, session);

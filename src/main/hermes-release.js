@@ -7,7 +7,6 @@ const path = require('path');
 const RELEASE_MODE_CONNECTOR = 'connector';
 const RELEASE_MODE_STANDALONE = 'standalone';
 const RELEASE_MODES = new Set([RELEASE_MODE_CONNECTOR, RELEASE_MODE_STANDALONE]);
-const DEFAULT_CONNECTOR_PLUGIN_REPO = 'saminkhan1/agent-ui-local-desktop-plugin';
 
 function realUserHomeDir() {
   try {
@@ -122,26 +121,10 @@ function defaultConnectorHermesCandidates() {
   ];
 }
 
-function connectorLocalDesktopPluginRepo() {
-  const pkg = readPackageJson();
-  return String(
-    process.env.AGENT_UI_LOCAL_DESKTOP_PLUGIN_REPO ||
-    (pkg.agentUI && pkg.agentUI.localDesktopPluginRepo) ||
-    DEFAULT_CONNECTOR_PLUGIN_REPO
-  ).trim();
-}
-
-function connectorPluginInstallArgs(repo = connectorLocalDesktopPluginRepo()) {
-  const value = String(repo || '').trim();
-  return value ? ['plugins', 'install', value, '--enable'] : [];
-}
-
 module.exports = {
   RELEASE_MODE_CONNECTOR,
   RELEASE_MODE_STANDALONE,
   connectorHermesHome,
-  connectorLocalDesktopPluginRepo,
-  connectorPluginInstallArgs,
   defaultConnectorHermesCandidates,
   defaultGatewayEnvPathForMode,
   defaultHermesHomeForMode,

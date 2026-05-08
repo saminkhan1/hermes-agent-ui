@@ -94,7 +94,7 @@ agent-UI sends tasks to Hermes through the `local_desktop` gateway only. Hermes 
 
 Release modes:
 
-- `connector`: small app for users with an existing local Hermes runtime. It remembers the detected Hermes binary path as non-secret config, revalidates it on launch, uses the default local Hermes profile for beta, installs/enables `local_desktop` only through `hermes plugins install <repo> --enable` after explicit permission, and does not bundle Hermes runtime resources.
+- `connector`: small app for users with an existing local Hermes runtime. It remembers the detected Hermes binary path as non-secret config, revalidates it on launch, uses the default local Hermes profile for beta, assumes the user added or enabled `local_desktop` through the Hermes Plugin Path, and does not bundle Hermes runtime resources or install plugins.
 - `standalone`: app-owned Hermes runtime. It ships with `local_desktop`, stores `LOCAL_DESKTOP_GATEWAY_KEY` in the app-owned Hermes `.env`, reads that key at runtime only, and starts/restarts the bundled gateway behind the scenes.
 
 Both modes share the same text launcher, voice launcher, pet/status stack, detail window, follow-up, cancel, auth/model flow, and gateway event handling.

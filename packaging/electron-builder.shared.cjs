@@ -2,9 +2,6 @@
 
 const pkg = require('../package.json');
 
-const LOCAL_DESKTOP_PLUGIN_REPO = process.env.AGENT_UI_LOCAL_DESKTOP_PLUGIN_REPO ||
-  'saminkhan1/agent-ui-local-desktop-plugin';
-
 const APP_MODES = {
   connector: {
     appId: 'ai.agent-ui.hermes',
@@ -62,7 +59,6 @@ function makeConfig({ appMode, signingMode }) {
         signingMode: normalizedSigningMode,
         hermesRuntimeIncluded: mode.hermesRuntimeIncluded,
         hermesBaselineRequirement: normalizedAppMode === 'connector' ? 'v2026.4.30+' : undefined,
-        localDesktopPluginRepo: normalizedAppMode === 'connector' ? LOCAL_DESKTOP_PLUGIN_REPO : undefined,
       },
     },
     extraResources: hermesRuntimeExtraResources(normalizedAppMode),
@@ -96,6 +92,5 @@ function makeConfig({ appMode, signingMode }) {
 
 module.exports = {
   APP_MODES,
-  LOCAL_DESKTOP_PLUGIN_REPO,
   makeConfig,
 };

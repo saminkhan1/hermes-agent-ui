@@ -245,11 +245,11 @@ function isCancelableConversation(data) {
 function updateComposerFromData(data) {
   if (!followupInput || !sendBtn) return;
   const ok = data && data.found;
-  const canFollowup = ok && !isCancelableConversation(data);
+  const canFollowup = ok;
   followupInput.disabled = !canFollowup;
   sendBtn.disabled = !canFollowup;
-  followupInput.title = canFollowup ? 'Send follow-up' : 'Follow-up is available after Hermes finishes';
-  sendBtn.title = canFollowup ? 'Send follow-up' : 'Follow-up is available after Hermes finishes';
+  followupInput.title = canFollowup ? 'Send message' : 'Session is not available';
+  sendBtn.title = canFollowup ? 'Send message' : 'Session is not available';
   if (cancelBtn) {
     const canCancel = ok && isCancelableConversation(data);
     cancelBtn.disabled = !canCancel;
@@ -327,11 +327,6 @@ async function render() {
 
 async function sendFollowup() {
   if (!catId || !followupInput) return;
-  if (isCancelableConversation(lastData)) {
-    setComposerError('Follow-up is available after Hermes finishes.');
-    updateComposerFromData(lastData);
-    return;
-  }
   const text = followupInput.value;
   if (!text.trim()) return;
   if (typeof window.agentUI.sendFollowup !== 'function') return;

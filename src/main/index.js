@@ -1518,7 +1518,7 @@ function setCatsVisible(visible) {
 
 function hermesLoginMenuItem() {
   return {
-    label: authFlowIsRecoverable() ? 'Return to Hermes Sign-In...' : 'Hermes Login...',
+    label: authFlowIsRecoverable() ? 'Continue Hermes Sign-In…' : 'Sign In to Hermes…',
     click: () => {
       openHermesAuthWindow({ reason: 'menu' });
     },
@@ -1556,64 +1556,112 @@ function openPetFolderMenuItem() {
   };
 }
 
-function inputModeMenuItem() {
+function newSessionMenuItem({ accelerator = undefined } = {}) {
   return {
-    label: 'Input Mode',
+    label: 'New Session…',
+    accelerator,
+    click: () => {
+      void handleNewCatShortcut('menu');
+    },
+  };
+}
+
+function inputModeMenuItem(mode) {
+  const normalizedInputMode = normalizeInputMode(mode);
+  return {
+    label: normalizedInputMode === INPUT_MODE_VOICE ? 'Use Voice Input' : 'Use Text Input',
+    type: 'radio',
+    checked: selectedInputMode === normalizedInputMode,
+    click: () => {
+      setSelectedInputMode(normalizedInputMode);
+    },
+  };
+}
+
+function inputModeMenuItems() {
+  return [
+    inputModeMenuItem(INPUT_MODE_TEXT),
+    inputModeMenuItem(INPUT_MODE_VOICE),
+  ];
+}
+
+function appMenuItem() {
+  return {
+    label: 'agent-UI',
     submenu: [
-      {
-        label: 'Text',
-        type: 'radio',
-        checked: selectedInputMode === INPUT_MODE_TEXT,
-        click: () => setSelectedInputMode(INPUT_MODE_TEXT),
-      },
-      {
-        label: 'Voice',
-        type: 'radio',
-        checked: selectedInputMode === INPUT_MODE_VOICE,
-        click: () => setSelectedInputMode(INPUT_MODE_VOICE),
-      },
+      { role: 'about', label: 'About agent-UI' },
+      { type: 'separator' },
+      hermesLoginMenuItem(),
+      { type: 'separator' },
+      { role: 'services' },
+      { type: 'separator' },
+      { role: 'hide', label: 'Hide agent-UI' },
+      { role: 'hideOthers' },
+      { role: 'unhide' },
+      { type: 'separator' },
+      { role: 'quit', label: 'Quit agent-UI' },
     ],
   };
 }
 
-function settingsMenuItem() {
+function petVisibilityMenuItem() {
+  const catsVisible = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible());
   return {
-    label: 'Settings',
+    label: catsVisible ? 'Hide Pet' : 'Show Pet',
+    click: () => {
+      setCatsVisible(!catsVisible);
+    },
+  };
+}
+
+function fileMenuItem() {
+  const accelerator = process.platform === 'darwin' ? 'Command+Shift+C' : 'Control+Shift+C';
+  return {
+    label: 'File',
     submenu: [
-      hermesLoginMenuItem(),
+      newSessionMenuItem({ accelerator }),
       { type: 'separator' },
-      inputModeMenuItem(),
+      ...inputModeMenuItems(),
+    ],
+  };
+}
+
+function viewMenuItem() {
+  return {
+    label: 'View',
+    submenu: [
+      petVisibilityMenuItem(),
+    ],
+  };
+}
+
+function petMenuItem() {
+  return {
+    label: 'Pet',
+    submenu: [
+      petCharacterMenuItem(),
+      refreshPetMenuItem(),
+      openPetFolderMenuItem(),
     ],
   };
 }
 
 function buildAppMenu() {
-  const catsVisible = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible());
   const accelerator = process.platform === 'darwin' ? 'Command+Shift+C' : 'Control+Shift+C';
-  const newSessionLabel = selectedInputMode === INPUT_MODE_VOICE ? 'Start Voice Session' : 'New Text Session';
   return Menu.buildFromTemplate([
-    {
-      label: newSessionLabel,
-      accelerator,
-      click: () => {
-        void handleNewCatShortcut('menu');
-      },
-    },
+    newSessionMenuItem({ accelerator }),
     { type: 'separator' },
-    settingsMenuItem(),
+    ...inputModeMenuItems(),
     { type: 'separator' },
-    {
-      label: catsVisible ? 'Close Pet' : 'Wake Pet',
-      click: () => {
-        setCatsVisible(!catsVisible);
-      },
-    },
+    petVisibilityMenuItem(),
     petCharacterMenuItem(),
     refreshPetMenuItem(),
     openPetFolderMenuItem(),
     { type: 'separator' },
+    hermesLoginMenuItem(),
+    { type: 'separator' },
     {
-      label: 'Quit',
+      label: 'Quit agent-UI',
       click: () => {
         app.quit();
       },
@@ -1621,41 +1669,29 @@ function buildAppMenu() {
   ]);
 }
 
+function editMenuItem() {
+  return {
+    label: 'Edit',
+    submenu: [
+      { role: 'undo' },
+      { role: 'redo' },
+      { type: 'separator' },
+      { role: 'cut' },
+      { role: 'copy' },
+      { role: 'paste' },
+      { type: 'separator' },
+      { role: 'selectAll' },
+    ],
+  };
+}
+
 function buildApplicationMenu() {
-  const catsVisible = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible());
-  const accelerator = process.platform === 'darwin' ? 'Command+Shift+C' : 'Control+Shift+C';
-  const newSessionLabel = selectedInputMode === INPUT_MODE_VOICE ? 'Start Voice Session' : 'New Text Session';
   return Menu.buildFromTemplate([
-    {
-      label: 'agent-UI',
-      submenu: [
-        {
-          label: newSessionLabel,
-          accelerator,
-          click: () => {
-            void handleNewCatShortcut('menu');
-          },
-        },
-        { type: 'separator' },
-        settingsMenuItem(),
-        { type: 'separator' },
-        {
-          label: catsVisible ? 'Close Pet' : 'Wake Pet',
-          click: () => {
-            setCatsVisible(!catsVisible);
-          },
-        },
-        petCharacterMenuItem(),
-        refreshPetMenuItem(),
-        openPetFolderMenuItem(),
-        { type: 'separator' },
-        {
-          label: 'Quit',
-          accelerator: process.platform === 'darwin' ? 'Command+Q' : 'Control+Q',
-          click: () => app.quit(),
-        },
-      ],
-    },
+    appMenuItem(),
+    fileMenuItem(),
+    editMenuItem(),
+    viewMenuItem(),
+    petMenuItem(),
   ]);
 }
 
@@ -2082,17 +2118,19 @@ trustedIpcOn('pet-characters-refresh', () => {
 
 trustedIpcOn('pet-context-menu', () => {
   if (!mainWindow || mainWindow.isDestroyed()) return;
+  const accelerator = process.platform === 'darwin' ? 'Command+Shift+C' : 'Control+Shift+C';
   Menu.buildFromTemplate([
-    {
-      label: 'Close pet',
-      click: () => closePetOverlay({ persist: true }),
-    },
+    newSessionMenuItem({ accelerator }),
     { type: 'separator' },
-    settingsMenuItem(),
+    ...inputModeMenuItems(),
+    { type: 'separator' },
+    petVisibilityMenuItem(),
     { type: 'separator' },
     petCharacterMenuItem(),
     refreshPetMenuItem(),
     openPetFolderMenuItem(),
+    { type: 'separator' },
+    hermesLoginMenuItem(),
   ]).popup({ window: mainWindow });
 });
 

@@ -55,7 +55,7 @@ Record the evidence directory printed by the command.
 - Confirm `agent-UI for Hermes.app` contains no `Contents/Resources/hermes-runtime`.
 - Confirm it detects, remembers, and revalidates the local Hermes binary.
 - Confirm invalid remembered Hermes path returns to reconnect setup.
-- Confirm local desktop plugin setup uses `hermes plugins install saminkhan1/agent-ui-local-desktop-plugin --enable` after explicit permission.
+- Confirm `agent-UI for Hermes` does not install or copy plugins into the user's Hermes tree.
 - Confirm denied or failed gateway restart shows the exact manual restart command and Retry path.
 - Confirm text, voice, follow-up, cancel, and quit/reopen work after the local Hermes gateway is restarted.
 

@@ -4,7 +4,6 @@ const { spawnSync } = require('node:child_process');
 
 const signingMode = String(process.argv[2] || process.env.AGENT_UI_MAC_SIGNING_MODE || 'bootstrap').trim().toLowerCase();
 const appMode = String(process.argv[3] || process.env.AGENT_UI_RELEASE_MODE || process.env.AGENT_UI_RELEASE_FLAVOR || 'standalone').trim().toLowerCase();
-const connectorPluginRepo = String(process.env.AGENT_UI_LOCAL_DESKTOP_PLUGIN_REPO || 'saminkhan1/agent-ui-local-desktop-plugin').trim();
 
 function hasCommand(command) {
   const res = spawnSync(command, ['--version'], { encoding: 'utf8' });
@@ -31,10 +30,6 @@ if (process.platform !== 'darwin') {
 }
 if (!['connector', 'standalone'].includes(appMode)) {
   missing.push(`known app release mode, got ${appMode}`);
-}
-
-if (appMode === 'connector' && !connectorPluginRepo) {
-  missing.push('AGENT_UI_LOCAL_DESKTOP_PLUGIN_REPO for the public local_desktop plugin repository');
 }
 
 if (appMode === 'standalone' && !hasCommand('uv')) {

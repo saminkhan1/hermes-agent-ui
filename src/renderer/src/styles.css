@@ -289,6 +289,8 @@ button svg,
   line-height: 17px;
   text-overflow: ellipsis;
   white-space: nowrap;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .pet-row-body {
@@ -302,6 +304,8 @@ button svg,
   -webkit-line-clamp: 2;
   white-space: normal;
   transition: max-height 180ms ease-out;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .pet-row-body[data-expanded='true'] {

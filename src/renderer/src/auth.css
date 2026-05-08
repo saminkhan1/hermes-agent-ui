@@ -71,6 +71,8 @@ select {
 .header-copy {
   min-width: 0;
   flex: 1;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 h1 {
@@ -90,6 +92,8 @@ p {
   margin-top: 4px;
   color: rgba(237, 236, 236, 0.52);
   font-size: 12px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .close-btn {
@@ -136,6 +140,8 @@ p {
   font-weight: 700;
   letter-spacing: 0;
   text-transform: uppercase;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .field-label span {
@@ -256,6 +262,8 @@ select.field {
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .oauth-summary {
@@ -274,6 +282,8 @@ select.field {
   font-weight: 700;
   letter-spacing: 0;
   text-transform: uppercase;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .copy-row {
@@ -324,6 +334,8 @@ select.field {
   margin: 0;
   color: rgba(237, 236, 236, 0.58);
   font-size: 11px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .oauth-output:empty {
@@ -348,11 +360,15 @@ select.field {
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .hint {
   color: rgba(255, 255, 255, 0.4);
   font-size: 11px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 kbd {

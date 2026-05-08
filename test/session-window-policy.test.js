@@ -57,7 +57,8 @@ test('auth browser handoff has monitor recovery and fallback menu copy', () => {
   assert.match(authHelpers, /showHermesAuthWindowForState\('auth-success'\)/);
   assert.match(authHelpers, /showHermesAuthWindowForState\('auth-stale'\)/);
   assert.match(authHelpers, /showHermesAuthWindowForState\('auth-status-failed'\)/);
-  assert.match(menuBody, /Return to Hermes Sign-In/);
+  assert.match(menuBody, /Continue Hermes Sign-In/);
+  assert.match(menuBody, /Sign In to Hermes/);
   assert.match(html, /btn-check-oauth/);
   assert.match(html, /btn-retry-oauth/);
   assert.match(preload, /checkHermesAuthNow/);

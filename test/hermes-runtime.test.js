@@ -14,7 +14,6 @@ const {
 const {
   defaultHermesHome,
   effectiveGatewayHermesHome,
-  connectorPluginInstallCommand,
   ensureGatewayConfigFile,
   ensureGatewayEnvFile,
   ensureGatewayProcess,
@@ -29,6 +28,43 @@ const {
 
 const originalEnv = { ...process.env };
 const originalFetch = global.fetch;
+const originalCreateServer = net.createServer;
+
+function mockCreateServer(t, isOccupied) {
+  net.createServer = () => {
+    const listeners = new Map();
+    return {
+      once(event, handler) {
+        listeners.set(event, handler);
+        return this;
+      },
+      off(event, handler) {
+        if (listeners.get(event) === handler) listeners.delete(event);
+        return this;
+      },
+      close() {
+        return this;
+      },
+      listen(options, callback) {
+        const port = Number(options && options.port) || 0;
+        if (isOccupied(port)) {
+          queueMicrotask(() => {
+            const handler = listeners.get('error');
+            if (handler) handler(new Error('occupied'));
+          });
+          return this;
+        }
+        queueMicrotask(() => {
+          if (typeof callback === 'function') callback();
+        });
+        return this;
+      },
+    };
+  };
+  t.after(() => {
+    net.createServer = originalCreateServer;
+  });
+}
 
 function isolateEnv(t) {
   process.env = { ...originalEnv };
@@ -40,12 +76,13 @@ function isolateEnv(t) {
   delete process.env.AGENT_UI_RELEASE_MODE;
   delete process.env.AGENT_UI_RELEASE_FLAVOR;
   delete process.env.AGENT_UI_CONNECTOR_GATEWAY_RESTART_APPROVED;
-  delete process.env.AGENT_UI_CONNECTOR_PLUGIN_INSTALL_APPROVED;
   delete process.env.AGENT_UI_HERMES_GATEWAY_AUTOSTART;
   delete process.env.HERMES_HOME;
   delete process.env.LOCAL_DESKTOP_GATEWAY_KEY;
   delete process.env.LOCAL_DESKTOP_HOST;
   delete process.env.LOCAL_DESKTOP_PORT;
+  delete process.env.LOCAL_DESKTOP_HOME_CHANNEL;
+  delete process.env.LOCAL_DESKTOP_HOME_CHANNEL_NAME;
   t.after(() => {
     process.env = { ...originalEnv };
   });
@@ -76,6 +113,8 @@ test('ensureGatewayEnvFile creates a local desktop gateway env file with a stabl
   assert.equal(first.env.LOCAL_DESKTOP_ALLOW_ALL_USERS, 'false');
   assert.equal(first.env.LOCAL_DESKTOP_HOST, '127.0.0.1');
   assert.equal(first.env.LOCAL_DESKTOP_PORT, '8766');
+  assert.equal(first.env.LOCAL_DESKTOP_HOME_CHANNEL, 'agent-ui');
+  assert.equal(first.env.LOCAL_DESKTOP_HOME_CHANNEL_NAME, 'Agent UI');
   assert.match(first.env.LOCAL_DESKTOP_GATEWAY_KEY, /^[a-f0-9]{64}$/);
   assert.equal(second.env.LOCAL_DESKTOP_GATEWAY_KEY, first.env.LOCAL_DESKTOP_GATEWAY_KEY);
 });
@@ -92,6 +131,59 @@ test('ensureGatewayEnvFile can rotate the local desktop port without changing th
   assert.equal(second.env.LOCAL_DESKTOP_GATEWAY_KEY, first.env.LOCAL_DESKTOP_GATEWAY_KEY);
   assert.equal(second.env.LOCAL_DESKTOP_PORT, '8777');
   assert.match(fs.readFileSync(second.file, 'utf8'), /LOCAL_DESKTOP_PORT=8777/);
+});
+
+test('ensureGatewayEnvFile preserves existing Hermes env values', (t) => {
+  isolateEnv(t);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-runtime-env-'));
+  const home = path.join(dir, 'hermes-home');
+  const envPath = path.join(home, '.env');
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(envPath, [
+    '# Existing Hermes provider config',
+    'OPENROUTER_API_KEY=sk-existing',
+    'LOCAL_DESKTOP_PORT=8766',
+    'LOCAL_DESKTOP_PORT=9999',
+    'NOUS_API_KEY=portal-existing',
+    '',
+  ].join('\n'));
+  process.env.AGENT_UI_CONFIG_DIR = dir;
+  process.env.AGENT_UI_HERMES_HOME = home;
+
+  const result = ensureGatewayEnvFile({ LOCAL_DESKTOP_PORT: '8788' });
+  const body = fs.readFileSync(result.file, 'utf8');
+
+  assert.match(body, /OPENROUTER_API_KEY=sk-existing/);
+  assert.match(body, /NOUS_API_KEY=portal-existing/);
+  assert.match(body, /LOCAL_DESKTOP_PORT=8788/);
+  assert.match(body, /LOCAL_DESKTOP_HOME_CHANNEL=agent-ui/);
+  assert.match(body, /LOCAL_DESKTOP_HOME_CHANNEL_NAME=Agent UI/);
+  assert.equal((body.match(/LOCAL_DESKTOP_PORT=/g) || []).length, 1);
+  assert.equal(fs.statSync(result.file).mode & 0o777, 0o600);
+});
+
+test('ensureGatewayEnvFile preserves an explicit local desktop home channel', (t) => {
+  isolateEnv(t);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-runtime-env-'));
+  const home = path.join(dir, 'hermes-home');
+  const envPath = path.join(home, '.env');
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(envPath, [
+    'LOCAL_DESKTOP_GATEWAY_KEY=existing-secret',
+    'LOCAL_DESKTOP_HOME_CHANNEL=custom-home',
+    'LOCAL_DESKTOP_HOME_CHANNEL_NAME=Custom Home',
+    '',
+  ].join('\n'));
+  process.env.AGENT_UI_CONFIG_DIR = dir;
+  process.env.AGENT_UI_HERMES_HOME = home;
+
+  const result = ensureGatewayEnvFile();
+  const body = fs.readFileSync(result.file, 'utf8');
+
+  assert.equal(result.env.LOCAL_DESKTOP_HOME_CHANNEL, 'custom-home');
+  assert.equal(result.env.LOCAL_DESKTOP_HOME_CHANNEL_NAME, 'Custom Home');
+  assert.match(body, /LOCAL_DESKTOP_HOME_CHANNEL=custom-home/);
+  assert.match(body, /LOCAL_DESKTOP_HOME_CHANNEL_NAME=Custom Home/);
 });
 
 test('connector mode uses default local Hermes home and remembers detected binary', (t) => {
@@ -187,14 +279,12 @@ test('ensureGatewayProcess rotates the gateway port when the preferred port is o
   isolateEnv(t);
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-runtime-port-'));
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-runtime-home-'));
-  const blocker = net.createServer();
-  await new Promise((resolve) => blocker.listen({ host: '127.0.0.1', port: 0, exclusive: true }, resolve));
+  const blockedPort = 8766;
+  mockCreateServer(t, (port) => port === blockedPort);
   t.after(() => {
     stopGatewayProcess();
-    blocker.close();
   });
 
-  const blockedPort = blocker.address().port;
   process.env.AGENT_UI_CONFIG_DIR = configDir;
   process.env.AGENT_UI_HERMES_HOME = homeDir;
   process.env.AGENT_UI_HERMES_BIN = path.join(configDir, 'missing-hermes');
@@ -215,14 +305,12 @@ test('ensureGatewayProcess reconciles direct gateway URL with the Hermes env fil
   isolateEnv(t);
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-runtime-url-'));
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-runtime-home-'));
-  const probe = net.createServer();
-  await new Promise((resolve) => probe.listen({ host: '127.0.0.1', port: 0, exclusive: true }, resolve));
-  const directPort = probe.address().port;
-  await new Promise((resolve) => probe.close(resolve));
+  mockCreateServer(t, () => false);
   t.after(() => {
     stopGatewayProcess();
   });
 
+  const directPort = 8788;
   process.env.AGENT_UI_CONFIG_DIR = configDir;
   process.env.AGENT_UI_HERMES_HOME = homeDir;
   process.env.AGENT_UI_HERMES_BIN = path.join(configDir, 'missing-hermes');
@@ -254,6 +342,7 @@ test('ensureGatewayProcess does not report an unready child as ready', async (t)
   process.env.AGENT_UI_HERMES_HOME = homeDir;
   process.env.AGENT_UI_HERMES_BIN = bin;
   global.fetch = async () => new Response(JSON.stringify({ ok: false }), { status: 503 });
+  mockCreateServer(t, () => false);
   t.after(() => {
     stopGatewayProcess();
     global.fetch = originalFetch;
@@ -280,15 +369,22 @@ test('gateway autostart uses replace mode for quit/reopen recovery', () => {
   assert.deepEqual(gatewayArgsFor('/path/to/hermes'), ['gateway', 'run', '--replace']);
 });
 
-test('connector plugin install uses Hermes-native install and enable command', (t) => {
+test('connector mode does not install or copy local desktop plugins', async (t) => {
   isolateEnv(t);
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-connector-config-'));
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-connector-home-'));
+  const bin = path.join(configDir, 'hermes');
+  fs.writeFileSync(bin, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  process.env.AGENT_UI_CONFIG_DIR = configDir;
   process.env.AGENT_UI_RELEASE_MODE = 'connector';
-  process.env.AGENT_UI_LOCAL_DESKTOP_PLUGIN_REPO = 'owner/local-desktop';
+  process.env.AGENT_UI_HERMES_HOME = homeDir;
+  process.env.AGENT_UI_HERMES_BIN = bin;
 
-  const planned = connectorPluginInstallCommand('/path/to/hermes');
+  const result = await ensureGatewayProcess({ warn() {}, log() {} });
 
-  assert.equal(planned.command, '/path/to/hermes');
-  assert.deepEqual(planned.args, ['plugins', 'install', 'owner/local-desktop', '--enable']);
+  assert.equal(result.ok, false);
+  assert.equal(result.pendingRestart, true);
+  assert.equal(fs.existsSync(path.join(homeDir, 'plugins')), false);
 });
 
 test('connector mode requires explicit gateway restart approval when Hermes is not ready', async (t) => {
@@ -384,6 +480,49 @@ test('local desktop adapter closes overflowed SSE subscribers', () => {
   assert.match(adapter, /queue\.put_nowait\(None\)/);
 });
 
+test('local desktop adapter treats SSE client disconnects as normal', () => {
+  const adapter = fs.readFileSync(
+    path.join(__dirname, '..', 'vendor', 'hermes-platforms', 'local_desktop', 'adapter.py'),
+    'utf8'
+  );
+
+  assert.match(adapter, /from aiohttp import client_exceptions, web/);
+  assert.match(adapter, /def _is_sse_disconnect/);
+  assert.match(adapter, /client_exceptions\.ClientConnectionResetError/);
+  assert.match(adapter, /SSE client disconnected/);
+  assert.doesNotMatch(adapter, /except \(asyncio\.CancelledError, ConnectionResetError, BrokenPipeError\):/);
+});
+
+test('local desktop adapter follows Hermes plugin adapter registration hooks', () => {
+  const adapter = fs.readFileSync(
+    path.join(__dirname, '..', 'vendor', 'hermes-platforms', 'local_desktop', 'adapter.py'),
+    'utf8'
+  );
+  const manifest = fs.readFileSync(
+    path.join(__dirname, '..', 'vendor', 'hermes-platforms', 'local_desktop', 'plugin.yaml'),
+    'utf8'
+  );
+
+  assert.match(adapter, /class LocalDesktopAdapter\(BasePlatformAdapter\):/);
+  assert.match(adapter, /async def connect\(self\) -> bool:/);
+  assert.match(adapter, /async def disconnect\(self\) -> None:/);
+  assert.match(adapter, /async def send\(/);
+  assert.match(adapter, /await self\.handle_message\(event\)/);
+  assert.match(adapter, /def _env_enablement\(\) -> Optional\[Dict\[str, Any\]\]:/);
+  assert.match(adapter, /except \(TypeError, ValueError\):\n\s+return None/);
+  assert.match(adapter, /env_enablement_fn=_env_enablement/);
+  assert.match(adapter, /cron_deliver_env_var="LOCAL_DESKTOP_HOME_CHANNEL"/);
+  assert.match(adapter, /_supported_platform_kwargs/);
+
+  assert.match(manifest, /label: Local Desktop/);
+  assert.match(manifest, /requires_env:\n  - name: LOCAL_DESKTOP_GATEWAY_KEY/);
+  assert.match(manifest, /optional_env:/);
+  assert.match(manifest, /name: LOCAL_DESKTOP_USER_ID/);
+  assert.match(manifest, /name: LOCAL_DESKTOP_HOME_CHANNEL/);
+  assert.match(manifest, /name: LOCAL_DESKTOP_HOME_CHANNEL_NAME/);
+  assert.match(manifest, /password: true/);
+});
+
 test('Hermes bundler overlays the app-owned local desktop platform', () => {
   const bundler = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'bundle-hermes-runtime.js'), 'utf8');
   const pluginDir = path.join(__dirname, '..', 'vendor', 'hermes-platforms', 'local_desktop');
@@ -391,11 +530,45 @@ test('Hermes bundler overlays the app-owned local desktop platform', () => {
   const adapter = fs.readFileSync(path.join(pluginDir, 'adapter.py'), 'utf8');
 
   assert.match(manifest, /^kind: platform$/m);
+  assert.match(manifest, /name: LOCAL_DESKTOP_GATEWAY_KEY/);
   assert.match(adapter, /name="local_desktop"/);
   assert.match(adapter, /LOCAL_DESKTOP_GATEWAY_KEY/);
   assert.match(bundler, /vendor', 'hermes-platforms'/);
   assert.match(bundler, /plugins', 'platforms', overlay\.name/);
+  assert.match(bundler, /replaced-source/);
   assert.match(bundler, /hermesPlatformOverlays/);
+});
+
+test('Hermes bundler installs and enables the computer use tool overlay', () => {
+  const bundler = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'bundle-hermes-runtime.js'), 'utf8');
+  const toolShim = fs.readFileSync(
+    path.join(__dirname, '..', 'vendor', 'hermes-tool-overlays', 'computer_use', 'tools', 'computer_use_tool.py'),
+    'utf8'
+  );
+  const schema = fs.readFileSync(
+    path.join(__dirname, '..', 'vendor', 'hermes-tool-overlays', 'computer_use', 'tools', 'computer_use', 'schema.py'),
+    'utf8'
+  );
+  const backend = fs.readFileSync(
+    path.join(__dirname, '..', 'vendor', 'hermes-tool-overlays', 'computer_use', 'tools', 'computer_use', 'cua_backend.py'),
+    'utf8'
+  );
+
+  assert.match(toolShim, /registry\.register\(\n\s+name="computer_use"/);
+  assert.match(toolShim, /toolset="computer_use"/);
+  assert.match(schema, /"set_value"/);
+  assert.match(schema, /"page"/);
+  assert.match(schema, /window-local screenshot/);
+  assert.match(backend, /cua-driver mcp/);
+  assert.match(backend, /self\._session\.call_tool\("get_window_state"/);
+  assert.match(backend, /self\._action\("set_value"/);
+  assert.match(backend, /self\._action\("page"/);
+  assert.match(bundler, /vendor', 'hermes-tool-overlays'/);
+  assert.match(bundler, /copyVendoredToolOverlays/);
+  assert.match(bundler, /patchHermesComputerUseToolset/);
+  assert.match(bundler, /\[voice,messaging,mcp\]/);
+  assert.match(bundler, /enabled_toolsets\.add\("computer_use"\)/);
+  assert.match(bundler, /hermesToolOverlays/);
 });
 
 test('gateway readiness requires authenticated local desktop message access', async (t) => {

@@ -144,7 +144,7 @@ test('standalone Hermes bundler uses local source provenance by default', () => 
   assert.match(bundler, /Bundling local Hermes source/);
   assert.match(bundler, /hermesSourceGitStatus/);
   assert.match(bundler, /bundledHermesAgentTreeSha256/);
-  assert.match(bundler, /action: 'kept-source'/);
+  assert.match(bundler, /replaced-source/);
   assert.match(bundler, /action: 'copied-vendored'/);
   const pkg = JSON.parse(read('package.json'));
   assert.match(pkg.scripts['dist:mac:standalone:developer-id'], /HERMES_BUNDLE_SOURCE_POLICY=release npm run bundle:hermes/);

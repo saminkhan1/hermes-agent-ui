@@ -1051,9 +1051,6 @@ async function sendFollowup(catId, text, opts = {}) {
     log.warn('sendFollowup: no conversation', id);
     return { ok: false, error: 'Session is not available.' };
   }
-  if (String(rec.runStatus || '').toLowerCase() === 'running') {
-    return { ok: false, error: 'Follow-up is available after Hermes finishes.' };
-  }
   ensureHermesEntry(id, rec.pointerContext || null);
 
   if (opts.recordUserItem !== false) {

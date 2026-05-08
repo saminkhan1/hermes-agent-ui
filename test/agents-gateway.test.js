@@ -109,7 +109,7 @@ test('gateway start posts tagged first prompt with stable conversation id', asyn
   assert.equal(conversation.gatewayConversationId, 'cat-gateway-1');
 });
 
-test('gateway follow-up waits until session is not running', async (t) => {
+test('gateway follow-up can interrupt a running session', async (t) => {
   setupGatewayEnv(t);
   const posts = [];
   global.fetch = async (url, opts = {}) => {
@@ -143,14 +143,15 @@ test('gateway follow-up waits until session is not running', async (t) => {
   const before = agents.getAgentConversation('cat-gateway-2');
   assert.equal(before.runStatus, 'running');
 
-  const rejected = await agents.sendFollowup('cat-gateway-2', 'plain follow up', {
+  const interrupted = await agents.sendFollowup('cat-gateway-2', 'interrupt follow up', {
     getMainWindow: () => null,
     log: { warn() {} },
   });
 
-  assert.equal(rejected.ok, false);
-  assert.match(rejected.error, /after Hermes finishes/);
-  assert.equal(posts.length, 1);
+  assert.equal(interrupted.ok, true);
+  assert.equal(posts.length, 2);
+  assert.equal(posts[1].conversation_id, 'cat-gateway-2');
+  assert.equal(posts[1].text, 'interrupt follow up');
 
   agents._test.handleGatewayEvent({
     type: 'typing.stopped',
@@ -165,9 +166,9 @@ test('gateway follow-up waits until session is not running', async (t) => {
   });
 
   assert.equal(result.ok, true);
-  assert.equal(posts.length, 2);
-  assert.equal(posts[1].conversation_id, 'cat-gateway-2');
-  assert.equal(posts[1].text, 'plain follow up');
+  assert.equal(posts.length, 3);
+  assert.equal(posts[2].conversation_id, 'cat-gateway-2');
+  assert.equal(posts[2].text, 'plain follow up');
 });
 
 test('first gateway client resets replay cursor when no conversations were hydrated', async (t) => {

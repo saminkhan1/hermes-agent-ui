@@ -120,7 +120,6 @@ function treeSha256(root) {
         continue;
       }
       if (st.isDirectory()) {
-        hash.update(`D\0${rel}\0`);
         walk(full);
         continue;
       }

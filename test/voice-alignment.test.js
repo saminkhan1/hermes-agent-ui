@@ -31,7 +31,7 @@ test('voice input is backed by Hermes voice-mode capture and transcription', () 
   assert.doesNotMatch(main, /startCatRunFromPayload\(\{ prompt, modalContextId \}, \{ closeModal: false \}\)/);
 });
 
-test('voice and text are separate menu-selected input modes', () => {
+test('voice and text are direct menu-selected input modes', () => {
   const main = read('src/main/index.js');
   const preload = read('src/preload/index.js');
   const modalHtml = read('src/renderer/modal.html');
@@ -39,13 +39,23 @@ test('voice and text are separate menu-selected input modes', () => {
 
   assert.match(main, /const INPUT_MODE_TEXT = 'text'/);
   assert.match(main, /const INPUT_MODE_VOICE = 'voice'/);
-  assert.match(main, /label: 'Settings'/);
-  assert.match(main, /label: 'Input Mode'/);
-  assert.match(main, /label: 'Text'/);
-  assert.match(main, /label: 'Voice'/);
-  assert.match(main, /selectedInputMode === INPUT_MODE_VOICE/);
+  assert.match(main, /function newSessionMenuItem\(\{ accelerator = undefined \} = \{\}\)/);
+  assert.match(main, /label: 'New Session…'/);
+  assert.match(main, /function inputModeMenuItem\(mode\)/);
+  assert.match(main, /label: normalizedInputMode === INPUT_MODE_VOICE \? 'Use Voice Input' : 'Use Text Input'/);
+  assert.match(main, /type: 'radio'/);
+  assert.match(main, /checked: selectedInputMode === normalizedInputMode/);
+  assert.match(main, /inputModeMenuItem\(INPUT_MODE_TEXT\)/);
+  assert.match(main, /inputModeMenuItem\(INPUT_MODE_VOICE\)/);
+  assert.match(main, /label: 'File'/);
+  assert.match(main, /label: 'View'/);
+  assert.match(main, /label: 'Pet'/);
   assert.match(main, /void startVoiceSessionFromShortcut\(newModalWindow, modalContextId\)/);
   assert.match(main, /openNewCatModal\(modalContextId, inputMode\)/);
+  assert.doesNotMatch(main, /label: 'Input Mode'/);
+  assert.doesNotMatch(main, /label: 'Settings'/);
+  assert.doesNotMatch(main, /Start Voice Session/);
+  assert.doesNotMatch(main, /New Text Session/);
   assert.match(preload, /onVoiceInputStatus/);
   assert.match(modal, /inputMode = params\.get\('inputMode'\) === 'voice'/);
   assert.match(modal, /voiceTranscriptReady = true/);

@@ -51,6 +51,8 @@ body {
   color: rgba(255, 255, 255, 0.4);
   flex: 1 1 auto;
   min-width: 0;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .header-actions {
@@ -77,6 +79,8 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .header-btn.cancel-btn,
@@ -177,6 +181,8 @@ body {
   margin-bottom: 4px;
   color: #f54e00;
   opacity: 0.9;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .line--user .line-label,
@@ -189,6 +195,7 @@ body {
   word-break: break-word;
   color: #edecec;
   user-select: text;
+  -webkit-user-select: text;
 }
 
 .line--user .line-label {
@@ -237,6 +244,7 @@ body {
   word-break: break-word;
   color: #edecec;
   user-select: text;
+  -webkit-user-select: text;
 }
 
 .attachment-media {
@@ -278,6 +286,8 @@ audio.attachment-media {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  user-select: text;
+  -webkit-user-select: text;
   white-space: nowrap;
   color: rgba(237, 236, 236, 0.88);
 }
@@ -323,6 +333,8 @@ footer.composer {
   color: rgba(255, 255, 255, 0.45);
   margin: 0;
   flex: 0 1 auto;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .composer-error {
@@ -335,6 +347,8 @@ footer.composer {
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .composer-row {

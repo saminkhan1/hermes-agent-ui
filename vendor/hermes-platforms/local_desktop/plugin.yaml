@@ -1,4 +1,5 @@
 name: local-desktop-platform
+label: Local Desktop
 kind: platform
 version: 1.0.0
 description: >
@@ -7,4 +8,36 @@ description: >
   messages through the normal Hermes gateway platform flow.
 author: Nous Research
 requires_env:
-  - LOCAL_DESKTOP_GATEWAY_KEY
+  - name: LOCAL_DESKTOP_GATEWAY_KEY
+    description: "Bearer token shared by Hermes and the local desktop client"
+    prompt: "Local desktop gateway key"
+    password: true
+optional_env:
+  - name: LOCAL_DESKTOP_HOST
+    description: "Loopback host for the local desktop gateway"
+    prompt: "Local desktop gateway host"
+    password: false
+  - name: LOCAL_DESKTOP_PORT
+    description: "Loopback port for the local desktop gateway"
+    prompt: "Local desktop gateway port"
+    password: false
+  - name: LOCAL_DESKTOP_USER_ID
+    description: "Hermes user ID assigned to inbound local desktop messages"
+    prompt: "Local desktop user ID"
+    password: false
+  - name: LOCAL_DESKTOP_ALLOWED_USERS
+    description: "Comma-separated user IDs allowed to talk to the local desktop adapter"
+    prompt: "Allowed local desktop users"
+    password: false
+  - name: LOCAL_DESKTOP_ALLOW_ALL_USERS
+    description: "Allow all users to talk to the local desktop adapter"
+    prompt: "Allow all local desktop users"
+    password: false
+  - name: LOCAL_DESKTOP_HOME_CHANNEL
+    description: "Default local desktop conversation ID for scheduled delivery"
+    prompt: "Local desktop home conversation"
+    password: false
+  - name: LOCAL_DESKTOP_HOME_CHANNEL_NAME
+    description: "Display name for the local desktop home conversation"
+    prompt: "Local desktop home conversation name"
+    password: false

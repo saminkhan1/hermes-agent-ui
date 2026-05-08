@@ -26,9 +26,9 @@ For manual testers, ship two macOS app variants with the same launcher, voice, p
 
 Both variants post prompts to Hermes `local_desktop` `/messages` and read `/events`. agent-UI does not store LLM/provider credentials, does not keep gateway keys in its own config, and does not run a provider-auth preflight. The user starts a task first; if Hermes reports provider/model setup is required, agent-UI opens the thin Hermes auth/model flow and preserves the pending task.
 
-The standalone package includes the local Hermes Agent checkout at `/Users/saminkhan1/Documents/hermes/hermes-agent` by default, preserving local tools and code modifications. If that checkout already contains `plugins/platforms/local_desktop`, the build keeps the local copy; otherwise it overlays the app-owned `vendor/hermes-platforms/local_desktop` plugin. The package also includes a self-contained Python 3.11+ runtime with local desktop gateway, messaging, and voice dependencies already resolved. Its app-owned Hermes `.env` stores `LOCAL_DESKTOP_GATEWAY_KEY`, and the app reads it at runtime.
+The standalone package includes the local Hermes Agent checkout at `/Users/saminkhan1/Documents/hermes/hermes-agent` by default, preserving local tools and code modifications outside Agent UI-owned overlays. The build always overlays the app-owned `vendor/hermes-platforms/local_desktop` plugin so the packaged gateway matches the app's local desktop contract. The package also includes a self-contained Python 3.11+ runtime with local desktop gateway, messaging, and voice dependencies already resolved. Its app-owned Hermes `.env` stores `LOCAL_DESKTOP_GATEWAY_KEY`, and the app reads it at runtime.
 
-The connector package omits Hermes runtime resources and bundled plugin copies. It resolves and remembers the local Hermes binary path as non-secret config, revalidates it on launch, uses the default local Hermes profile for beta, and installs/enables `local_desktop` only through `hermes plugins install saminkhan1/agent-ui-local-desktop-plugin --enable` after explicit permission.
+The connector package omits Hermes runtime resources and bundled plugin copies. It resolves and remembers the local Hermes binary path as non-secret config, revalidates it on launch, and connects to the user's existing Hermes `local_desktop` gateway. Category 1 users add or enable the `local_desktop` plugin in Hermes through the Hermes Plugin Path; agent-UI does not install plugins into their Hermes tree.
 
 ## Requirements
 
@@ -90,7 +90,7 @@ HERMES_BUNDLE_SOURCE_POLICY=release npm run dist:mac:standalone:bootstrap
 The standalone packaging path performs these steps:
 
 1. copies the selected local Hermes checkout into `build/hermes-runtime` without `.git`, source venvs, caches, build outputs, sessions, or logs;
-2. keeps `plugins/platforms/local_desktop` from the local Hermes checkout when present, otherwise overlays the vendored app-owned `vendor/hermes-platforms/local_desktop` plugin, and records the action plus SHA-256 in the runtime manifest;
+2. overlays the vendored app-owned `vendor/hermes-platforms/local_desktop` plugin into the copied Hermes checkout, and records the action plus SHA-256 in the runtime manifest;
 3. creates a bundled `build/hermes-runtime/python` runtime and preinstalls the lean `[voice,messaging]` dependencies needed by local desktop gateway and voice input;
 4. builds the Electron main/preload/renderer output;
 5. packages `agent-UI Standalone.app` with `build/hermes-runtime` as app resources;
@@ -115,7 +115,7 @@ In standalone mode, agent-UI:
 
 If the default local port is occupied by another process or by a Hermes gateway using a different key, standalone mode automatically moves its bundled gateway to the next available loopback port and rewrites the app-owned Hermes `.env`.
 
-In connector mode, agent-UI reads the default local Hermes profile, remembers the detected Hermes binary path in `~/.agent-ui/connector-runtime.json`, and revalidates it on launch. It may write only the required Hermes `config.yaml` and `.env` settings for the local desktop gateway. If the gateway needs a restart, connector mode reports the exact restart command instead of silently replacing the user's local Hermes process.
+In connector mode, agent-UI reads the default local Hermes profile, remembers the detected Hermes binary path in `~/.agent-ui/connector-runtime.json`, and revalidates it on launch. It may write the required Hermes `config.yaml` and `.env` settings for the local desktop gateway, but it does not install or copy plugins. If the gateway needs a restart, connector mode reports the exact restart command instead of silently replacing the user's local Hermes process.
 
 `GET /health` is unauthenticated. `POST /messages` and `GET /events` require `Authorization: Bearer <LOCAL_DESKTOP_GATEWAY_KEY>`.
 

@@ -22,14 +22,16 @@ import os
 import sqlite3
 import time
 import uuid
+from dataclasses import fields
 from typing import Any, Dict, Optional
 
 try:
-    from aiohttp import web
+    from aiohttp import client_exceptions, web
 
     AIOHTTP_AVAILABLE = True
 except ImportError:  # pragma: no cover - exercised in envs without aiohttp
     AIOHTTP_AVAILABLE = False
+    client_exceptions = None  # type: ignore[assignment]
     web = None  # type: ignore[assignment]
 
 from gateway.config import Platform, PlatformConfig
@@ -49,6 +51,14 @@ DEFAULT_PORT = 8766
 DEFAULT_USER_ID = "local"
 DEFAULT_RETENTION_DAYS = 7
 MAX_REQUEST_BYTES = 1_048_576
+
+
+def _is_sse_disconnect(exc: BaseException) -> bool:
+    if isinstance(exc, (ConnectionResetError, BrokenPipeError)):
+        return True
+    if client_exceptions is None:
+        return False
+    return isinstance(exc, client_exceptions.ClientConnectionResetError)
 
 
 def _env_text(name: str) -> str:
@@ -82,6 +92,42 @@ def validate_config(config: PlatformConfig) -> bool:
 
 def is_connected(config: PlatformConfig) -> bool:
     return validate_config(config)
+
+
+def _env_enablement() -> Optional[Dict[str, Any]]:
+    """Seed PlatformConfig.extra from LOCAL_DESKTOP_* env vars when supported."""
+    if not _gateway_key():
+        return None
+    port = _env_text("LOCAL_DESKTOP_PORT") or str(DEFAULT_PORT)
+    try:
+        port_int = int(port)
+    except (TypeError, ValueError):
+        return None
+    if not 0 < port_int < 65536:
+        return None
+    seed: Dict[str, Any] = {
+        "host": _env_text("LOCAL_DESKTOP_HOST") or DEFAULT_HOST,
+        "port": port_int,
+        "user_id": _env_text("LOCAL_DESKTOP_USER_ID") or DEFAULT_USER_ID,
+    }
+    home_channel = _env_text("LOCAL_DESKTOP_HOME_CHANNEL")
+    if home_channel:
+        seed["home_channel"] = {
+            "chat_id": home_channel,
+            "name": _env_text("LOCAL_DESKTOP_HOME_CHANNEL_NAME") or "Local Desktop",
+        }
+    return seed
+
+
+def _supported_platform_kwargs(**kwargs: Any) -> Dict[str, Any]:
+    """Only pass registry fields supported by the loaded Hermes runtime."""
+    try:
+        from gateway.platform_registry import PlatformEntry
+
+        supported = {field.name for field in fields(PlatformEntry)}
+    except Exception:
+        return {}
+    return {key: value for key, value in kwargs.items() if key in supported}
 
 
 class LocalDesktopAdapter(BasePlatformAdapter):
@@ -588,9 +634,12 @@ class LocalDesktopAdapter(BasePlatformAdapter):
                 if event is None:
                     break
                 await self._write_sse(response, event)
-        except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
+        except asyncio.CancelledError:
             raise
         except Exception as exc:
+            if _is_sse_disconnect(exc):
+                logger.debug("[local_desktop] SSE client disconnected: %s", exc)
+                return response
             logger.debug("[local_desktop] SSE stream ended: %s", exc)
         finally:
             self._subscribers.discard(queue)
@@ -613,6 +662,10 @@ class LocalDesktopAdapter(BasePlatformAdapter):
 
 def register(ctx):
     """Plugin entry point called by Hermes plugin discovery."""
+    optional_kwargs = _supported_platform_kwargs(
+        env_enablement_fn=_env_enablement,
+        cron_deliver_env_var="LOCAL_DESKTOP_HOME_CHANNEL",
+    )
     ctx.register_platform(
         name="local_desktop",
         label="Local Desktop",
@@ -627,6 +680,7 @@ def register(ctx):
         max_message_length=0,
         pii_safe=True,
         allow_update_command=True,
+        **optional_kwargs,
         platform_hint=(
             "You are chatting through a local desktop client. The client "
             "supports normal text responses and replayable delivery events."
