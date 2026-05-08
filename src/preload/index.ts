@@ -89,12 +89,6 @@ contextBridge.exposeInMainWorld('agentUI', {
   },
   movePetDrag: () => ipcRenderer.send('pet-drag-move'),
   endPetDrag: () => ipcRenderer.send('pet-drag-end'),
-  releasePetDrag: (payload: AgentUIPayload = {}) => {
-    const velocityX = number(payload.velocityX, 5000);
-    const velocityY = number(payload.velocityY, 5000);
-    if (velocityX == null || velocityY == null) return;
-    ipcRenderer.send('pet-drag-release', { velocityX, velocityY });
-  },
   reportPetElementSize: (payload: any) => {
     if (payload && typeof payload === 'object') ipcRenderer.send('pet-element-size-changed', payload);
   },

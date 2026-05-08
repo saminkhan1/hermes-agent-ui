@@ -88,9 +88,6 @@ const SCROLL_EDGE_SLOP = 2;
 const COLLAPSED_BODY_MAX_HEIGHT = 32;
 const EXPANDED_BODY_MAX_HEIGHT = 512;
 const DRAG_THRESHOLD_PX = 4;
-const DRAG_MAX_SAMPLE_AGE_MS = 100;
-const DRAG_MIN_FLING_SPEED = 320;
-const DRAG_MAX_FLING_SPEED = 1600;
 const POINTER_HIT_REGION_SELECTOR = '[data-avatar-overlay-hit-region], [data-avatar-mascot="true"]';
 const pendingFinishes = new Map();
 const pendingStreams = new Map();
@@ -112,7 +109,6 @@ let scrollState = { hasLatestNotificationsAbove: false, hiddenOlderNotificationC
 let lastElementSizePayload = '';
 let rowMeasureFrame: any = null;
 let petDrag: any = null;
-let petDragAvatarState: any = null;
 let petOptions: any[] = DEFAULT_PET_OPTIONS.slice();
 let selectedPetId = DEFAULT_PET_ID;
 let renderFrame: any = null;
@@ -461,68 +457,20 @@ function installPetPointerInteractivity() {
   petPointerInteractionActive = false;
 }
 
-function dragSample(e: any) {
-  return {
-    screenX: e.screenX,
-    screenY: e.screenY,
-    timeMs: e.timeStamp,
-  };
-}
-
-function recentDragSamples(samples: any) {
-  const last = samples.at(-1);
-  if (!last) return samples;
-  return samples.filter((sample: any) => last.timeMs - sample.timeMs <= DRAG_MAX_SAMPLE_AGE_MS);
-}
-
-function flingVelocity(samples: any) {
-  const last = samples.at(-1);
-  if (!last) return null;
-  const baseline = samples.find((sample: any) => last.timeMs - sample.timeMs > 16);
-  if (!baseline) return null;
-  const seconds = (last.timeMs - baseline.timeMs) / 1000;
-  if (seconds <= 0) return null;
-  const velocity = {
-    x: (last.screenX - baseline.screenX) / seconds,
-    y: (last.screenY - baseline.screenY) / seconds,
-  };
-  const speed = Math.hypot(velocity.x, velocity.y);
-  if (speed < DRAG_MIN_FLING_SPEED) return null;
-  if (speed <= DRAG_MAX_FLING_SPEED) return velocity;
-  const scale = DRAG_MAX_FLING_SPEED / speed;
-  return { x: velocity.x * scale, y: velocity.y * scale };
-}
-
-function dragReleaseVelocity(startState: any, releaseSample: any) {
-  if (!startState || !startState.hasMoved || !releaseSample) return null;
-  return flingVelocity(recentDragSamples([...startState.samples, releaseSample]));
-}
-
-function dragStateForDelta(currentDragState: any, deltaX: any) {
-  if (deltaX >= DRAG_THRESHOLD_PX) return 'running-right';
-  if (deltaX <= -DRAG_THRESHOLD_PX) return 'running-left';
-  return currentDragState;
-}
-
 function finishPetDrag(
   pointerId: any,
-  { releaseSample = null, shouldOpenMainWindow = false }: { releaseSample?: any; shouldOpenMainWindow?: boolean } = {}
+  { shouldOpenMainWindow = false }: { shouldOpenMainWindow?: boolean } = {}
 ) {
   if (!petDrag || petDrag.pointerId !== pointerId) return;
   const currentDrag = petDrag;
   petDrag = null;
-  petDragAvatarState = null;
   shell?.releasePointerCapture?.(pointerId);
-  if (shouldOpenMainWindow && currentDrag.startedOnMascot && !currentDrag.hasMoved) {
-    const top = notifications()[0] || null;
-    if (top && top.action) openSessionConversation(top.action.catId);
-  }
   if (window.agentUI && typeof window.agentUI.endPetDrag === 'function') {
     window.agentUI.endPetDrag();
   }
-  const velocity = dragReleaseVelocity(currentDrag, releaseSample);
-  if (velocity && window.agentUI && typeof window.agentUI.releasePetDrag === 'function') {
-    window.agentUI.releasePetDrag({ velocityX: velocity.x, velocityY: velocity.y });
+  if (shouldOpenMainWindow && currentDrag.startedOnMascot && !currentDrag.hasMoved) {
+    const top = notifications()[0] || null;
+    if (top && top.action) openSessionConversation(top.action.catId);
   }
   renderAll();
 }
@@ -539,32 +487,29 @@ function onPetPointerDown(e: any) {
     startedOnMascot: e.target.closest('[data-avatar-mascot="true"]') != null,
     hasMoved: false,
     pointerId: e.pointerId,
-    samples: [dragSample(e)],
     screenX: e.screenX,
     screenY: e.screenY,
   };
   if (window.agentUI && typeof window.agentUI.startPetDrag === 'function') {
     window.agentUI.startPetDrag({ pointerWindowX: e.clientX, pointerWindowY: e.clientY });
   }
-  petDragAvatarState = null;
-  renderMascot(notifications());
 }
 
 function onPetPointerMove(e: any) {
   if (!petDrag || petDrag.pointerId !== e.pointerId) return;
-  const sample = dragSample(e);
-  petDrag.samples = recentDragSamples([...petDrag.samples, sample]);
-  const deltaX = sample.screenX - petDrag.screenX;
-  const deltaY = sample.screenY - petDrag.screenY;
+  if (typeof e.buttons === 'number' && (e.buttons & 1) === 0) {
+    finishPetDrag(e.pointerId);
+    return;
+  }
+  const deltaX = e.screenX - petDrag.screenX;
+  const deltaY = e.screenY - petDrag.screenY;
   if (Math.abs(deltaX) < DRAG_THRESHOLD_PX && Math.abs(deltaY) < DRAG_THRESHOLD_PX) return;
   petDrag.hasMoved = true;
-  petDrag.screenX = sample.screenX;
-  petDrag.screenY = sample.screenY;
-  petDragAvatarState = dragStateForDelta(petDragAvatarState, deltaX);
+  petDrag.screenX = e.screenX;
+  petDrag.screenY = e.screenY;
   if (window.agentUI && typeof window.agentUI.movePetDrag === 'function') {
     window.agentUI.movePetDrag();
   }
-  renderMascot(notifications());
 }
 
 function openSessionConversation(catId: any) {
@@ -610,7 +555,7 @@ function ensureMascotAvatar() {
 function renderMascot(list: any) {
   const top = list[0] || null;
   const meta = statusMeta(top ? top.level : 'idle');
-  const state: any = petDragAvatarState || (mascotHover ? 'jumping' : meta.mascotState);
+  const state: any = mascotHover ? 'jumping' : meta.mascotState;
   const pet = currentPetOption();
   const stage = mascot ? mascot.closest('.pet-stage') as HTMLElement | null : null;
   styleBox(stage, layout.mascot);
@@ -1191,13 +1136,14 @@ async function boot() {
   shell?.addEventListener('pointerdown', onPetPointerDown);
   shell?.addEventListener('pointermove', onPetPointerMove);
   shell?.addEventListener('lostpointercapture', (e) => {
-    finishPetDrag(e.pointerId, { shouldOpenMainWindow: false });
+    if (typeof e.buttons === 'number' && (e.buttons & 1) !== 0) return;
+    finishPetDrag(e.pointerId);
   });
   window.addEventListener('pointerup', (e) => {
-    finishPetDrag(e.pointerId, { releaseSample: dragSample(e), shouldOpenMainWindow: true });
+    finishPetDrag(e.pointerId, { shouldOpenMainWindow: true });
   });
   window.addEventListener('pointercancel', (e) => {
-    finishPetDrag(e.pointerId, { shouldOpenMainWindow: false });
+    finishPetDrag(e.pointerId);
   });
   if (badgeEl) {
     badgeEl.addEventListener('pointerdown', (e) => {
@@ -1234,7 +1180,7 @@ async function boot() {
     reportEvalUiState();
   });
   window.addEventListener('beforeunload', () => {
-    if (petDrag) finishPetDrag(petDrag.pointerId, { shouldOpenMainWindow: false });
+    if (petDrag) finishPetDrag(petDrag.pointerId);
     if (renderFrame != null) window.cancelAnimationFrame(renderFrame);
     clearPetPointerInteraction({ force: true });
     if (pointerInteractionObserver) pointerInteractionObserver.disconnect();

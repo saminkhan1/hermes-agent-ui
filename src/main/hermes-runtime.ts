@@ -72,6 +72,7 @@ type StreamProbeResult = {
 const GATEWAY_READY_ATTEMPTS = 80;
 const GATEWAY_READY_INTERVAL_MS = 250;
 const GATEWAY_READY_REQUEST_TIMEOUT_MS = 500;
+const GATEWAY_OCCUPIED_PORT_PREFLIGHT_TIMEOUT_MS = 150;
 const GATEWAY_OUTPUT_TAIL_CHARS = 4000;
 const CONNECTOR_GATEWAY_RESTART_APPROVED_ENV = 'AGENT_UI_CONNECTOR_GATEWAY_RESTART_APPROVED';
 const LOCAL_DESKTOP_ENV_KEYS = [
@@ -874,7 +875,7 @@ async function gatewayEventsOk(baseUrl: any, key: any, timeoutMs = 900) {
     if (!(res && res.ok && /text\/event-stream/i.test(contentType))) return false;
     if (!res.body || typeof res.body.getReader !== 'function') return false;
     const reader = res.body.getReader();
-    const probeMs = Math.min(150, Math.max(25, Math.floor(timeoutMs / 3)));
+    const probeMs = Math.min(75, Math.max(25, Math.floor(timeoutMs / 4)));
     const read: Promise<StreamProbeResult> = reader.read().catch(() => ({ error: true }));
     let probeTimer = null;
     const result = await Promise.race<StreamProbeResult>([
@@ -896,9 +897,12 @@ async function gatewayEventsOk(baseUrl: any, key: any, timeoutMs = 900) {
 }
 
 async function gatewayReadyOk(baseUrl: any, key: any, timeoutMs = 900) {
-  return await healthOk(baseUrl, timeoutMs) &&
-    await gatewayAuthOk(baseUrl, key, timeoutMs) &&
-    await gatewayEventsOk(baseUrl, key, timeoutMs);
+  const [health, auth, events] = await Promise.all([
+    healthOk(baseUrl, timeoutMs),
+    gatewayAuthOk(baseUrl, key, timeoutMs),
+    gatewayEventsOk(baseUrl, key, timeoutMs),
+  ]);
+  return health && auth && events;
 }
 
 function parseGatewayBaseUrl(baseUrl: any) {
@@ -956,6 +960,12 @@ function connectorGatewayRestartApproved() {
 
 function gatewayStartupWaitBudgetMs() {
   return GATEWAY_READY_ATTEMPTS * GATEWAY_READY_INTERVAL_MS;
+}
+
+function gatewayReadyPollDelayMs(attempt: any, readyIntervalMs: any) {
+  const interval = Math.max(1, Math.trunc(Number(readyIntervalMs) || GATEWAY_READY_INTERVAL_MS));
+  const fastDelay = Math.max(25, Math.min(75, Math.floor(interval / 3) || 25));
+  return Math.min(interval, fastDelay * Math.max(1, Math.min(4, Math.trunc(Number(attempt) || 0) + 1)));
 }
 
 function childIsAlive(child: any) {
@@ -1027,7 +1037,9 @@ async function ensureGatewayProcess(log = console, opts: GatewayReadyOptions = {
   let baseUrl = syncGatewayEnvToProcess(gatewayEnv);
   let portRotation: MutableJsonObject = {};
   const hermesHome = effectiveGatewayHermesHome();
-  if (await gatewayReadyOk(baseUrl, gatewayEnv.LOCAL_DESKTOP_GATEWAY_KEY)) {
+  const endpoint = parseGatewayBaseUrl(baseUrl);
+  const preferredPortAvailable = await portAvailable(endpoint.host, endpoint.port);
+  if (!preferredPortAvailable && await gatewayReadyOk(baseUrl, gatewayEnv.LOCAL_DESKTOP_GATEWAY_KEY, GATEWAY_OCCUPIED_PORT_PREFLIGHT_TIMEOUT_MS)) {
     return { ok: true, alreadyRunning: true, baseUrl };
   }
 
@@ -1045,8 +1057,7 @@ async function ensureGatewayProcess(log = console, opts: GatewayReadyOptions = {
     };
   }
 
-  const endpoint = parseGatewayBaseUrl(baseUrl);
-  if (!await portAvailable(endpoint.host, endpoint.port)) {
+  if (!preferredPortAvailable) {
     const previousBaseUrl = baseUrl;
     const replacementPort = await nextAvailableGatewayPort(endpoint.host, endpoint.port + 1);
     ({ env: gatewayEnv } = ensureGatewayEnvFile({
@@ -1121,7 +1132,7 @@ async function ensureGatewayProcess(log = console, opts: GatewayReadyOptions = {
         return { ok: true, started: true, baseUrl, pid: child.pid || null, ...portRotation };
       }
       if (childExit) break;
-      await new Promise((resolve) => setTimeout(resolve, readyIntervalMs));
+      await new Promise((resolve) => setTimeout(resolve, gatewayReadyPollDelayMs(i, readyIntervalMs)));
     }
     if (childIsAlive(child)) {
       await terminateGatewayChild(child, log, 'startup-timeout');
@@ -1161,6 +1172,7 @@ module.exports = {
   gatewayAuthOk,
   gatewayEventsOk,
   gatewayReadyOk,
+  gatewayReadyPollDelayMs,
   gatewayArgsFor,
   gatewayStartupWaitBudgetMs,
   hermesCwd,

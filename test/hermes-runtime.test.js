@@ -21,6 +21,7 @@ const {
   gatewayArgsFor,
   gatewayEventsOk,
   gatewayReadyOk,
+  gatewayReadyPollDelayMs,
   gatewayStartupWaitBudgetMs,
   resolveHermesCommand,
   safeRuntimePath,
@@ -306,6 +307,32 @@ test('ensureGatewayProcess rotates the gateway port when the preferred port is o
   assert.equal(warnings.some((args) => /port was occupied/.test(args.join(' '))), true);
 });
 
+test('ensureGatewayProcess short-circuits unresponsive occupied gateway ports', async (t) => {
+  isolateEnv(t);
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-runtime-occupied-'));
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-runtime-home-'));
+  const occupiedPort = 8766;
+  process.env.AGENT_UI_CONFIG_DIR = configDir;
+  process.env.AGENT_UI_HERMES_HOME = homeDir;
+  process.env.AGENT_UI_HERMES_BIN = path.join(configDir, 'missing-hermes');
+  ensureGatewayEnvFile({ LOCAL_DESKTOP_PORT: String(occupiedPort) });
+  mockCreateServer(t, (port) => port === occupiedPort);
+  global.fetch = async (_url, opts = {}) => new Promise((_resolve, reject) => {
+    if (opts.signal) opts.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+  });
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  const started = performance.now();
+  const result = await ensureGatewayProcess({ warn() {}, log() {} });
+  const elapsedMs = performance.now() - started;
+
+  assert.equal(result.ok, false);
+  assert.equal(result.portRotated, true);
+  assert.ok(elapsedMs < 700, `occupied unresponsive gateway preflight should not consume full readiness timeout; elapsed=${elapsedMs}`);
+});
+
 test('ensureGatewayProcess reconciles direct gateway URL with the Hermes env file', async (t) => {
   isolateEnv(t);
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-runtime-url-'));
@@ -321,6 +348,14 @@ test('ensureGatewayProcess reconciles direct gateway URL with the Hermes env fil
   process.env.AGENT_UI_HERMES_BIN = path.join(configDir, 'missing-hermes');
   process.env.AGENT_UI_HERMES_GATEWAY_URL = `http://127.0.0.1:${directPort}/`;
   ensureGatewayEnvFile({ LOCAL_DESKTOP_PORT: '8766' });
+  let fetchCalls = 0;
+  global.fetch = async () => {
+    fetchCalls += 1;
+    return new Response(JSON.stringify({ ok: false }), { status: 503 });
+  };
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
 
   const result = await ensureGatewayProcess({ warn() {}, log() {} });
   const env = fs.readFileSync(path.join(homeDir, '.env'), 'utf8');
@@ -330,6 +365,7 @@ test('ensureGatewayProcess reconciles direct gateway URL with the Hermes env fil
   assert.match(env, new RegExp(`LOCAL_DESKTOP_PORT=${directPort}\\b`));
   assert.equal(process.env.LOCAL_DESKTOP_PORT, String(directPort));
   assert.equal(process.env.AGENT_UI_HERMES_GATEWAY_URL, `http://127.0.0.1:${directPort}`);
+  assert.equal(fetchCalls, 0, 'open gateway ports should skip impossible pre-spawn readiness probes');
 });
 
 test('ensureGatewayProcess does not report an unready child as ready', async (t) => {
@@ -412,6 +448,15 @@ test('connector mode requires explicit gateway restart approval when Hermes is n
 });
 
 test('gateway autostart wait covers Hermes replace takeover window', () => {
+  assert.ok(gatewayStartupWaitBudgetMs() >= 20_000);
+});
+
+test('gateway startup polls quickly at first without dropping steady-state budget', () => {
+  assert.deepEqual(
+    [0, 1, 2, 3, 4].map((attempt) => gatewayReadyPollDelayMs(attempt, 250)),
+    [75, 150, 225, 250, 250]
+  );
+  assert.equal(gatewayReadyPollDelayMs(10, 250), 250);
   assert.ok(gatewayStartupWaitBudgetMs() >= 20_000);
 });
 
@@ -506,6 +551,17 @@ test('local desktop adapter treats SSE client disconnects as normal', () => {
   assert.match(adapter, /client_exceptions\.ClientConnectionResetError/);
   assert.match(adapter, /SSE client disconnected/);
   assert.doesNotMatch(adapter, /except \(asyncio\.CancelledError, ConnectionResetError, BrokenPipeError\):/);
+});
+
+test('local desktop adapter does not stall gateway shutdown on open SSE streams', () => {
+  const adapter = fs.readFileSync(
+    path.join(__dirname, '..', 'vendor', 'hermes-platforms', 'local_desktop', 'adapter.py'),
+    'utf8'
+  );
+
+  assert.match(adapter, /web\.AppRunner\(app, shutdown_timeout=0\.25\)/);
+  assert.match(adapter, /async def disconnect\(self\) -> None:\n\s+for queue in list\(self\._subscribers\):/);
+  assert.match(adapter, /except asyncio\.QueueFull:\n\s+self\._close_overflowed_subscriber\(queue\)/);
 });
 
 test('local desktop adapter follows Hermes plugin adapter registration hooks', () => {
@@ -620,6 +676,33 @@ test('gateway readiness requires authenticated local desktop message access', as
   assert.equal(await gatewayReadyOk('http://127.0.0.1:8766', 'secret'), true);
   assert.equal(calls.some((call) => call.method === 'POST' && call.auth === 'Bearer secret' && call.body === '{}'), true);
   assert.equal(calls.some((call) => call.url.endsWith('/events') && call.auth === 'Bearer secret'), true);
+});
+
+test('gateway readiness probes health, auth, and SSE concurrently', async (t) => {
+  isolateEnv(t);
+  global.fetch = async (url, opts = {}) => {
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    if (String(url).endsWith('/health')) {
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+    if (String(url).endsWith('/events')) {
+      return new Response(new ReadableStream({ start() {} }), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      });
+    }
+    assert.equal(opts.method, 'POST');
+    return new Response(JSON.stringify({ ok: false, error: 'missing_conversation_id' }), { status: 400 });
+  };
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  const started = performance.now();
+  assert.equal(await gatewayReadyOk('http://127.0.0.1:8766', 'secret', 400), true);
+  const elapsedMs = performance.now() - started;
+
+  assert.ok(elapsedMs < 190, `readiness should finish near the slowest probe, not serially; elapsed=${elapsedMs}`);
 });
 
 test('gateway readiness rejects immediately closed event stream', async (t) => {

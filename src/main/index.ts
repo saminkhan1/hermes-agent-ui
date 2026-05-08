@@ -77,11 +77,6 @@ const MAC_FULL_SCREEN_WORKSPACE_OPTIONS = {
 const PET_OVERLAY_WINDOW_LEVEL = 'floating';
 const FOCUSED_OVERLAY_WINDOW_LEVEL = 'modal-panel';
 const CUSTOM_PET_PREFIX = petAssets.CUSTOM_PET_PREFIX;
-const PET_DRAG_DISPLAY_HYSTERESIS = 24;
-const PET_MOMENTUM_INTERVAL_MS = 16;
-const PET_MOMENTUM_DECAY = 0.88;
-const PET_MOMENTUM_STOP_SPEED = 65;
-const PET_MOMENTUM_MAX_DURATION_MS = 900;
 const FALLBACK_PET_CHARACTER_ID = `${CUSTOM_PET_PREFIX}goblin`;
 const PET_ASSET_SCHEME = petAssets.PET_ASSET_SCHEME;
 const ATTACHMENT_SCHEME = hermesAttachments.ATTACHMENT_SCHEME;
@@ -259,7 +254,6 @@ let petAnchor: any = null;
 let petDragState: any = null;
 let petLayout: any = null;
 let petMascotSize = { ...PET_DEFAULT_MASCOT_SIZE };
-let petMomentumTimer: any = null;
 let petTraySize: any = null;
 let petPlacement = 'top-end';
 let petCharacterOptions: any[] = [];
@@ -641,14 +635,6 @@ function normalizedDragStartPayload(payload: MutableJsonObject = {}) {
   return { pointerWindowX, pointerWindowY };
 }
 
-function normalizedDragReleasePayload(payload: MutableJsonObject = {}) {
-  if (!payload || typeof payload !== 'object') return null;
-  const velocityX = finiteNumberInRange(payload.velocityX, 5000);
-  const velocityY = finiteNumberInRange(payload.velocityY, 5000);
-  if (velocityX == null || velocityY == null) return null;
-  return { velocityX, velocityY };
-}
-
 function normalizedSize(value: any) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0 || n > MAX_REPORTED_ELEMENT_SIZE) return null;
@@ -934,56 +920,10 @@ function applyPetLayout(displayBounds = displayBoundsForPetAnchor(), { persist =
   if (persist) persistPetWindowBounds();
 }
 
-function rectEquals(a: any, b: any) {
-  return !!(
-    a &&
-    b &&
-    a.x === b.x &&
-    a.y === b.y &&
-    a.width === b.width &&
-    a.height === b.height
-  );
-}
-
-function expandRect(rect: any, amount: any) {
-  return {
-    x: rect.x - amount,
-    y: rect.y - amount,
-    width: rect.width + amount * 2,
-    height: rect.height + amount * 2,
-  };
-}
-
-function pointInRect(point: any, rect: any) {
-  return (
-    point.x >= rect.x &&
-    point.x < rect.x + rect.width &&
-    point.y >= rect.y &&
-    point.y < rect.y + rect.height
-  );
-}
-
-function displayBoundsForDragPoint(point: any, previousDisplayBounds: any) {
-  const nearestBounds = screen.getDisplayNearestPoint(point).bounds;
-  if (rectEquals(nearestBounds, previousDisplayBounds)) return nearestBounds;
-  if (previousDisplayBounds && pointInRect(point, expandRect(previousDisplayBounds, PET_DRAG_DISPLAY_HYSTERESIS))) {
-    return previousDisplayBounds;
-  }
-  return nearestBounds;
-}
-
-function cancelPetMomentum() {
-  if (petMomentumTimer != null) {
-    clearTimeout(petMomentumTimer);
-    petMomentumTimer = null;
-  }
-}
-
 function movePetDragToCurrentCursor() {
   if (!petDragState) return;
   const cursor = screen.getCursorScreenPoint();
-  const displayBounds = displayBoundsForDragPoint(cursor, petDragState.displayBounds);
-  petDragState.displayBounds = displayBounds;
+  const displayBounds = screen.getDisplayNearestPoint(cursor).bounds;
   petAnchor = {
     ...(petAnchor || defaultPetAnchor()),
     x: cursor.x - petDragState.pointerAnchorX,
@@ -997,7 +937,6 @@ function startPetDrag({ pointerWindowX, pointerWindowY }: MutableJsonObject = {}
   const x = Number(pointerWindowX);
   const y = Number(pointerWindowY);
   if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-  cancelPetMomentum();
   const currentLayout: any = petLayout || computePetLayout({
     anchor: petAnchor || defaultPetAnchor(),
     displayBounds: displayBoundsForPetAnchor(),
@@ -1006,60 +945,26 @@ function startPetDrag({ pointerWindowX, pointerWindowY }: MutableJsonObject = {}
     traySize: petTraySize || PET_DEFAULT_TRAY_SIZE,
   });
   petDragState = {
-    displayBounds: screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).bounds,
-    hasMoved: false,
     pointerAnchorX: x - currentLayout.mascot.left,
     pointerAnchorY: y - currentLayout.mascot.top,
   };
+  setPetWindowMouseable(true);
 }
 
 function movePetDrag() {
   if (!mainWindow || mainWindow.isDestroyed() || !petDragState) return;
-  cancelPetMomentum();
-  petDragState.hasMoved = true;
   movePetDragToCurrentCursor();
 }
 
 function endPetDrag() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (petDragState && petDragState.hasMoved) movePetDragToCurrentCursor();
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    petDragState = null;
+    return;
+  }
+  if (petDragState) movePetDragToCurrentCursor();
   petDragState = null;
   applyPetLayout(undefined, { persist: true });
-}
-
-function throwPetWithVelocity(velocityX: any, velocityY: any) {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  let vx = Number(velocityX);
-  let vy = Number(velocityY);
-  if (!Number.isFinite(vx) || !Number.isFinite(vy) || (vx === 0 && vy === 0)) return;
-  cancelPetMomentum();
-  let elapsed = 0;
-  const step: any = () => {
-    if (!mainWindow || mainWindow.isDestroyed()) {
-      cancelPetMomentum();
-      return;
-    }
-    petMomentumTimer = null;
-    elapsed += PET_MOMENTUM_INTERVAL_MS;
-    const intended: any = {
-      ...(petAnchor || defaultPetAnchor()),
-      x: (petAnchor || defaultPetAnchor()).x + (vx * PET_MOMENTUM_INTERVAL_MS) / 1000,
-      y: (petAnchor || defaultPetAnchor()).y + (vy * PET_MOMENTUM_INTERVAL_MS) / 1000,
-    };
-    const displayBounds = screen.getDisplayNearestPoint(pointForRectCenter(intended)).bounds;
-    petAnchor = intended;
-    applyPetLayout(displayBounds, { persist: false });
-    if (petAnchor.x !== Math.round(intended.x)) vx = 0;
-    if (petAnchor.y !== Math.round(intended.y)) vy = 0;
-    vx *= PET_MOMENTUM_DECAY;
-    vy *= PET_MOMENTUM_DECAY;
-    if (elapsed >= PET_MOMENTUM_MAX_DURATION_MS || Math.hypot(vx, vy) < PET_MOMENTUM_STOP_SPEED) {
-      persistPetWindowBounds();
-      return;
-    }
-    petMomentumTimer = setTimeout(step, PET_MOMENTUM_INTERVAL_MS);
-  };
-  petMomentumTimer = setTimeout(step, PET_MOMENTUM_INTERVAL_MS);
+  applyPetMouseInteractivityPolicy();
 }
 
 function syncPetAnchorFromWindowBounds() {
@@ -1119,7 +1024,8 @@ function setPetWindowMouseable(enabled: any, { refreshCursor = false } = {}) {
 
 function applyPetMouseInteractivityPolicy() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  setPetWindowMouseable(petPointerInteractive, { refreshCursor: petPointerInteractive });
+  const enabled = petPointerInteractive || petDragState != null;
+  setPetWindowMouseable(enabled, { refreshCursor: enabled });
 }
 
 function openPetOverlay({ persist = true } = {}) {
@@ -1143,7 +1049,6 @@ function closePetOverlay({ persist = true } = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   petOverlayOpenRequested = false;
   petDragState = null;
-  cancelPetMomentum();
   cancelPetWindowMovePersist();
   setPetPointerInteraction(false);
   if (mainWindow.isVisible()) mainWindow.hide();
@@ -2279,14 +2184,8 @@ trustedIpcOn('pet-drag-end', () => {
   endPetDrag();
 });
 
-trustedIpcOn('pet-drag-release', (_event, payload: MutableJsonObject = {}) => {
-  const safePayload = normalizedDragReleasePayload(payload);
-  if (safePayload) throwPetWithVelocity(safePayload.velocityX, safePayload.velocityY);
-});
-
 trustedIpcOn('pet-element-size-changed', (_event, payload: MutableJsonObject = {}) => {
   if (!payload || typeof payload !== 'object') return;
-  cancelPetMomentum();
   const mascot = payload.mascot && typeof payload.mascot === 'object' ? payload.mascot as MutableJsonObject : null;
   const trayPayload = payload.tray && typeof payload.tray === 'object' ? payload.tray as MutableJsonObject : null;
   const mascotWidth = mascot ? normalizedSize(mascot.width) : null;
@@ -2814,11 +2713,9 @@ app.whenReady().then(() => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     cancelPetWindowMovePersist();
     if (petDragState) {
-      petDragState.displayBounds = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).bounds;
       movePetDrag();
       return;
     }
-    cancelPetMomentum();
     applyPetLayout(undefined, { persist: true });
   };
   screen.on('display-added', reclampPetOverlay);
@@ -2845,7 +2742,7 @@ app.on('will-quit', () => {
     closeEvalServer = null;
   }
   cancelAllAgents();
-  cancelPetMomentum();
+  petDragState = null;
   stopActiveWindowTracker();
   globalShortcut.unregisterAll();
 });

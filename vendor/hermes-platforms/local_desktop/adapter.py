@@ -171,7 +171,7 @@ class LocalDesktopAdapter(BasePlatformAdapter):
         app.router.add_get("/events", self._handle_events)
         app.router.add_post("/messages", self._handle_messages)
 
-        self._runner = web.AppRunner(app)
+        self._runner = web.AppRunner(app, shutdown_timeout=0.25)
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, self.host, self.port)
         await self._site.start()
@@ -180,15 +180,15 @@ class LocalDesktopAdapter(BasePlatformAdapter):
         return True
 
     async def disconnect(self) -> None:
-        if self._runner:
-            await self._runner.cleanup()
-            self._runner = None
-            self._site = None
         for queue in list(self._subscribers):
             try:
                 queue.put_nowait(None)
             except asyncio.QueueFull:
-                pass
+                self._close_overflowed_subscriber(queue)
+        if self._runner:
+            await self._runner.cleanup()
+            self._runner = None
+            self._site = None
         self._subscribers.clear()
         self._mark_disconnected()
         logger.info("[local_desktop] Disconnected")
