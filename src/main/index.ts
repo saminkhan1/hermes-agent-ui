@@ -248,6 +248,7 @@ let authFlow = idleAuthFlow();
 const ignoredAuthSessionIds = new Set();
 const evalUiSnapshots = new Map();
 let lastExternalWindowSnapshot: any = null;
+let activeVoiceCapture: any = null;
 let activeWindowCacheTimer: any = null;
 let activeWindowCacheStopTimer: any = null;
 let petOverlayOpenRequested = false;
@@ -1347,6 +1348,7 @@ function openNewCatModal(modalContextId: any, inputMode = selectedInputMode) {
   });
 
   win.on('closed', () => {
+    if (normalizedInputMode === INPUT_MODE_VOICE) cancelActiveVoiceCapture('modal_closed', modalContextId);
     modalContexts.delete(modalContextId);
     launchContextCaptures.delete(modalContextId);
     if (activeModalContextId === modalContextId) {
@@ -2219,6 +2221,7 @@ trustedIpcOn('new-cat-submit', (_event, payload) => {
 });
 
 trustedIpcOn('new-cat-cancel', () => {
+  cancelActiveVoiceCapture('cancelled');
   if (modalWindow && !modalWindow.isDestroyed()) {
     modalWindow.close();
   }
@@ -2536,7 +2539,19 @@ function textTraceMeta(value: any, maxPreview = 80) {
   };
 }
 
-async function captureVoicePromptTranscript(onStatus: any) {
+function timingTraceMeta(value: any) {
+  const raw = value && value.raw && value.raw._timing ? value.raw._timing : {};
+  const recordingMs = safeInteger(raw.recording_ms);
+  const transcribingMs = safeInteger(raw.transcribing_ms);
+  const totalMs = safeInteger(raw.total_ms);
+  return {
+    recordingMs: recordingMs != null ? recordingMs : null,
+    transcribingMs: transcribingMs != null ? transcribingMs : null,
+    totalMs: totalMs != null ? totalMs : null,
+  };
+}
+
+async function captureVoicePromptTranscript(onStatus: any, opts: MutableJsonObject = {}) {
   telemetry.voiceStarted({});
   if (process.env.AGENT_UI_EVAL === '1') {
     const transcript = await readDeterministicTranscript();
@@ -2548,9 +2563,9 @@ async function captureVoicePromptTranscript(onStatus: any) {
     telemetry.voiceFinalTranscript({ deterministic: true, ...textTraceMeta(transcript) });
     return { ok: true, deterministic: true, transcript };
   }
-  const result = await captureAndTranscribeVoice({ onStatus });
+  const result = await captureAndTranscribeVoice({ onStatus, signal: opts.signal });
   if (result.ok) {
-    telemetry.voiceFinalTranscript({ deterministic: false, ...textTraceMeta(result.transcript) });
+    telemetry.voiceFinalTranscript({ deterministic: false, ...timingTraceMeta(result), ...textTraceMeta(result.transcript) });
   }
   return result;
 }
@@ -2569,18 +2584,31 @@ function sendVoiceInputStatus(win: any, modalContextId: any, payload: MutableJso
 
 async function startVoiceSessionFromShortcut(win: any, modalContextId: any) {
   if (!isCurrentWindow(win, () => modalWindow)) return;
+  cancelActiveVoiceCapture('replaced');
   const startedAt = Date.now();
+  const abortController = new AbortController();
+  const session = {
+    abortController,
+    modalContextId: modalContextId || null,
+    startedAt,
+  };
+  activeVoiceCapture = session;
   telemetry.voiceSessionRecordingRequested({ modalContextId: modalContextId || null });
   sendVoiceInputStatus(win, modalContextId, { state: 'recording' });
   const result = await captureVoicePromptTranscript((state: any) => {
+    if (activeVoiceCapture !== session) return;
     sendVoiceInputStatus(win, modalContextId, { state });
-  });
+  }, { signal: abortController.signal });
+  if (activeVoiceCapture !== session) return;
+  activeVoiceCapture = null;
   if (!isCurrentWindow(win, () => modalWindow)) return;
+  if (result && result.cancelled) return;
   if (!result || !result.ok) {
     const error = (result && result.error) || 'Could not capture voice input.';
     telemetry.voiceSessionRejected({
       modalContextId: modalContextId || null,
       durationMs: Date.now() - startedAt,
+      ...timingTraceMeta(result),
       error,
     });
     sendVoiceInputStatus(win, modalContextId, { state: 'error', error });
@@ -2592,6 +2620,7 @@ async function startVoiceSessionFromShortcut(win: any, modalContextId: any) {
     telemetry.voiceSessionRejected({
       modalContextId: modalContextId || null,
       durationMs: Date.now() - startedAt,
+      ...timingTraceMeta(result),
       error,
     });
     sendVoiceInputStatus(win, modalContextId, { state: 'error', error });
@@ -2601,6 +2630,7 @@ async function startVoiceSessionFromShortcut(win: any, modalContextId: any) {
     modalContextId: modalContextId || null,
     deterministic: !!result.deterministic,
     durationMs: Date.now() - startedAt,
+    ...timingTraceMeta(result),
     ...textTraceMeta(prompt),
   });
   sendVoiceInputStatus(win, modalContextId, {
@@ -2608,6 +2638,23 @@ async function startVoiceSessionFromShortcut(win: any, modalContextId: any) {
     transcript: prompt,
     provider: result.provider || '',
   });
+}
+
+function cancelActiveVoiceCapture(reason = 'cancelled', modalContextId: any = null) {
+  const session = activeVoiceCapture;
+  if (!session) return false;
+  if (modalContextId && session.modalContextId && session.modalContextId !== modalContextId) return false;
+  activeVoiceCapture = null;
+  if (session.abortController && typeof session.abortController.abort === 'function') {
+    session.abortController.abort();
+  }
+  telemetry.voiceSessionRejected({
+    modalContextId: session.modalContextId || null,
+    durationMs: Date.now() - Number(session.startedAt || Date.now()),
+    reason,
+    cancelled: true,
+  });
+  return true;
 }
 
 trustedIpcOn('eval-trace-event', (_event, payload: MutableJsonObject = {}) => {

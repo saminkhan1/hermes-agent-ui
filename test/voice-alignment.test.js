@@ -18,17 +18,38 @@ test('voice input is backed by Hermes voice-mode capture and transcription', () 
 
   assert.match(runtime, /from tools\.voice_mode import check_voice_requirements, create_audio_recorder, play_beep, transcribe_recording/);
   assert.match(runtime, /silence_threshold = int\(cfg\.get\("silence_threshold", 200\)\)/);
-  assert.match(runtime, /silence_duration = float\(cfg\.get\("silence_duration", 3\.0\)\)/);
-  assert.match(runtime, /max_recording_seconds = float\(cfg\.get\("max_recording_seconds", 120\)\)/);
+  assert.match(runtime, /AGENT_UI_VOICE_SILENCE_DURATION/);
+  assert.match(runtime, /cfg\.get\("agent_ui_silence_duration", 1\.2\)/);
+  assert.match(runtime, /AGENT_UI_VOICE_MAX_RECORDING_SECONDS/);
+  assert.match(runtime, /cfg\.get\("agent_ui_max_recording_seconds", 45\)/);
+  assert.match(runtime, /AGENT_UI_VOICE_NO_SPEECH_SECONDS/);
+  assert.match(runtime, /recorder\._max_wait = no_speech_seconds/);
   assert.match(runtime, /recorder\.start\(on_silence_stop=on_silence_stop\)/);
   assert.match(runtime, /play_beep\(frequency=880, count=1\)/);
   assert.match(runtime, /play_beep\(frequency=660, count=2\)/);
   assert.match(runtime, /result = transcribe_recording\(audio_path\)/);
-  assert.match(main, /const result = await captureAndTranscribeVoice\(\{ onStatus \}\)/);
+  assert.match(main, /const result = await captureAndTranscribeVoice\(\{ onStatus, signal: opts\.signal \}\)/);
   assert.match(runtime, /"status": "transcribing"/);
   assert.match(main, /async function startVoiceSessionFromShortcut\(win(?:: [^)]+)?, modalContextId(?:: [^)]+)?\)/);
   assert.match(main, /sendVoiceInputStatus\(win, modalContextId, \{\s*state: 'transcript_ready'/);
   assert.doesNotMatch(main, /startCatRunFromPayload\(\{ prompt, modalContextId \}, \{ closeModal: false \}\)/);
+});
+
+test('voice capture is cancellable and scoped to the active modal', () => {
+  const runtime = read('src/main/hermes-runtime.ts');
+  const main = read('src/main/index.ts');
+
+  assert.match(runtime, /signal\?: AbortSignal/);
+  assert.match(runtime, /opts\.signal\.addEventListener\('abort', onAbort, \{ once: true \}\)/);
+  assert.match(runtime, /error\.name === 'AbortError'/);
+  assert.match(runtime, /Voice input was cancelled/);
+  assert.match(main, /let activeVoiceCapture(?:: any)? = null/);
+  assert.match(main, /const abortController = new AbortController\(\)/);
+  assert.match(main, /activeVoiceCapture = session/);
+  assert.match(main, /cancelActiveVoiceCapture\('cancelled'\)/);
+  assert.match(main, /cancelActiveVoiceCapture\('modal_closed', modalContextId\)/);
+  assert.match(main, /cancelActiveVoiceCapture\('replaced'\)/);
+  assert.match(main, /session\.abortController\.abort\(\)/);
 });
 
 test('voice and text are direct menu-selected input modes', () => {

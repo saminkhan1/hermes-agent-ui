@@ -44,9 +44,11 @@ type ExecTextOptions = ExecFileOptionsWithStringEncoding & {
 type JsonEventOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
   timeout?: number;
 };
 type CaptureVoiceOptions = {
+  signal?: AbortSignal;
   timeoutMs?: number;
   onStatus?: (status: string) => void;
 };
@@ -130,6 +132,12 @@ function execFileText(command: any, args: any, opts: ExecTextOptions = { encodin
 
 function execFileTextWithJsonEvents(command: any, args: any, opts: JsonEventOptions = {}, onJsonLine: any) {
   return new Promise((resolve, reject) => {
+    if (opts.signal && opts.signal.aborted) {
+      const err: CommandError = new Error('Process aborted');
+      err.name = 'AbortError';
+      reject(err);
+      return;
+    }
     const child = spawn(command, args, {
       cwd: opts.cwd,
       env: opts.env,
@@ -138,10 +146,19 @@ function execFileTextWithJsonEvents(command: any, args: any, opts: JsonEventOpti
     let stdout = '';
     let stderr = '';
     let stdoutBuffer = '';
+    let settled = false;
+    let closed = false;
     const timeoutMs = Number(opts.timeout || 0);
-    const timer = timeoutMs > 0 ? setTimeout(() => {
+    const stopChild = () => {
+      if (closed) return;
       child.kill('SIGTERM');
-    }, timeoutMs) : null;
+      setTimeout(() => {
+        if (!closed) child.kill('SIGKILL');
+      }, 1500).unref();
+    };
+    const timer = timeoutMs > 0 ? setTimeout(stopChild, timeoutMs) : null;
+    const onAbort = () => stopChild();
+    if (opts.signal) opts.signal.addEventListener('abort', onAbort, { once: true });
 
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
@@ -168,14 +185,20 @@ function execFileTextWithJsonEvents(command: any, args: any, opts: JsonEventOpti
       stderr += chunk;
     });
     child.on('error', (err: any) => {
+      settled = true;
       if (timer) clearTimeout(timer);
+      if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
       const commandError = err as CommandError;
       commandError.stdout = stdout;
       commandError.stderr = stderr;
       reject(commandError);
     });
     child.on('close', (code: any, signal: any) => {
+      closed = true;
+      if (settled) return;
+      settled = true;
       if (timer) clearTimeout(timer);
+      if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
       if (stdoutBuffer.trim()) {
         try {
           const parsed = JSON.parse(stdoutBuffer.trim());
@@ -185,6 +208,14 @@ function execFileTextWithJsonEvents(command: any, args: any, opts: JsonEventOpti
         } catch {
           // Keep final parsing centralized in parseTranscriptionJson.
         }
+      }
+      if (opts.signal && opts.signal.aborted) {
+        const err: CommandError = new Error('Process aborted');
+        err.name = 'AbortError';
+        err.stdout = stdout;
+        err.stderr = stderr;
+        reject(err);
+        return;
       }
       if (code !== 0) {
         const err: CommandError = new Error(`Process exited with code ${code}${signal ? ` (${signal})` : ''}`);
@@ -447,19 +478,29 @@ async function captureAndTranscribeVoice(opts: CaptureVoiceOptions = {}) {
       '    from hermes_cli.config import load_config',
       '    from tools.voice_mode import check_voice_requirements, create_audio_recorder, play_beep, transcribe_recording',
       '    cfg = load_config().get("voice", {})',
+      '    def clamp_float(value, fallback, min_value, max_value):',
+      '        try:',
+      '            parsed = float(value)',
+      '        except (TypeError, ValueError):',
+      '            parsed = float(fallback)',
+      '        return max(float(min_value), min(float(parsed), float(max_value)))',
       '    requirements = check_voice_requirements()',
       '    if not requirements.get("available"):',
       '        raise RuntimeError(requirements.get("details") or "Hermes voice mode requirements are not available.")',
       '    silence_threshold = int(cfg.get("silence_threshold", 200))',
-      '    silence_duration = float(cfg.get("silence_duration", 3.0))',
-      '    max_recording_seconds = float(cfg.get("max_recording_seconds", 120))',
+      '    silence_duration = clamp_float(os.environ.get("AGENT_UI_VOICE_SILENCE_DURATION", cfg.get("agent_ui_silence_duration", 1.2)), 1.2, 0.6, 2.0)',
+      '    max_recording_seconds = clamp_float(os.environ.get("AGENT_UI_VOICE_MAX_RECORDING_SECONDS", cfg.get("agent_ui_max_recording_seconds", 45)), 45, 5, 60)',
+      '    no_speech_seconds = clamp_float(os.environ.get("AGENT_UI_VOICE_NO_SPEECH_SECONDS", cfg.get("agent_ui_no_speech_seconds", 8)), 8, 3, 15)',
       '    beep_enabled = bool(cfg.get("beep_enabled", True))',
+      '    started_at = time.monotonic()',
       '    stopped = threading.Event()',
       '    recorder = create_audio_recorder()',
       '    if hasattr(recorder, "_silence_threshold"):',
       '        recorder._silence_threshold = silence_threshold',
       '    if hasattr(recorder, "_silence_duration"):',
       '        recorder._silence_duration = silence_duration',
+      '    if hasattr(recorder, "_max_wait"):',
+      '        recorder._max_wait = no_speech_seconds',
       '    def on_silence_stop():',
       '        stopped.set()',
       '    if beep_enabled:',
@@ -472,6 +513,7 @@ async function captureAndTranscribeVoice(opts: CaptureVoiceOptions = {}) {
       '    while not stopped.is_set() and time.monotonic() < deadline:',
       '        time.sleep(0.1)',
       '    audio_path = recorder.stop()',
+      '    recording_ms = int((time.monotonic() - started_at) * 1000)',
       '    try:',
       '        recorder.shutdown()',
       '    except Exception:',
@@ -484,8 +526,11 @@ async function captureAndTranscribeVoice(opts: CaptureVoiceOptions = {}) {
       '    if not audio_path:',
       '        result = {"success": False, "error": "No speech was detected."}',
       '    else:',
-      '        print(json.dumps({"status": "transcribing"}), flush=True)',
+      '        print(json.dumps({"status": "transcribing", "recording_ms": recording_ms}), flush=True)',
+      '        transcribe_started = time.monotonic()',
       '        result = transcribe_recording(audio_path)',
+      '        if isinstance(result, dict):',
+      '            result["_timing"] = {"recording_ms": recording_ms, "transcribing_ms": int((time.monotonic() - transcribe_started) * 1000), "total_ms": int((time.monotonic() - started_at) * 1000)}',
       'except Exception as exc:',
       '    result = {"success": False, "error": f"{type(exc).__name__}: {exc}"}',
       'finally:',
@@ -505,15 +550,16 @@ async function captureAndTranscribeVoice(opts: CaptureVoiceOptions = {}) {
         PYTHONPATH: runtime.agentRoot,
         AGENT_UI_HERMES_PROJECT_ROOT: runtime.projectRoot,
       }),
+      signal: opts.signal,
       timeout: opts.timeoutMs || 180000,
     }, (event: MutableJsonObject) => {
-      if (onStatus && event.status) onStatus(String(event.status));
+      if (onStatus && event.status === 'transcribing') onStatus(String(event.status));
     });
     const result = parseTranscriptionJson(stdout);
     if (!result) return { ok: false, error: 'Hermes returned no voice result.' };
     const transcript = String(result.transcript || '').trim();
     if (!result.success || !transcript) {
-      return { ok: false, error: formatVoiceCaptureErrorForUser(result.error || 'No speech was detected.') };
+      return { ok: false, error: formatVoiceCaptureErrorForUser(result.error || 'No speech was detected.'), raw: result };
     }
     return {
       ok: true,
@@ -523,6 +569,7 @@ async function captureAndTranscribeVoice(opts: CaptureVoiceOptions = {}) {
     };
   } catch (e) {
     const error = e as CommandError;
+    if (error && error.name === 'AbortError') return { ok: false, cancelled: true, error: 'Voice input was cancelled.' };
     return { ok: false, error: formatVoiceCaptureErrorForUser((error && (error.stderr || error.message)) || String(e)) };
   }
 }

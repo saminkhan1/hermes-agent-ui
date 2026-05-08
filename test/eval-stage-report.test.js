@@ -25,7 +25,8 @@ test('stage report summarizes app and Hermes timing stages from eval trace event
       { type: 'gateway_message_post_requested', runId: 'customer-path-run-1', seq: 10, tRelMs: 650, catId: 'cat-1' },
       { type: 'gateway_message_post_accepted', runId: 'customer-path-run-1', seq: 11, tRelMs: 710, catId: 'cat-1', durationMs: 60 },
       { type: 'gateway_first_event', runId: 'customer-path-run-1', seq: 12, tRelMs: 760, catId: 'cat-1', msSincePostAccepted: 50 },
-      { type: 'terminal_state_rendered', runId: 'customer-path-run-1', seq: 13, tRelMs: 1000, catId: 'cat-1', durationMs: 500, status: 'completed' },
+      { type: 'voice_session_transcript_ready', runId: 'customer-path-run-1', seq: 13, tRelMs: 900, modalContextId: 'modal-1', durationMs: 3900, recordingMs: 2600, transcribingMs: 1200 },
+      { type: 'terminal_state_rendered', runId: 'customer-path-run-1', seq: 14, tRelMs: 1000, catId: 'cat-1', durationMs: 500, status: 'completed' },
     ],
   }], { minRuns: 1 });
 
@@ -37,6 +38,9 @@ test('stage report summarizes app and Hermes timing stages from eval trace event
   assert.equal(byId.get('submit_to_gateway_accepted_ms').p50Ms, 210);
   assert.equal(byId.get('gateway_post_ms').p50Ms, 60);
   assert.equal(byId.get('first_gateway_event_ms').p50Ms, 50);
+  assert.equal(byId.get('voice_recording_ms').p50Ms, 2600);
+  assert.equal(byId.get('voice_transcribing_ms').p50Ms, 1200);
+  assert.equal(byId.get('voice_transcript_ms').p50Ms, 3900);
   assert.equal(byId.get('conversation_terminal_ms').p50Ms, 500);
   assert.equal(byId.get('submit_to_pet_ms').status, 'ok');
   assert.match(markdownReport(report), /Submit to pet visible/);

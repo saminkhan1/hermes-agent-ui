@@ -70,6 +70,8 @@ const STAGE_DEFS = Object.freeze([
   { id: 'submit_to_gateway_accepted_ms', label: 'Submit to gateway accepted', owner: OWNER.HERMES_BOUNDARY },
   { id: 'first_gateway_event_ms', label: 'Gateway accepted to first event', owner: OWNER.HERMES_BOUNDARY },
   { id: 'auth_handoff_ms', label: 'Auth handoff', owner: OWNER.HERMES_BOUNDARY },
+  { id: 'voice_recording_ms', label: 'Voice recording stop', owner: OWNER.HERMES_VOICE },
+  { id: 'voice_transcribing_ms', label: 'Voice transcription', owner: OWNER.HERMES_VOICE },
   { id: 'voice_transcript_ms', label: 'Voice transcript ready', owner: OWNER.HERMES_VOICE },
   { id: 'conversation_terminal_ms', label: 'Conversation terminal', owner: OWNER.HERMES_PROVIDER },
 ]);

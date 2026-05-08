@@ -160,7 +160,11 @@ function collectSamples(runs) {
       if (event.type === EVENTS.GATEWAY_FIRST_EVENT) {
         addSample(samples, 'first_gateway_event_ms', run, event.msSincePostAccepted, { catId: event.catId || null, gatewayEventType: event.gatewayEventType || null });
       }
-      if (event.type === EVENTS.VOICE_SESSION_TRANSCRIPT_READY) addSample(samples, 'voice_transcript_ms', run, event.durationMs, { modalContextId: event.modalContextId || null });
+      if (event.type === EVENTS.VOICE_SESSION_TRANSCRIPT_READY) {
+        addSample(samples, 'voice_recording_ms', run, event.recordingMs, { modalContextId: event.modalContextId || null });
+        addSample(samples, 'voice_transcribing_ms', run, event.transcribingMs, { modalContextId: event.modalContextId || null });
+        addSample(samples, 'voice_transcript_ms', run, event.durationMs, { modalContextId: event.modalContextId || null });
+      }
       if (event.type === EVENTS.TERMINAL_STATE_RENDERED) addSample(samples, 'conversation_terminal_ms', run, event.durationMs, { catId: event.catId || null, status: event.status || null });
       if (event.type === EVENTS.GATEWAY_HYDRATION_COMPLETED) addSample(samples, 'quit_reopen_hydration_ms', run, event.durationMs, { ok: event.ok !== false, resetLastSeq: !!event.resetLastSeq });
     }
