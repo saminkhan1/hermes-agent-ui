@@ -65,7 +65,6 @@ contextBridge.exposeInMainWorld('agentUI', {
   submitNewCat: (payload: AgentUIPayload = {}) => ipcRenderer.send('new-cat-submit', {
     modalContextId: catId(payload.modalContextId),
     prompt: text(payload.prompt),
-    runtime: 'local',
   }),
   cancelNewCat: () => ipcRenderer.send('new-cat-cancel'),
   onVoiceInputStatus: (callback: SafeCallback) => onSafe('voice-input-status', callback, (payload: unknown = {}) => {
@@ -80,9 +79,7 @@ contextBridge.exposeInMainWorld('agentUI', {
     };
   }),
   overlayReady: () => ipcRenderer.send('overlay-ready'),
-  togglePetOverlay: () => ipcRenderer.send('pet-overlay-toggle'),
   getPetCharacters: () => ipcRenderer.invoke('get-pet-characters'),
-  refreshPetCharacters: () => ipcRenderer.send('pet-characters-refresh'),
   showPetContextMenu: () => ipcRenderer.send('pet-context-menu'),
   startPetDrag: (payload: AgentUIPayload = {}) => {
     const pointerWindowX = number(payload.pointerWindowX);

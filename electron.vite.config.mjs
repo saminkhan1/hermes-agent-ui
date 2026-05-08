@@ -4,26 +4,28 @@ import { defineConfig } from 'electron-vite'
 // When the default port is busy, Vite increments until free, but electron-vite still reads
 // `config.server.port` (the requested port) — then Electron loadURL hangs on the wrong URL.
 const RENDERER_DEV_PORT = 56247
-const MAIN_ENTRIES = [
-  'index',
-  'agents',
-  'eval-server',
-  'eval-trace',
-  'hermes-attachments',
-  'hermes-auth',
-  'hermes-gateway-client',
-  'hermes-release',
-  'hermes-runtime',
-  'pet-assets',
-  'pet-layout',
-  'window-lifecycle',
-]
+const MAIN_ENTRIES = {
+  index: 'src/main/index.ts',
+  agents: 'src/main/agents.ts',
+  'eval-server': 'src/main/eval-server.ts',
+  'eval-trace': 'src/main/eval-trace.ts',
+  'hermes-attachments': 'src/main/hermes-attachments.ts',
+  'hermes-auth': 'src/main/hermes-auth.ts',
+  'hermes-gateway-client': 'src/main/hermes-gateway-client.ts',
+  'hermes-release': 'src/main/hermes-release.ts',
+  'hermes-runtime': 'src/main/hermes-runtime.ts',
+  'pet-assets': 'src/main/pet-assets.ts',
+  'pet-layout': 'src/main/pet-layout.ts',
+  'reliability-schema': 'src/main/reliability-schema.js',
+  'reliability-telemetry': 'src/main/reliability-telemetry.ts',
+  'window-lifecycle': 'src/main/window-lifecycle.ts',
+}
 
 export default defineConfig({
   main: {
     build: {
       rollupOptions: {
-        input: Object.fromEntries(MAIN_ENTRIES.map((name) => [name, `src/main/${name}.ts`])),
+        input: MAIN_ENTRIES,
       },
     },
   },

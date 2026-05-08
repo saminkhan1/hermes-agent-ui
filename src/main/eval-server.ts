@@ -92,6 +92,10 @@ async function handleEvalRequest(req, res, handlers) {
       sendEvalJson(res, 200, await handlers.start(await readEvalJson(req)));
       return;
     }
+    if (req.method === 'POST' && url.pathname === '/open-launcher') {
+      sendEvalJson(res, 200, await handlers.openLauncher(await readEvalJson(req)));
+      return;
+    }
     if (req.method === 'POST' && url.pathname === '/followup') {
       sendEvalJson(res, 200, await handlers.followup(await readEvalJson(req)));
       return;

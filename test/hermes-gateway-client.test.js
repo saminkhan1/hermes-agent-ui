@@ -190,7 +190,7 @@ test('gateway config falls back to local desktop env file', (t) => {
 
 test('default gateway config ignores Hermes-owned HOME override', (t) => {
   isolateEnv(t);
-  const poisonedHome = path.join(os.userInfo().homedir, 'Documents', 'hermes', '.aura', 'home');
+  const poisonedHome = path.join(os.userInfo().homedir, 'Documents', 'hermes', 'poisoned-home');
   process.env.HOME = poisonedHome;
   const expectedDir = path.join(os.userInfo().homedir, '.agent-ui');
 

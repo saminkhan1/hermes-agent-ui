@@ -173,6 +173,7 @@ The smoke uses isolated state and drives:
 - conversation window open
 - port conflict recovery
 - quit/reopen
+- internal stage timing report generation from eval traces
 
 Expected success:
 
@@ -180,7 +181,11 @@ Expected success:
 [agent-ui] installed app release smoke passed: /private/tmp/agent-ui-installed-release-smoke-...
 ```
 
-Preserve the evidence directory path in the release template.
+Preserve the evidence directory path in the release template. The evidence directory includes `stage-report.json` and `stage-report.md`, which separate app-owned latency from Hermes/provider/network latency. Reliability event names and stage ownership live in `src/main/reliability-schema.js`; product-flow modules should go through `src/main/reliability-telemetry.ts` instead of calling the trace sink directly. For a five-run customer stage pass, run the installed-app smoke repeatedly against the same candidate and combine the generated eval traces with:
+
+```bash
+npm run report:stages -- /private/tmp/agent-ui-installed-release-smoke-*/eval --markdown
+```
 
 ## Ring 3 - Manual Customer Pass
 

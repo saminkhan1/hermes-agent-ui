@@ -14,10 +14,10 @@ const {
   hermesCwd,
   parseTranscriptionJson,
   resolveHermesCommand,
+  safeRuntimePath,
 } = require('./hermes-runtime');
 const { realUserHomeDir } = require('./hermes-gateway-client');
 
-const SAFE_RUNTIME_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
 const MAX_PROVIDER_CHARS = 96;
 const MAX_LABEL_CHARS = 80;
 const MAX_API_KEY_CHARS = 20000;
@@ -100,18 +100,6 @@ function pythonRuntimeForHermes(command) {
       pythonCandidates: [path.join(bundledRoot, 'python', 'bin', 'python3')],
     });
   }
-  if (path.basename(resolved) === 'aura-hermes' && path.basename(path.dirname(resolved)) === 'script') {
-    const root = path.dirname(path.dirname(resolved));
-    const agentRoot = path.join(root, '.aura', 'hermes-agent');
-    candidates.push({
-      root,
-      agentRoot,
-      pythonCandidates: [
-        path.join(agentRoot, 'venv', 'bin', 'python3'),
-        path.join(agentRoot, '.venv', 'bin', 'python3'),
-      ],
-    });
-  }
   const parts = resolved.split(path.sep);
   const hermesAgentIdx = parts.lastIndexOf('hermes-agent');
   if (hermesAgentIdx >= 0) {
@@ -142,7 +130,7 @@ function hermesEnv(extra: Record<string, string> = {}) {
     ...extra,
     HOME: realUserHomeDir(),
     HERMES_HOME: defaultHermesHome(),
-    PATH: SAFE_RUNTIME_PATH,
+    PATH: safeRuntimePath(),
     PYTHONNOUSERSITE: '1',
     PYTHONDONTWRITEBYTECODE: '1',
     PYTHONUNBUFFERED: '1',

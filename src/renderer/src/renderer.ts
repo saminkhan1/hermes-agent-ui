@@ -1220,8 +1220,6 @@ async function boot() {
     e.preventDefault();
     if (window.agentUI && typeof window.agentUI.showPetContextMenu === 'function') {
       window.agentUI.showPetContextMenu();
-    } else if (window.agentUI && typeof window.agentUI.togglePetOverlay === 'function') {
-      window.agentUI.togglePetOverlay();
     }
   });
 

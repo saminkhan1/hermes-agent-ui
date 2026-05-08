@@ -28,7 +28,11 @@ const LOCAL_DESKTOP_USER = 'local';
 const LOCAL_DESKTOP_PLATFORM = 'local_desktop';
 const LOCAL_DESKTOP_HOME_CHANNEL = 'agent-ui';
 const LOCAL_DESKTOP_HOME_CHANNEL_NAME = 'Agent UI';
-const SAFE_RUNTIME_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
+const BASE_RUNTIME_PATH = '/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin';
+
+function safeRuntimePath() {
+  return `${BASE_RUNTIME_PATH}:${path.join(realUserHomeDir(), '.local', 'bin')}`;
+}
 
 type CommandError = Error & {
   stdout?: string;
@@ -321,15 +325,6 @@ function connectorHermesRuntimeForCommand(command) {
   const resolved = path.resolve(String(command || ''));
   const candidates = [];
 
-  if (path.basename(resolved) === 'aura-hermes' && path.basename(path.dirname(resolved)) === 'script') {
-    const root = path.dirname(path.dirname(resolved));
-    candidates.push({
-      agentRoot: path.join(root, '.aura', 'hermes-agent'),
-      hermesHome: path.join(root, '.aura', 'hermes-home'),
-      projectRoot: root,
-    });
-  }
-
   const parts = resolved.split(path.sep);
   const hermesAgentIdx = parts.lastIndexOf('hermes-agent');
   if (hermesAgentIdx >= 0) {
@@ -501,7 +496,7 @@ async function captureAndTranscribeVoice(opts: CaptureVoiceOptions = {}) {
       env: pythonNoBytecodeEnv({
         HOME: realUserHomeDir(),
         HERMES_HOME: runtime.hermesHome,
-        PATH: SAFE_RUNTIME_PATH,
+        PATH: safeRuntimePath(),
         PYTHONPATH: runtime.agentRoot,
         AGENT_UI_HERMES_PROJECT_ROOT: runtime.projectRoot,
       }),
@@ -1016,7 +1011,8 @@ async function ensureGatewayProcess(log = console, opts: GatewayReadyOptions = {
       ...gatewayEnv,
       HERMES_HOME: hermesHome,
       HOME: realUserHomeDir(),
-      PATH: SAFE_RUNTIME_PATH,
+      PATH: safeRuntimePath(),
+      PYTHONDONTWRITEBYTECODE: '1',
       PYTHONNOUSERSITE: '1',
     };
     const child = spawn(command, gatewayArgsFor(), {
@@ -1098,6 +1094,7 @@ module.exports = {
   parseTranscriptionJson,
   portAvailable,
   resolveHermesCommand,
+  safeRuntimePath,
   stopGatewayProcess,
   captureAndTranscribeVoice,
   formatVoiceCaptureErrorForUser,

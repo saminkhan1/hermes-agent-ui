@@ -95,18 +95,58 @@ test('gateway start posts tagged first prompt with stable conversation id', asyn
   agents.startAgentForCat({
     catId: 'cat-gateway-1',
     prompt: 'Summarize this page',
-    runtime: 'local',
     pointerContext: { capturedAt: '2026-05-03T00:00:00.000Z', contextQuality: 'minimal' },
   }, { getMainWindow: () => null, log: { warn() {} } });
 
   await waitFor(() => posts.length === 1);
   assert.equal(posts[0].conversation_id, 'cat-gateway-1');
   assert.match(posts[0].text, /<user_message source="agent-ui">Summarize this page<\/user_message>/);
-  assert.match(posts[0].text, /<aura_meta type="context_snapshot" version="1">/);
+  assert.match(posts[0].text, /<agent_ui_context type="context_snapshot" version="1">/);
 
   const conversation = agents.getAgentConversation('cat-gateway-1');
-  assert.equal(conversation.transport, 'gateway');
   assert.equal(conversation.gatewayConversationId, 'cat-gateway-1');
+});
+
+test('gateway prewarm is reused by the first submit', async (t) => {
+  setupGatewayEnv(t);
+  const posts = [];
+  let readinessMessageProbes = 0;
+  global.fetch = async (url, opts = {}) => {
+    const textUrl = String(url);
+    if (textUrl.endsWith('/events')) return emptySseResponse();
+    if (textUrl.endsWith('/messages')) {
+      const body = JSON.parse(opts.body || '{}');
+      if (!body.conversation_id) {
+        readinessMessageProbes += 1;
+        return new Response(JSON.stringify({ ok: false, error: 'missing_conversation_id' }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      posts.push(body);
+      return new Response(JSON.stringify({ ok: true, accepted: true }), {
+        status: 202,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ ok: true, latest_seq: 0 }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+
+  const prewarm = await agents.prewarmGatewayReady({ log: { warn() {}, log() {} } });
+  assert.equal(prewarm.ok, true);
+
+  agents.startAgentForCat({
+    catId: 'cat-prewarmed',
+    prompt: 'Use the warm gateway',
+    pointerContext: { capturedAt: '2026-05-03T00:00:00.000Z', contextQuality: 'minimal' },
+  }, { getMainWindow: () => null, log: { warn() {} } });
+
+  await waitFor(() => posts.length === 1);
+  assert.equal(readinessMessageProbes, 1);
+  assert.equal(posts[0].conversation_id, 'cat-prewarmed');
 });
 
 test('gateway follow-up can interrupt a running session', async (t) => {
@@ -135,7 +175,6 @@ test('gateway follow-up can interrupt a running session', async (t) => {
   agents.startAgentForCat({
     catId: 'cat-gateway-2',
     prompt: 'Initial',
-    runtime: 'local',
     pointerContext: null,
   }, { getMainWindow: () => null, log: { warn() {} } });
   await waitFor(() => posts.length === 1);
@@ -197,7 +236,6 @@ test('first gateway client resets replay cursor when no conversations were hydra
   agents.startAgentForCat({
     catId: 'cat-replay-reset',
     prompt: 'New prompt',
-    runtime: 'local',
     pointerContext: null,
   }, { getMainWindow: () => null, log: { warn() {} } });
 
@@ -314,7 +352,6 @@ test('gateway cancel sends Hermes stop command while session is running', async 
   agents.startAgentForCat({
     catId: 'cat-cancel',
     prompt: 'Initial',
-    runtime: 'local',
     pointerContext: null,
   }, { getMainWindow: () => null, log: { warn() {} } });
   await waitFor(() => posts.length === 1);
@@ -360,7 +397,6 @@ test('gateway first-message slash commands pass through without context wrapper'
   agents.startAgentForCat({
     catId: 'cat-command',
     prompt: '/background Check all services',
-    runtime: 'local',
     pointerContext: { capturedAt: '2026-05-03T00:00:00.000Z', contextQuality: 'minimal' },
   }, { getMainWindow: () => null, log: { warn() {} } });
 
@@ -387,8 +423,8 @@ test('multiple gateway pets use separate conversations', async (t) => {
     return new Response(JSON.stringify({ ok: true }), { status: 200 });
   };
 
-  agents.startAgentForCat({ catId: 'pet-a', prompt: 'A', runtime: 'local', pointerContext: null }, { getMainWindow: () => null, log: { warn() {} } });
-  agents.startAgentForCat({ catId: 'pet-b', prompt: 'B', runtime: 'local', pointerContext: null }, { getMainWindow: () => null, log: { warn() {} } });
+  agents.startAgentForCat({ catId: 'pet-a', prompt: 'A', pointerContext: null }, { getMainWindow: () => null, log: { warn() {} } });
+  agents.startAgentForCat({ catId: 'pet-b', prompt: 'B', pointerContext: null }, { getMainWindow: () => null, log: { warn() {} } });
   await waitFor(() => posts.length === 2);
 
   assert.deepEqual(new Set(posts.map((p) => p.conversation_id)), new Set(['pet-a', 'pet-b']));
@@ -408,7 +444,7 @@ test('gateway SSE events update local conversation state', async (t) => {
     return new Response(JSON.stringify({ ok: true }), { status: 200 });
   };
 
-  agents.startAgentForCat({ catId: 'cat-events', prompt: 'Initial', runtime: 'local', pointerContext: null }, { getMainWindow: () => null, log: { warn() {} } });
+  agents.startAgentForCat({ catId: 'cat-events', prompt: 'Initial', pointerContext: null }, { getMainWindow: () => null, log: { warn() {} } });
   await waitFor(() => agents.getAgentConversation('cat-events').found);
 
   agents._test.handleGatewayEvent({
@@ -459,7 +495,6 @@ test('gateway attachment events hydrate as structured safe descriptors', (t) => 
 
   const conversation = agents.getAgentConversation('cat-attachment');
   assert.equal(conversation.found, true);
-  assert.equal(conversation.transport, 'gateway');
   assert.equal(conversation.items.length, 1);
   assert.equal(conversation.items[0].kind, 'attachment');
   assert.equal(conversation.items[0].attachmentType, 'image');
@@ -573,7 +608,7 @@ test('event stream disconnect marks running gateway sessions terminal after grac
     return new Response(JSON.stringify({ ok: true }), { status: 200 });
   };
 
-  agents.startAgentForCat({ catId: 'cat-event-loss', prompt: 'Initial', runtime: 'local' }, {
+  agents.startAgentForCat({ catId: 'cat-event-loss', prompt: 'Initial' }, {
     getMainWindow: () => null,
     log: { warn() {} },
   });
@@ -614,7 +649,7 @@ test('auth-required follow-up recovery uses failed follow-up text', async (t) =>
     return new Response(JSON.stringify({ ok: true }), { status: 200 });
   };
 
-  agents.startAgentForCat({ catId: 'cat-auth-followup', prompt: 'Original task', runtime: 'local' }, {
+  agents.startAgentForCat({ catId: 'cat-auth-followup', prompt: 'Original task' }, {
     getMainWindow: () => null,
     log: { warn() {} },
   });
@@ -648,6 +683,8 @@ test('electron build emits gateway client as a main-process entry', () => {
   assert.match(source, /hermes-release/);
   assert.match(source, /hermes-attachments/);
   assert.match(source, /hermes-auth/);
+  assert.match(source, /reliability-schema/);
+  assert.match(source, /reliability-telemetry/);
   assert.match(source, /window-lifecycle/);
-  assert.match(source, /src\/main\/\$\{name\}\.ts/);
+  assert.match(source, /input: MAIN_ENTRIES/);
 });

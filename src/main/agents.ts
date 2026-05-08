@@ -26,15 +26,14 @@ const {
   stopGatewayProcess,
 } = require('./hermes-runtime');
 const {
-  recordTrace,
   enabled: evalTraceEnabled,
   getCatArtifactDir,
   writeArtifactJson,
 } = require('./eval-trace');
+const { telemetry } = require('./reliability-telemetry');
 
 type ConversationRecord = MutableJsonObject & {
-  runtime?: string;
-  transport?: string;
+  gatewayConversationId?: string;
   prompt?: string;
   pointerContext?: JsonObject | null;
   items: AgentConversationItem[];
@@ -42,14 +41,9 @@ type ConversationRecord = MutableJsonObject & {
   typing?: AgentTypingState;
   activeAssistantBubble?: boolean;
   startedAt?: number;
-};
-type ActiveRecord = MutableJsonObject & {
-  runtime?: string;
-  transport?: string;
-  busy?: boolean;
-  gatewayConversationId?: string;
-  startedAt?: number;
-  pointerContext?: JsonObject | null;
+  gatewayPostRequestedAt?: number;
+  gatewayPostAcceptedAt?: number;
+  firstGatewayEventAt?: number;
 };
 type NotifyPayload = MutableJsonObject & {
   catId: string;
@@ -66,8 +60,10 @@ type AgentOptions = {
   includeContext?: boolean;
   recordUserItem?: boolean;
 };
+type GatewayReadyRequest = {
+  reason?: string;
+};
 
-const active = new Map<string, ActiveRecord>();
 const conversations = new Map<string, ConversationRecord>();
 
 let onConversationPushed: (info: ConversationPushInfo) => void = () => {};
@@ -76,12 +72,15 @@ const HERMES_SOURCE = 'agent-ui';
 const MAX_METADATA_BYTES = 16384;
 const DISMISSED_RETENTION_MS = 8 * 24 * 60 * 60 * 1000;
 const DEFAULT_GATEWAY_STREAM_DISCONNECT_GRACE_MS = 15000;
+const GATEWAY_READY_REUSE_MS = 3000;
 
 let gatewayClient: any = null;
 let gatewayNotify: (payload: NotifyPayload) => void = () => {};
 let onAuthRequired: (payload: JsonObject) => void = () => {};
 let gatewayDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let dismissedGatewayConversations: Record<string, number> | null = null;
+let gatewayReadyPromise: Promise<any> | null = null;
+let gatewayReadySnapshot: { checkedAt: number; result: MutableJsonObject } | null = null;
 
 function setOnConversationPushed(fn) {
   onConversationPushed = typeof fn === 'function' ? fn : () => {};
@@ -263,15 +262,12 @@ function publicItem(item: AgentConversationItem | MutableJsonObject = {}) {
 function conversationSnapshot(catId, rec: ConversationRecord = { items: [] }): AgentConversationSnapshot {
   return {
     catId: String(catId),
-    runtime: rec.runtime || 'local',
-    transport: rec.transport || 'gateway',
     prompt: safeText(rec.prompt),
     pointerContext: jsonClone(rec.pointerContext || null, null),
     items: Array.isArray(rec.items) ? rec.items.map(normalizeConversationItem).filter(Boolean) : [],
     runStatus: rec.runStatus || 'running',
     endResult: rec.endResult,
     durationMs: rec.durationMs,
-    hermesSessionId: rec.hermesSessionId || null,
     gatewayConversationId: rec.gatewayConversationId || String(catId),
     startedAt: Number(rec.startedAt || 0) || now(),
     lastGatewayStopSeq: Number(rec.lastGatewayStopSeq || 0) || undefined,
@@ -383,11 +379,10 @@ function terminalizeGatewayConversation(catId, rec: ConversationRecord, message,
   };
   persistConversation(catId);
   onConversationPushed({ catId });
-  recordTrace('gateway_terminalized', {
+  telemetry.gatewayTerminalized({
     catId,
     reason,
     durationMs: rec.durationMs,
-    transport: 'gateway',
   });
   gatewayNotify({
     catId,
@@ -402,7 +397,7 @@ function terminalizeGatewayConversation(catId, rec: ConversationRecord, message,
 function terminalizeRunningGatewayConversations(message, reason) {
   let count = 0;
   for (const [catId, rec] of conversations.entries()) {
-    if (!rec || rec.transport !== 'gateway') continue;
+    if (!rec) continue;
     const running = String(rec.runStatus || '').toLowerCase() === 'running' ||
       !!(rec.typing && rec.typing.active);
     if (!running) continue;
@@ -418,8 +413,9 @@ function handleGatewayConnectionState(state: MutableJsonObject = {}) {
     return;
   }
   if (status !== 'disconnected') return;
+  gatewayReadySnapshot = null;
   const hasRunningGatewayConversation = [...conversations.values()].some((rec) => {
-    return rec && rec.transport === 'gateway' &&
+    return rec &&
       (String(rec.runStatus || '').toLowerCase() === 'running' || !!(rec.typing && rec.typing.active));
   });
   if (!hasRunningGatewayConversation || gatewayDisconnectTimer) return;
@@ -455,15 +451,12 @@ function ensureConversationForGatewayEvent(catId, event: MutableJsonObject = {})
   if (rec) return rec;
   if (isDismissedGatewayConversation(id)) return null;
   rec = {
-    runtime: 'local',
-    transport: 'gateway',
     prompt: '',
     pointerContext: null,
     items: [],
     runStatus: 'running',
     activeAssistantBubble: false,
     artifactDir: evalTraceEnabled ? getCatArtifactDir(id) : null,
-    hermesSessionId: undefined,
     gatewayConversationId: id,
     startedAt: eventTimeMs(event),
     hydratedFromGateway: true,
@@ -481,6 +474,18 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
   if (!['message.created', 'message.updated', 'message.deleted', 'attachment.created', 'typing.started', 'typing.stopped'].includes(type)) return;
   const rec = ensureConversationForGatewayEvent(catId, event);
   if (!rec) return;
+  const receivedAt = now();
+  if (!rec.firstGatewayEventAt) {
+    rec.firstGatewayEventAt = receivedAt;
+    telemetry.gatewayFirstEvent({
+      catId,
+      gatewayEventType: type,
+      gatewaySeq: Number(event.seq || 0) || null,
+      msSinceStarted: rec.startedAt ? receivedAt - Number(rec.startedAt) : null,
+      msSincePostRequested: rec.gatewayPostRequestedAt ? receivedAt - Number(rec.gatewayPostRequestedAt) : null,
+      msSincePostAccepted: rec.gatewayPostAcceptedAt ? receivedAt - Number(rec.gatewayPostAcceptedAt) : null,
+    });
+  }
 
   if (type === 'message.created' || type === 'message.updated') {
     upsertGatewayAssistantMessage(catId, event as LocalDesktopMessageEvent | MutableJsonObject);
@@ -540,12 +545,11 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
     };
     persistConversation(catId);
     onConversationPushed({ catId });
-    recordTrace('terminal_state_rendered', {
+    telemetry.terminalStateRendered({
       catId,
       status,
       durationMs: rec.durationMs,
       endResult: rec.endResult,
-      transport: 'gateway',
       gatewaySeq: seq || null,
     });
     const failureText = [
@@ -555,6 +559,13 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
     if (status === 'error' && isAuthErrorText(failureText) && !rec.authPrompted) {
       const retry = latestUserRetry(rec);
       rec.authPrompted = true;
+      telemetry.authHandoffRequested({
+        catId,
+        reason: 'provider-auth-required',
+        retryKind: retry.kind,
+        source: 'gateway-event',
+        error: textMeta(failureText, 120),
+      });
       onAuthRequired({
         catId,
         prompt: retry.text || rec.prompt || '',
@@ -578,11 +589,11 @@ function handleGatewayReplayExpired(error) {
   const message = 'Hermes event replay window expired; reconnected live, but older missed updates may be unavailable.';
   let affected = 0;
   for (const [catId, rec] of conversations.entries()) {
-    if (rec && rec.transport === 'gateway') {
+    if (rec) {
       if (terminalizeGatewayConversation(catId, rec, message, 'gateway-replay-expired')) affected += 1;
     }
   }
-  recordTrace('gateway_replay_expired', {
+  telemetry.gatewayReplayExpired({
     error: error && error.message ? error.message : String(error || ''),
     terminalized: affected,
   });
@@ -606,31 +617,122 @@ function ensureGatewayClient(opts: AgentOptions = {}) {
   return gatewayClient;
 }
 
-async function ensureGatewayReady(log = console) {
-  const result = await ensureGatewayProcess(log);
-  recordTrace('gateway_runtime_ready', {
-    ok: !!(result && result.ok),
-    alreadyRunning: !!(result && result.alreadyRunning),
-    started: !!(result && result.started),
-    skipped: !!(result && result.skipped),
-    error: result && result.error ? result.error : null,
-  });
-  if (!result || !result.ok) {
-    throw new Error((result && (result.error || result.reason)) || 'Hermes gateway did not become ready.');
+function recentGatewayReady() {
+  if (!gatewayReadySnapshot || !gatewayReadySnapshot.result || !gatewayReadySnapshot.result.ok) return null;
+  if (now() - gatewayReadySnapshot.checkedAt > GATEWAY_READY_REUSE_MS) return null;
+  return gatewayReadySnapshot.result;
+}
+
+async function ensureGatewayReady(log = console, opts: GatewayReadyRequest = {}) {
+  const reason = String(opts.reason || 'demand');
+  const cached = recentGatewayReady();
+  if (cached) {
+    telemetry.gatewayReadyCheckReused({
+      reason,
+      durationMs: 0,
+      ok: true,
+      baseUrl: cached.baseUrl || null,
+    });
+    return cached;
   }
-  return result;
+  if (gatewayReadyPromise) {
+    telemetry.gatewayReadyCheckJoined({ reason });
+    return gatewayReadyPromise;
+  }
+  const startedAt = now();
+  telemetry.gatewayReadyCheckStarted({ reason });
+  gatewayReadyPromise = (async () => {
+    const result = await ensureGatewayProcess(log);
+    const payload = {
+      ok: !!(result && result.ok),
+      alreadyRunning: !!(result && result.alreadyRunning),
+      started: !!(result && result.started),
+      skipped: !!(result && result.skipped),
+      durationMs: now() - startedAt,
+      reason,
+      error: result && result.error ? result.error : null,
+    };
+    telemetry.gatewayRuntimeReady(payload);
+    telemetry.gatewayReadyCheckCompleted(payload);
+    if (!result || !result.ok) {
+      gatewayReadySnapshot = null;
+      const err = new Error((result && (result.error || result.reason)) || 'Hermes gateway did not become ready.') as MutableJsonObject & Error;
+      err.gatewayReadyTraceRecorded = true;
+      throw err;
+    }
+    gatewayReadySnapshot = {
+      checkedAt: now(),
+      result,
+    };
+    return result;
+  })();
+  try {
+    return await gatewayReadyPromise;
+  } catch (error: any) {
+    gatewayReadySnapshot = null;
+    if (!error || !error.gatewayReadyTraceRecorded) {
+      telemetry.gatewayReadyCheckCompleted({
+        ok: false,
+        reason,
+        durationMs: now() - startedAt,
+        error: error && error.message ? error.message : String(error || 'Hermes gateway did not become ready.'),
+      });
+    }
+    throw error;
+  } finally {
+    gatewayReadyPromise = null;
+  }
+}
+
+function prewarmGatewayReady(opts: AgentOptions = {}) {
+  const { log = console } = opts;
+  const startedAt = now();
+  telemetry.gatewayPrewarmStarted({});
+  return ensureGatewayReady(log, { reason: 'prewarm' })
+    .then((result) => {
+      telemetry.gatewayPrewarmCompleted({
+        ok: !!(result && result.ok),
+        durationMs: now() - startedAt,
+        alreadyRunning: !!(result && result.alreadyRunning),
+        started: !!(result && result.started),
+        skipped: !!(result && result.skipped),
+      });
+      return result;
+    })
+    .catch((error) => {
+      const message = error && error.message ? error.message : String(error || 'Hermes gateway did not become ready.');
+      telemetry.gatewayPrewarmCompleted({
+        ok: false,
+        durationMs: now() - startedAt,
+        error: message,
+      });
+      return { ok: false, error: message };
+    });
 }
 
 async function hydrateGatewayConversations(opts: AgentOptions = {}) {
   const { getMainWindow, log = console } = opts;
   const resetLastSeq = !gatewayClient && conversations.size === 0;
+  const startedAt = now();
+  telemetry.gatewayHydrationStarted({ resetLastSeq });
   try {
-    await ensureGatewayReady(log);
+    await ensureGatewayReady(log, { reason: 'hydrate' });
     ensureGatewayClient({ getMainWindow, log, resetLastSeq });
+    telemetry.gatewayHydrationCompleted({
+      ok: true,
+      resetLastSeq,
+      durationMs: now() - startedAt,
+    });
     return { ok: true, resetLastSeq };
   } catch (e: any) {
     const error = e && e.message ? e.message : String(e || 'Hermes gateway did not become ready.');
     log.warn('[agent-ui] gateway replay hydration skipped:', error);
+    telemetry.gatewayHydrationCompleted({
+      ok: false,
+      resetLastSeq,
+      durationMs: now() - startedAt,
+      error,
+    });
     return { ok: false, error };
   }
 }
@@ -640,21 +742,6 @@ function notifyRestarted(getMainWindow, catId) {
   if (win && !win.isDestroyed()) {
     win.webContents.send('agent-restarted', { catId: String(catId) });
   }
-}
-
-async function disposeAgentResources(catId, opts: AgentOptions = {}) {
-  const { log = console } = opts;
-  const id = String(catId);
-  const entry = active.get(id);
-  if (!entry) return;
-  if (entry.runPromise) {
-    try {
-      await entry.runPromise;
-    } catch (e) {
-      log.warn('Hermes process cleanup failed', e);
-    }
-  }
-  active.delete(id);
 }
 
 function persistConversation(catId) {
@@ -736,18 +823,15 @@ function appendGatewayAttachment(catId, event: LocalDesktopAttachmentEvent | Mut
   onConversationPushed({ catId: id, streamBubble: leadAssistantBubbleText(text) });
 }
 
-function initConversationState(catId, { runtime, prompt, pointerContext }) {
+function initConversationState(catId, { prompt, pointerContext }) {
   const id = String(catId);
   conversations.set(id, {
-    runtime: runtime || 'local',
-    transport: 'gateway',
     prompt: String(prompt || ''),
     pointerContext: pointerContext || null,
     items: prompt ? [{ kind: 'user', text: String(prompt), at: now() }] : [],
     runStatus: 'running',
     activeAssistantBubble: false,
     artifactDir: evalTraceEnabled ? getCatArtifactDir(id) : null,
-    hermesSessionId: undefined,
     gatewayConversationId: id,
     startedAt: now(),
     typing: { active: false },
@@ -761,8 +845,6 @@ function getAgentConversation(catId) {
   if (!c) return { found: false, items: [] };
   return {
     found: true,
-    runtime: c.runtime || 'local',
-    transport: c.transport || 'gateway',
     locationLabel: getConversationLocationLabel(c),
     prompt: c.prompt,
     launchContext: c.pointerContext || null,
@@ -770,7 +852,6 @@ function getAgentConversation(catId) {
     runStatus: c.runStatus,
     endResult: c.endResult,
     durationMs: c.durationMs,
-    hermesSessionId: c.hermesSessionId || null,
     gatewayConversationId: c.gatewayConversationId || null,
     typing: c.typing || { active: false },
     artifacts: getAgentArtifacts(String(catId)),
@@ -781,15 +862,12 @@ function listAgentConversations() {
   return [...conversations.entries()].map(([catId, c]) => ({
     catId,
     found: true,
-    runtime: c.runtime || 'local',
-    transport: c.transport || 'gateway',
     locationLabel: getConversationLocationLabel(c),
     prompt: c.prompt,
     launchContext: c.pointerContext || null,
     runStatus: c.runStatus,
     durationMs: c.durationMs,
     startedAt: c.startedAt || 0,
-    hermesSessionId: c.hermesSessionId || null,
     gatewayConversationId: c.gatewayConversationId || null,
     typing: c.typing || { active: false },
     artifacts: getAgentArtifacts(catId),
@@ -801,13 +879,11 @@ function deleteConversationState(catId) {
 }
 
 async function dismissAgent(catId, opts: AgentOptions = {}) {
-  const { getMainWindow, log = console } = opts;
+  const { getMainWindow } = opts;
   const id = String(catId);
   const rec = conversations.get(id);
-  const entry = active.get(id);
   const runStatus = String((rec && rec.runStatus) || '').toLowerCase();
-  const isRunning = !!(entry && entry.busy) ||
-    runStatus === 'running';
+  const isRunning = runStatus === 'running' || !!(rec && rec.typing && rec.typing.active);
   if (isRunning) {
     return { ok: false, error: 'Cannot dismiss a running Hermes session.' };
   }
@@ -815,8 +891,7 @@ async function dismissAgent(catId, opts: AgentOptions = {}) {
   if (rec && !isTerminal) {
     return { ok: false, error: 'Dismiss is available after Hermes finishes.' };
   }
-  await disposeAgentResources(id, { log });
-  if (rec && rec.transport === 'gateway') rememberDismissedGatewayConversation(id);
+  if (rec) rememberDismissedGatewayConversation(id);
   deleteConversationState(id);
   const win = getMainWindow && getMainWindow();
   if (win && !win.isDestroyed()) {
@@ -914,32 +989,12 @@ function buildLocalRunPrompt(prompt, launchContext) {
   const metadataJson = safeMetadataJson(hermesMetadataFromContext(launchContext));
   return [
     userMessage,
-    `<aura_meta type="context_snapshot" version="1">\n${metadataJson}\n</aura_meta>`,
+    `<agent_ui_context type="context_snapshot" version="1">\n${metadataJson}\n</agent_ui_context>`,
   ].join('\n');
 }
 
 function isHermesSlashCommandPrompt(prompt) {
   return String(prompt || '').trimStart().startsWith('/');
-}
-
-function ensureHermesEntry(catId, pointerContext): ActiveRecord {
-  const id = String(catId);
-  const existing = active.get(id);
-  if (existing) {
-    existing.pointerContext = pointerContext || existing.pointerContext || null;
-    return existing;
-  }
-
-  const entry: ActiveRecord = {
-    runtime: 'local',
-    transport: 'gateway',
-    busy: false,
-    startedAt: undefined,
-    pointerContext: pointerContext || null,
-    artifactDir: evalTraceEnabled ? getCatArtifactDir(id) : null,
-  };
-  active.set(id, entry);
-  return entry;
 }
 
 function getAgentArtifacts(catId) {
@@ -954,9 +1009,8 @@ function getAgentArtifacts(catId) {
 
 async function runOnGateway(catId, notify, log, prompt, opts: AgentOptions = {}) {
   const id = String(catId);
-  const entry = active.get(id) || ensureHermesEntry(id, null);
   const rec = conversations.get(id);
-  await ensureGatewayReady(log);
+  await ensureGatewayReady(log, { reason: 'message' });
   const client = ensureGatewayClient({
     getMainWindow: opts.getMainWindow,
     log,
@@ -965,30 +1019,30 @@ async function runOnGateway(catId, notify, log, prompt, opts: AgentOptions = {})
   const conversationId = id;
   const includeContext = !!opts.includeContext && !isHermesSlashCommandPrompt(prompt);
   const fullPrompt = includeContext
-    ? buildLocalRunPrompt(prompt, entry.pointerContext || null)
+    ? buildLocalRunPrompt(prompt, (rec && rec.pointerContext) || null)
     : String(prompt || '');
   const messageId = client.createMessageId(id);
 
-  entry.transport = 'gateway';
-  entry.busy = false;
-  entry.gatewayConversationId = conversationId;
-  entry.startedAt = entry.startedAt || now();
-
   if (rec) {
-    rec.transport = 'gateway';
     rec.gatewayConversationId = conversationId;
     rec.runStatus = 'running';
     rec.endResult = undefined;
     rec.durationMs = undefined;
+    rec.gatewayPostRequestedAt = undefined;
+    rec.gatewayPostAcceptedAt = undefined;
+    rec.firstGatewayEventAt = undefined;
     persistConversation(id);
     onConversationPushed({ catId: id });
   }
 
-  recordTrace('gateway_message_post_requested', {
+  const postStartedAt = now();
+  if (rec) rec.gatewayPostRequestedAt = postStartedAt;
+  telemetry.gatewayMessagePostRequested({
     catId: id,
     conversationId,
     messageId,
     includeContext,
+    msSinceStarted: rec && rec.startedAt ? postStartedAt - Number(rec.startedAt) : null,
     prompt: textMeta(fullPrompt),
   });
 
@@ -998,15 +1052,18 @@ async function runOnGateway(catId, notify, log, prompt, opts: AgentOptions = {})
     text: fullPrompt,
     chatName: rec && rec.prompt ? preview(rec.prompt, 80) : preview(prompt, 80),
     metadata: {
-      runtime: entry.runtime || 'local',
       include_context: includeContext,
     },
   });
 
-  recordTrace('gateway_message_post_accepted', {
+  const acceptedAt = now();
+  if (rec) rec.gatewayPostAcceptedAt = acceptedAt;
+  telemetry.gatewayMessagePostAccepted({
     catId: id,
     conversationId,
     messageId,
+    durationMs: acceptedAt - postStartedAt,
+    msSinceStarted: rec && rec.startedAt ? acceptedAt - Number(rec.startedAt) : null,
   });
   gatewayNotify = notify || gatewayNotify;
 }
@@ -1024,7 +1081,7 @@ function markGatewayError(catId, error: any, notify, opts: MutableJsonObject = {
     persistConversation(id);
     onConversationPushed({ catId: id });
   }
-  recordTrace('gateway_message_post_failed', { catId: id, error: message });
+  telemetry.gatewayMessagePostFailed({ catId: id, error: message });
   notify({
     catId: id,
     status: 'error',
@@ -1035,6 +1092,13 @@ function markGatewayError(catId, error: any, notify, opts: MutableJsonObject = {
   if (rec && isAuthErrorText(message) && !rec.authPrompted) {
     const fallbackRetry = latestUserRetry(rec);
     rec.authPrompted = true;
+    telemetry.authHandoffRequested({
+      catId: id,
+      reason: 'provider-auth-required',
+      retryKind: opts.retryKind || fallbackRetry.kind,
+      source: 'gateway-post-error',
+      error: textMeta(message, 120),
+    });
     onAuthRequired({
       catId: id,
       prompt: String(opts.retryText || fallbackRetry.text || rec.prompt || ''),
@@ -1046,19 +1110,13 @@ function markGatewayError(catId, error: any, notify, opts: MutableJsonObject = {
   }
 }
 
-async function runAgentLifecycle({ catId, prompt, runtime, pointerContext, notify, log, getMainWindow }) {
+async function runAgentLifecycle({ catId, prompt, pointerContext, notify, log, getMainWindow }) {
   const id = String(catId);
   const resetGatewayReplay = !gatewayClient && conversations.size === 0;
   initConversationState(id, {
-    runtime: runtime || 'local',
     prompt,
     pointerContext,
   });
-
-  const entry = ensureHermesEntry(id, pointerContext);
-  entry.transport = 'gateway';
-  const rec = conversations.get(id);
-  if (rec) rec.transport = 'gateway';
 
   try {
     await runOnGateway(id, notify, log, String(prompt), {
@@ -1071,12 +1129,11 @@ async function runAgentLifecycle({ catId, prompt, runtime, pointerContext, notif
   }
 }
 
-function startAgentForCat({ catId, prompt, runtime, pointerContext }, { getMainWindow, log = console }: AgentOptions = {}) {
+function startAgentForCat({ catId, prompt, pointerContext }, { getMainWindow, log = console }: AgentOptions = {}) {
   const notify = getNotify(getMainWindow);
   void runAgentLifecycle({
     catId: String(catId),
     prompt,
-    runtime,
     pointerContext,
     notify,
     log,
@@ -1095,7 +1152,6 @@ async function sendFollowup(catId, text, opts: AgentOptions = {}) {
     log.warn('sendFollowup: no conversation', id);
     return { ok: false, error: 'Session is not available.' };
   }
-  ensureHermesEntry(id, rec.pointerContext || null);
 
   if (opts.recordUserItem !== false) {
     rec.items.push({ kind: 'user', text: t, at: now() });
@@ -1104,7 +1160,6 @@ async function sendFollowup(catId, text, opts: AgentOptions = {}) {
   rec.endResult = undefined;
   rec.durationMs = undefined;
   rec.activeAssistantBubble = false;
-  rec.transport = 'gateway';
   persistConversation(id);
   onConversationPushed({ catId: id });
 
@@ -1131,8 +1186,6 @@ async function cancelAgent(catId, opts: AgentOptions = {}) {
   if (status !== 'running') {
     return { ok: false, error: 'Cancel is available while Hermes is running.' };
   }
-
-  ensureHermesEntry(id, rec.pointerContext || null);
   rec.items.push({ kind: 'user', text: 'Cancel requested.', at: now(), metadata: { command: '/stop' } });
   persistConversation(id);
   onConversationPushed({ catId: id });
@@ -1148,11 +1201,12 @@ async function cancelAgent(catId, opts: AgentOptions = {}) {
 }
 
 function cancelAllAgents() {
-  active.clear();
   clearGatewayDisconnectTimer();
   if (gatewayClient) {
     gatewayClient.stop();
   }
+  gatewayReadyPromise = null;
+  gatewayReadySnapshot = null;
   stopGatewayProcess();
 }
 
@@ -1161,6 +1215,8 @@ function resetGatewayClientForTests() {
   stopGatewayProcess();
   gatewayClient = null;
   gatewayNotify = () => {};
+  gatewayReadyPromise = null;
+  gatewayReadySnapshot = null;
   conversations.clear();
   dismissedGatewayConversations = null;
   clearGatewayDisconnectTimer();
@@ -1172,6 +1228,7 @@ module.exports = {
   getAgentConversation,
   listAgentConversations,
   hydrateGatewayConversations,
+  prewarmGatewayReady,
   setOnConversationPushed,
   setOnAuthRequired,
   deleteConversationState,

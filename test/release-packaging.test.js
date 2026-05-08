@@ -187,12 +187,20 @@ test('installed app release smoke is a committed repeatable gate', () => {
   const evidenceTemplate = read('docs/release/evidence-template.md');
 
   assert.equal(pkg.scripts['smoke:installed-release'], 'node scripts/installed-app-release-smoke.js');
+  assert.equal(pkg.scripts['smoke:installed-release:lmstudio'], 'AGENT_UI_INSTALLED_SMOKE_PROVIDER=lmstudio node scripts/installed-app-release-smoke.js');
+  assert.equal(pkg.scripts['report:stages'], 'node scripts/eval-stage-report.js');
   assert.equal(pkg.scripts['tart:manual-gui'], 'bash scripts/tart-gui-manual.sh');
   assert.match(smoke, /AGENT_UI_EVAL/);
   assert.match(smoke, /AGENT_UI_EVAL_TOKEN/);
   assert.match(smoke, /AGENT_UI_CONFIG_DIR/);
   assert.match(smoke, /AGENT_UI_HERMES_HOME/);
+  assert.match(smoke, /AGENT_UI_INSTALLED_SMOKE_PROVIDER/);
+  assert.match(smoke, /AGENT_UI_LMSTUDIO_MODEL/);
+  assert.match(smoke, /AGENT_UI_LMSTUDIO_BASE_URL/);
+  assert.match(smoke, /AGENT_UI_LMSTUDIO_INITIAL_OK/);
   assert.match(smoke, /createPortBlocker/);
+  assert.match(smoke, /\/open-launcher/);
+  assert.match(smoke, /\/close-modal/);
   assert.match(smoke, /\/set-input-mode/);
   assert.match(smoke, /\/background Release background smoke/);
   assert.match(smoke, /\/followup/);
@@ -201,7 +209,10 @@ test('installed app release smoke is a committed repeatable gate', () => {
   assert.match(smoke, /\/open-conversation/);
   assert.match(smoke, /reopen-smoke/);
   assert.match(smoke, /assertNoErrorItems/);
+  assert.match(smoke, /assertAssistantResponse/);
   assert.match(smoke, /installed-release-smoke-summary\.json/);
+  assert.match(smoke, /stage-report\.json/);
+  assert.match(smoke, /buildStageReportFromTraceFiles/);
   assert.match(smoke, /app-seal-before/);
   assert.match(smoke, /installed app bundle changed after launch/);
   assert.match(guiSmoke, /TART_IMAGE must be a Cirrus vanilla image/);

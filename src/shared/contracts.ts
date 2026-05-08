@@ -134,15 +134,12 @@ export type AgentTypingState = {
 
 export type AgentConversationSnapshot = {
   catId: string;
-  runtime: string;
-  transport: string;
   prompt: string;
   pointerContext: JsonObject | null;
   items: AgentConversationItem[];
   runStatus: string;
   endResult?: unknown;
   durationMs?: number;
-  hermesSessionId?: string | null;
   gatewayConversationId?: string | null;
   startedAt: number;
   lastGatewayStopSeq?: number;

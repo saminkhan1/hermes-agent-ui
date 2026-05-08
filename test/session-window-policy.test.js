@@ -24,13 +24,35 @@ test('new session request focuses existing session window instead of replacing i
   assert.doesNotMatch(modalBody, /modalWindow\.close\(\)/);
 });
 
-test('opening a conversation focuses existing session window instead of replacing it', () => {
-  const body = functionBody('openConversationWindow');
+test('launcher opens before live context capture finishes', () => {
+  const body = functionBody('handleNewCatShortcut');
+  const openIndex = body.indexOf('openNewCatModal(modalContextId, inputMode)');
+  const captureIndex = body.indexOf('startLaunchContextCapture(source, modalContextId)');
 
-  assert.match(body, /focusExistingSessionWindow\('conversation_requested'\)/);
+  assert.notEqual(openIndex, -1, 'shortcut opens modal');
+  assert.notEqual(captureIndex, -1, 'shortcut starts async context capture');
+  assert.ok(openIndex < captureIndex, 'modal opens before async context capture starts');
+  assert.doesNotMatch(body, /await captureLaunchContext/);
+});
+
+test('opening a conversation reuses the session window for the requested conversation', () => {
+  const body = functionBody('openConversationWindow');
+  const reuseBody = functionBody('showExistingConversationWindow');
+
+  assert.match(body, /showExistingConversationWindow\(q\.catId\)/);
+  assert.match(reuseBody, /activeConversationCatId = id/);
+  assert.match(reuseBody, /loadTrustedRendererPage\(conversationWindow, 'conversation\.html', \{ catId: id \}\)/);
   assert.doesNotMatch(body, /modalWindow\.close\(\)/);
   assert.doesNotMatch(body, /conversationWindow\.loadURL\(/);
   assert.doesNotMatch(body, /conversationWindow\.loadFile\(/);
+});
+
+test('eval UI targets keep live window state authoritative over stale snapshots', () => {
+  const body = functionBody('getEvalUiTargets');
+
+  assert.match(body, /modal: \{[\s\S]*\.\.\.modal,[\s\S]*\.\.\.evalWindowState\(modalWindow\)/);
+  assert.match(body, /conversation: \{[\s\S]*\.\.\.conversation,[\s\S]*\.\.\.evalWindowState\(conversationWindow\)/);
+  assert.match(body, /overlay: \{[\s\S]*\.\.\.overlay,[\s\S]*\.\.\.evalWindowState\(mainWindow\)/);
 });
 
 test('auth window dismisses without clearing pending auth work', () => {

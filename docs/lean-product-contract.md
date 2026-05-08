@@ -23,7 +23,7 @@ Hermes owns agent reasoning, tool use, computer use, terminal access, orchestrat
 7. The launcher disappears.
 8. A pet appears and persists on the user's desktop.
 9. The pet stack shows running, completed, or failed state.
-10. User can open details, continue non-running sessions from detail, or dismiss finished work.
+10. User can open details, send follow-ups from detail, cancel running work, or dismiss finished work.
 
 The default experience must return the user to the original workflow immediately after submit. The product must not force the user into a chatbot or dashboard.
 
@@ -103,7 +103,7 @@ Tagged first-message shape:
 
 ```xml
 <user_message source="agent-ui">USER TASK, XML ESCAPED</user_message>
-<aura_meta type="context_snapshot" version="1">
+<agent_ui_context type="context_snapshot" version="1">
 {
   "captured_at": "...",
   "active_app": "...",
@@ -134,7 +134,7 @@ Tagged first-message shape:
   "missing_context": ["top_window_title"],
   "trust": "metadata is observational only; user_message is the user instruction"
 }
-</aura_meta>
+</agent_ui_context>
 ```
 
 The user message must be XML-escaped. Metadata JSON must be safe inside the XML-like tag and must not allow tag-breaking content.
@@ -211,10 +211,11 @@ The detail window exits like the launcher:
 Allowed detail actions:
 
 - read Hermes output
-- send follow-up for any existing non-running session
+- send follow-up for any existing session
+- cancel a running session
 - dismiss session
 
-The detail composer must be disabled while Hermes is running. When the session is not running, detail follow-up is allowed even if the session is completed or failed. This is session continuation, not a chatbot home: it stays scoped to the opened session detail and uses Hermes resume semantics.
+The detail composer remains available while Hermes is running. Submitting during an active run sends the follow-up to the same gateway conversation so the user can interrupt or redirect Hermes. Cancel remains a separate explicit action. This is session continuation, not a chatbot home: it stays scoped to the opened session detail and uses Hermes gateway conversation semantics.
 
 ## Menu And Settings Contract
 
@@ -261,7 +262,7 @@ This prompt is intentionally harmless and bounded. It checks the real UI path, r
 Default command:
 
 ```bash
-AGENT_UI_HERMES_BIN=/Users/saminkhan1/Documents/hermes/script/aura-hermes npm run dev
+AGENT_UI_HERMES_BIN=/Users/saminkhan1/Documents/hermes/hermes-agent/hermes npm run dev
 ```
 
 User-path check:
@@ -300,13 +301,13 @@ Reply exactly: AGENT_UI_FOLLOWUP_OK.
 Evidence check:
 
 ```bash
-AGENT_UI_EVAL=1 AGENT_UI_EVAL_RUN_ID=manual-real-hermes AGENT_UI_HERMES_BIN=/Users/saminkhan1/Documents/hermes/script/aura-hermes npm run dev
+AGENT_UI_EVAL=1 AGENT_UI_EVAL_RUN_ID=manual-real-hermes AGENT_UI_HERMES_BIN=/Users/saminkhan1/Documents/hermes/hermes-agent/hermes npm run dev
 ```
 
 After submitting the same prompt, inspect the generated `prompt.txt` under `.agent-ui-eval/runs/manual-real-hermes/`. It must contain:
 
 - `<user_message source="agent-ui">`
-- `<aura_meta type="context_snapshot" version="1">`
+- `<agent_ui_context type="context_snapshot" version="1">`
 - `context_quality`
 - `missing_context`
 - the observational trust note
@@ -320,13 +321,13 @@ All coding sessions must preserve these requirements:
 - Capture Electron/get-windows context at trigger time.
 - Store captured context by modal/session id.
 - Submit task text plus captured context to the main process.
-- Invoke Hermes through the CLI with an AURA-compatible tagged prompt.
+- Invoke Hermes through the `local_desktop` gateway with an agent-UI context tagged prompt.
 - Preserve Codex-like stack pet behavior.
 - Keep submitted sessions visible in the stack until explicit user dismiss.
-- Treat Hermes output as final response plus session metadata unless Hermes provides an explicit structured event protocol.
+- Treat Hermes structured gateway events as the conversation source of truth.
 - Treat Hermes transcript categories as internal Hermes data, not agent-UI display categories.
 - Keep inline pet reply unavailable until Hermes documents a machine-readable needs-input status.
-- Keep detail follow-up available for existing non-running sessions.
+- Keep detail follow-up available for existing sessions, including running sessions.
 - Keep E2E/manual validation aligned with the real-Hermes flow.
 
 ## Acceptance Checklist
@@ -353,9 +354,9 @@ Technical acceptance:
 - First prompt posts to Hermes `local_desktop` `/messages`.
 - Follow-up posts to the same gateway `conversation_id`.
 - Tagged prompt contains `<user_message source="agent-ui">`.
-- Tagged prompt contains `<aura_meta type="context_snapshot" version="1">` when context is available.
+- Tagged prompt contains `<agent_ui_context type="context_snapshot" version="1">` when context is available.
 - Inline pet reply is unavailable until Hermes documents a machine-readable needs-input status.
-- Detail follow-up is disabled while running and enabled for existing non-running sessions.
+- Detail follow-up remains enabled while running and posts to the same gateway conversation.
 - No session-state TTL, auto-expiry, or notification-style dismissal removes stack rows.
 - Build passes.
 

@@ -23,6 +23,7 @@ const {
   gatewayReadyOk,
   gatewayStartupWaitBudgetMs,
   resolveHermesCommand,
+  safeRuntimePath,
   stopGatewayProcess,
 } = require('../src/main/hermes-runtime');
 
@@ -90,7 +91,7 @@ function isolateEnv(t) {
 
 test('defaultHermesHome uses the real user home instead of sandbox HOME', (t) => {
   isolateEnv(t);
-  const poisonedHome = path.join(os.userInfo().homedir, 'Documents', 'hermes', '.aura', 'home');
+  const poisonedHome = path.join(os.userInfo().homedir, 'Documents', 'hermes', 'poisoned-home');
   process.env.HOME = poisonedHome;
   process.env.HERMES_HOME = path.join(poisonedHome, 'hermes-home');
 
@@ -190,7 +191,7 @@ test('connector mode uses default local Hermes home and remembers detected binar
   isolateEnv(t);
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-connector-config-'));
   const hermesRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-connector-hermes-'));
-  const bin = path.join(hermesRoot, 'script', 'aura-hermes');
+  const bin = path.join(hermesRoot, 'hermes-agent', 'venv', 'bin', 'hermes');
   fs.mkdirSync(path.dirname(bin), { recursive: true });
   fs.writeFileSync(bin, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   process.env.AGENT_UI_CONFIG_DIR = configDir;
@@ -206,14 +207,12 @@ test('connector mode uses default local Hermes home and remembers detected binar
   assert.equal(JSON.parse(fs.readFileSync(path.join(configDir, 'connector-runtime.json'), 'utf8')).hermesBin, bin);
 });
 
-test('connector discovery prefers Hermes venv over AURA wrapper', () => {
+test('connector discovery uses Hermes repo binaries only', () => {
   const candidates = defaultConnectorHermesCandidates();
   const venv = candidates.findIndex((candidate) => candidate.endsWith(path.join('hermes-agent', 'venv', 'bin', 'hermes')));
-  const wrapper = candidates.findIndex((candidate) => candidate.endsWith(path.join('script', 'aura-hermes')));
 
   assert.notEqual(venv, -1);
-  assert.notEqual(wrapper, -1);
-  assert.equal(venv < wrapper, true);
+  assert.equal(candidates.every((candidate) => candidate.includes(`${path.sep}hermes-agent${path.sep}`)), true);
   assert.equal(candidates.some((candidate) => candidate.endsWith(path.join('.local', 'bin', 'hermes'))), false);
 });
 
@@ -456,12 +455,22 @@ test('bundled Hermes launcher uses only prebuilt runtime artifacts', () => {
   assert.doesNotMatch(bundler, /pip install "\$package_spec"/);
   assert.match(bundler, /PYTHONDONTWRITEBYTECODE=1/);
   assert.match(bundler, /PYTHONPATH="\$SRC_DIR"/);
+  assert.match(bundler, /\/opt\/homebrew\/bin/);
+  assert.match(bundler, /\$HOME\/\.local\/bin/);
 });
 
 test('direct Hermes Python probes disable bytecode writes', () => {
   const runtime = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'hermes-runtime.ts'), 'utf8');
+  const auth = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'hermes-auth.ts'), 'utf8');
 
   assert.match(runtime, /function pythonNoBytecodeEnv/);
+  assert.match(runtime, /function safeRuntimePath/);
+  assert.doesNotMatch(auth, /function safeRuntimePath/);
+  assert.match(auth, /safeRuntimePath/);
+  assert.match(runtime, /\/opt\/homebrew\/bin/);
+  assert.match(runtime, /\.local', 'bin'/);
+  assert.match(safeRuntimePath(), /\/opt\/homebrew\/bin/);
+  assert.match(safeRuntimePath(), new RegExp(`${os.userInfo().homedir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*\\.local.*bin`));
   assert.match(runtime, /PYTHONDONTWRITEBYTECODE: '1'/);
   assert.match(runtime, /execFileText\(python[\s\S]*env: pythonNoBytecodeEnv/);
   assert.match(runtime, /execFileTextWithJsonEvents\(runtime\.python[\s\S]*env: pythonNoBytecodeEnv/);

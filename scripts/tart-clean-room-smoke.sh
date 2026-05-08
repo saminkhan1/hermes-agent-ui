@@ -135,10 +135,10 @@ if [[ ! -x "$runtime" ]]; then
   exit 35
 fi
 
-mkdir -p "$HOME/fakebin" "$HOME/Documents/hermes/script"
+mkdir -p "$HOME/fakebin" "$HOME/Documents/hermes/hermes-agent/venv/bin"
 printf '#!/bin/sh\necho fake PATH hermes >&2\nexit 86\n' > "$HOME/fakebin/hermes"
-printf '#!/bin/sh\necho fake Documents Hermes >&2\nexit 88\n' > "$HOME/Documents/hermes/script/aura-hermes"
-chmod +x "$HOME/fakebin/hermes" "$HOME/Documents/hermes/script/aura-hermes"
+printf '#!/bin/sh\necho fake Documents Hermes >&2\nexit 88\n' > "$HOME/Documents/hermes/hermes-agent/venv/bin/hermes"
+chmod +x "$HOME/fakebin/hermes" "$HOME/Documents/hermes/hermes-agent/venv/bin/hermes"
 
 version_out="$(
   PATH="$HOME/fakebin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" \

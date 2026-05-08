@@ -442,7 +442,11 @@ if [[ ! -x "$PY" ]]; then
   echo "Bundled Hermes Python runtime is missing at $PY. Rebuild the app with npm run bundle:hermes." >&2
   exit 127
 fi
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+USER_BIN_PATHS="/opt/homebrew/bin:/usr/local/bin"
+if [[ -n "\${HOME:-}" ]]; then
+  USER_BIN_PATHS="$USER_BIN_PATHS:$HOME/.local/bin"
+fi
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$USER_BIN_PATHS\${PATH:+:$PATH}"
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONNOUSERSITE=1
 export PYTHONPATH="$SRC_DIR"

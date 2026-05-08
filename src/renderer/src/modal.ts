@@ -173,7 +173,6 @@ function submit() {
   if (window.agentUI?.submitNewCat) {
     window.agentUI.submitNewCat({
       prompt,
-      runtime: 'local',
       modalContextId,
     });
   } else {

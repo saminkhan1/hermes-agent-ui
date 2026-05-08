@@ -197,14 +197,14 @@ class TestCuaDriverCurrentSchema:
 
         result = SimpleNamespace(
             isError=False,
-            structuredContent={"element_count": 2, "tree_markdown": "- AXApplication \"AURA\""},
+            structuredContent={"element_count": 2, "tree_markdown": "- AXApplication \"SampleApp\""},
             content=[SimpleNamespace(type="text", text="human formatted output")],
         )
 
         out = _extract_tool_result(result)
 
         assert out["data"]["element_count"] == 2
-        assert out["data"]["tree_markdown"] == "- AXApplication \"AURA\""
+        assert out["data"]["tree_markdown"] == "- AXApplication \"SampleApp\""
 
     def test_extract_tool_result_preserves_mcp_image_mime_type(self):
         from types import SimpleNamespace
@@ -230,14 +230,14 @@ class TestCuaDriverCurrentSchema:
                 self.calls.append((name, args))
                 if name == "list_windows":
                     return {"data": {"windows": [
-                        {"app_name": "AURA", "pid": 123, "window_id": 456,
-                         "title": "AURA", "bounds": {"width": 800, "height": 600}}
+                        {"app_name": "SampleApp", "pid": 123, "window_id": 456,
+                         "title": "SampleApp", "bounds": {"width": 800, "height": 600}}
                     ]}, "images": [], "isError": False}
                 if name == "set_config":
                     return {"data": {"ok": True}, "images": [], "isError": False}
                 if name == "get_window_state":
                     return {"data": {
-                        "name": "AURA", "pid": 123, "screenshot_width": 800,
+                        "name": "SampleApp", "pid": 123, "screenshot_width": 800,
                         "screenshot_height": 600, "tree_markdown": "- [1] AXButton \"Run\"",
                     }, "images": [{"data": "iVBORw0KGgo=", "mime_type": "image/png"}], "isError": False}
                 raise AssertionError(f"unexpected tool call: {name}")
@@ -245,10 +245,10 @@ class TestCuaDriverCurrentSchema:
         backend = CuaDriverBackend.__new__(CuaDriverBackend)
         backend._session = FakeSession()
 
-        cap = backend.capture(mode="som", app="AURA")
+        cap = backend.capture(mode="som", app="SampleApp")
 
         assert [name for name, _ in backend._session.calls] == ["list_windows", "set_config", "get_window_state"]
-        assert cap.app == "AURA"
+        assert cap.app == "SampleApp"
         assert cap.width == 800
         assert cap.height == 600
         assert cap.elements[0].index == 1
@@ -265,12 +265,12 @@ class TestCuaDriverCurrentSchema:
                 self.calls.append((name, args))
                 if name != "list_apps":
                     raise AssertionError(f"unexpected tool call: {name}")
-                return {"data": {"apps": [{"name": "AURA", "pid": 123}]}, "images": [], "isError": False}
+                return {"data": {"apps": [{"name": "SampleApp", "pid": 123}]}, "images": [], "isError": False}
 
         backend = CuaDriverBackend.__new__(CuaDriverBackend)
         backend._session = FakeSession()
 
-        assert backend.list_apps() == [{"name": "AURA", "pid": 123}]
+        assert backend.list_apps() == [{"name": "SampleApp", "pid": 123}]
         assert backend._session.calls == [("list_apps", {})]
 
     def test_click_variants_use_matching_cua_tools(self):

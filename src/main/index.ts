@@ -32,22 +32,20 @@ type PreparedCatRun = MutableJsonObject & {
   closeModal?: boolean;
 };
 
-function asPayload(value: unknown): MutableJsonObject {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as MutableJsonObject : {};
-}
 const {
-  recordTrace,
   getTrace,
   runDir: evalRunDir,
   runId: evalRunId,
   enabled: evalTraceEnabled,
 } = require('./eval-trace');
+const { telemetry } = require('./reliability-telemetry');
 const {
   startAgentForCat,
   cancelAllAgents,
   getAgentConversation,
   listAgentConversations,
   hydrateGatewayConversations,
+  prewarmGatewayReady,
   setOnConversationPushed,
   setOnAuthRequired,
   cancelAgent,
@@ -94,6 +92,8 @@ const MAX_DRAG_COORDINATE = 10000;
 const MAX_REPORTED_ELEMENT_SIZE = 2000;
 const ACTIVE_WINDOW_CACHE_INTERVAL_MS = 3000;
 const ACTIVE_WINDOW_CACHE_DURATION_MS = 15000;
+const ACTIVE_WINDOW_LOOKUP_TIMEOUT_MS = 500;
+const FRONTMOST_APP_LOOKUP_TIMEOUT_MS = 250;
 const INPUT_MODE_TEXT = 'text';
 const INPUT_MODE_VOICE = 'voice';
 const AUTH_MONITOR_INTERVAL_MS = 2500;
@@ -240,6 +240,7 @@ let overlayReady = false;
 const pendingSpawnCats = [];
 let activeModalContextId = null;
 const modalContexts = new Map();
+const launchContextCaptures = new Map();
 let pendingAuthRun = null;
 let authMonitorTimer = null;
 let authFlow = idleAuthFlow();
@@ -271,11 +272,15 @@ setOnAuthRequired((payload: MutableJsonObject = {}) => {
   const catId = normalizeCatId(payload.catId);
   const prompt = boundedText(payload.prompt || '');
   if (!catId || !prompt.trim()) return;
+  telemetry.authHandoffOpening({
+    catId,
+    reason: payload.reason || 'gateway-auth-error',
+    retryKind: String(payload.retryKind || 'initial'),
+  });
   openHermesAuthWindow({
     pendingRun: {
       catId,
       prompt,
-      runtime: 'local',
       modalContextId: '',
       launchContext: payload.launchContext || null,
       retryKind: String(payload.retryKind || 'initial'),
@@ -797,7 +802,7 @@ function centeredWindowBounds(width, height, displayLike) {
 }
 
 function launchDisplayForModal(modalContextId) {
-  const launchContext = modalContextId ? (modalContexts.get(modalContextId) || null) : null;
+  const launchContext = currentLaunchContext(modalContextId);
   if (launchContext && launchContext.display) return launchContext.display;
   if (launchContext && launchContext.cursor) return screen.getDisplayNearestPoint(launchContext.cursor);
   return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
@@ -1136,14 +1141,6 @@ function closePetOverlay({ persist = true } = {}) {
   rebuildAppMenus();
 }
 
-function togglePetOverlay() {
-  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
-    closePetOverlay({ persist: true });
-  } else {
-    openPetOverlay({ persist: true });
-  }
-}
-
 function createWindow() {
   const saved = readPetOverlayState();
   petOverlayOpenRequested = saved.open === true;
@@ -1230,7 +1227,6 @@ function conversationSpawnPayload(catId) {
   return {
     catId: id,
     prompt: rec.prompt || '',
-    runtime: rec.runtime || 'local',
     status: rec.runStatus || 'running',
   };
 }
@@ -1251,12 +1247,12 @@ function closeWindowOnEscape(win, closeFn) {
 function focusExistingSessionWindow(reason) {
   if (isLiveWindow(modalWindow)) {
     focusWindow(modalWindow);
-    recordTrace('session_window_open_blocked', { reason, surface: 'modal' });
+    telemetry.sessionWindowOpenBlocked({ reason, surface: 'modal' });
     return true;
   }
   if (isLiveWindow(conversationWindow)) {
     focusWindow(conversationWindow);
-    recordTrace('session_window_open_blocked', {
+    telemetry.sessionWindowOpenBlocked({
       catId: activeConversationCatId || null,
       reason,
       surface: 'conversation',
@@ -1305,7 +1301,7 @@ function loadTrustedRendererPage(win, pageName, query) {
 function openNewCatModal(modalContextId, inputMode = selectedInputMode) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const normalizedInputMode = normalizeInputMode(inputMode);
-  recordTrace('modal_show_requested', { modalContextId: modalContextId || null, inputMode: normalizedInputMode });
+  telemetry.modalShowRequested({ modalContextId: modalContextId || null, inputMode: normalizedInputMode });
 
   if (focusExistingSessionWindow('new_session_requested')) return null;
 
@@ -1324,7 +1320,7 @@ function openNewCatModal(modalContextId, inputMode = selectedInputMode) {
 
   win.webContents.once('did-finish-load', () => {
     if (!isCurrentWindow(win, () => modalWindow)) return;
-    recordTrace('modal_dom_loaded', { modalContextId: modalContextId || null, inputMode: normalizedInputMode });
+    telemetry.modalDomLoaded({ modalContextId: modalContextId || null, inputMode: normalizedInputMode });
   });
 
   win.once('ready-to-show', () => {
@@ -1333,8 +1329,9 @@ function openNewCatModal(modalContextId, inputMode = selectedInputMode) {
       currentWindow.moveTop();
       currentWindow.focus();
       currentWindow.webContents.focus();
-      recordTrace('modal_shown_and_focused', {
+      telemetry.modalShownAndFocused({
         modalContextId: modalContextId || null,
+        inputMode: normalizedInputMode,
         bounds: currentWindow.getBounds(),
       });
     });
@@ -1342,6 +1339,7 @@ function openNewCatModal(modalContextId, inputMode = selectedInputMode) {
 
   win.on('closed', () => {
     modalContexts.delete(modalContextId);
+    launchContextCaptures.delete(modalContextId);
     if (activeModalContextId === modalContextId) {
       activeModalContextId = null;
     }
@@ -1359,11 +1357,34 @@ function showConversationWindow(win) {
   focusWindow(win);
 }
 
+function showExistingConversationWindow(catId) {
+  if (!isLiveWindow(conversationWindow)) return false;
+  const id = String(catId || '');
+  const previousCatId = activeConversationCatId || null;
+  if (id && previousCatId !== id) {
+    activeConversationCatId = id;
+    void loadTrustedRendererPage(conversationWindow, 'conversation.html', { catId: id });
+  }
+  focusWindow(conversationWindow);
+  telemetry.sessionWindowOpenBlocked({
+    catId: id || previousCatId,
+    previousCatId,
+    reason: 'conversation_requested',
+    surface: 'conversation',
+    switched: !!(id && previousCatId !== id),
+  });
+  return true;
+}
+
 function openConversationWindow(catId) {
   if (!mainWindow || mainWindow.isDestroyed() || !catId) return;
 
   const q = { catId: String(catId) };
-  if (focusExistingSessionWindow('conversation_requested')) {
+  if (isLiveWindow(modalWindow)) {
+    focusExistingSessionWindow('conversation_requested');
+    return;
+  }
+  if (showExistingConversationWindow(q.catId)) {
     return;
   }
 
@@ -1408,6 +1429,11 @@ function displayForAuthWindow(pendingRun = null) {
 
 function openHermesAuthWindow({ pendingRun = null, reason = '' } = {}) {
   if (pendingRun) pendingAuthRun = pendingRun;
+  telemetry.authWindowRequested({
+    reason: String(reason || ''),
+    hasPendingRun: !!pendingAuthRun,
+    catId: pendingAuthRun && pendingAuthRun.catId ? String(pendingAuthRun.catId) : null,
+  });
   if (authWindow && !authWindow.isDestroyed()) {
     authFlow.hidden = false;
     focusWindow(authWindow);
@@ -1428,7 +1454,13 @@ function openHermesAuthWindow({ pendingRun = null, reason = '' } = {}) {
   });
 
   win.webContents.once('did-finish-load', () => {
-    if (isCurrentWindow(win, () => authWindow)) sendHermesAuthContext(reason);
+    if (!isCurrentWindow(win, () => authWindow)) return;
+    telemetry.authWindowDomLoaded({
+      reason: String(reason || ''),
+      hasPendingRun: !!pendingAuthRun,
+      catId: pendingAuthRun && pendingAuthRun.catId ? String(pendingAuthRun.catId) : null,
+    });
+    sendHermesAuthContext(reason);
   });
 
   win.once('ready-to-show', () => {
@@ -1437,6 +1469,12 @@ function openHermesAuthWindow({ pendingRun = null, reason = '' } = {}) {
       currentWindow.moveTop();
       currentWindow.focus();
       currentWindow.webContents.focus();
+      telemetry.authWindowShownAndFocused({
+        reason: String(reason || ''),
+        hasPendingRun: !!pendingAuthRun,
+        catId: pendingAuthRun && pendingAuthRun.catId ? String(pendingAuthRun.catId) : null,
+        bounds: currentWindow.getBounds(),
+      });
     });
   });
 
@@ -1743,6 +1781,40 @@ function screenContextHintForContext(activeWindow, frontmostApp) {
   return appName ? `Visible app: ${appName}` : '';
 }
 
+function buildLaunchContext({
+  source,
+  modalContextId,
+  capturedAt,
+  cursor,
+  display,
+  activeWindow,
+  frontmostApp,
+  pending = false,
+}) {
+  const displayInfo = displayPayload(display);
+  const cursorInfo = cursor && Number.isFinite(cursor.x) && Number.isFinite(cursor.y)
+    ? { x: Math.trunc(cursor.x), y: Math.trunc(cursor.y) }
+    : null;
+  const missingContext = missingContextFields(activeWindow, frontmostApp, displayInfo, cursorInfo);
+  const quality = contextQuality(activeWindow, frontmostApp, displayInfo, cursorInfo);
+  return {
+    schemaVersion: 1,
+    source,
+    modalContextId,
+    capturedAt,
+    platform: process.platform,
+    cursor: cursorInfo,
+    display: displayInfo,
+    activeWindow,
+    frontmostApp,
+    topWindowIsBrowserLike: isBrowserLikeWindow(activeWindow),
+    screenContextHint: screenContextHintForContext(activeWindow, frontmostApp),
+    contextQuality: quality,
+    missingContext,
+    pendingCapture: !!pending,
+  };
+}
+
 function contextQuality(activeWindow, frontmostApp, display, cursor) {
   const app = activeWindow && activeWindow.owner ? activeWindow.owner : frontmostApp;
   if (
@@ -1802,6 +1874,54 @@ function usableRecentExternalWindow(maxAgeMs = 30000) {
   return lastExternalWindowSnapshot.window || null;
 }
 
+function initialLaunchContext(source, modalContextId) {
+  const capturedAt = new Date().toISOString();
+  const cursor = screen.getCursorScreenPoint();
+  const display = screen.getDisplayNearestPoint(cursor);
+  const activeWindow = usableRecentExternalWindow();
+  const context = buildLaunchContext({
+    source,
+    modalContextId,
+    capturedAt,
+    cursor,
+    display,
+    activeWindow,
+    frontmostApp: null,
+    pending: true,
+  });
+  telemetry.contextSnapshotCreated({
+    source,
+    modalContextId: modalContextId || null,
+    contextQuality: context.contextQuality,
+    missingContext: context.missingContext,
+    hasCachedWindow: !!activeWindow,
+  });
+  return context;
+}
+
+function currentLaunchContext(modalContextId) {
+  if (!modalContextId) return null;
+  const entry = modalContexts.get(modalContextId);
+  if (!entry) return null;
+  if (entry.launchContext) return entry.launchContext;
+  if (entry.schemaVersion) return entry;
+  return null;
+}
+
+function modalContextPending(modalContextId) {
+  if (!modalContextId) return false;
+  const entry = modalContexts.get(modalContextId);
+  return !!(entry && entry.pending);
+}
+
+function setLaunchContext(modalContextId, launchContext, { pending = false } = {}) {
+  if (!modalContextId) return;
+  modalContexts.set(modalContextId, {
+    launchContext,
+    pending: !!pending,
+  });
+}
+
 function frontmostAppFromAppleScriptOutput(stdout) {
   const lines = String(stdout || '').split(/\r?\n/).map((line) => line.trim());
   const [name, bundleId, pid] = lines;
@@ -1814,7 +1934,7 @@ function frontmostAppFromAppleScriptOutput(stdout) {
   };
 }
 
-async function frontmostAppWithTimeout(timeoutMs = 600) {
+async function frontmostAppWithTimeout(timeoutMs = FRONTMOST_APP_LOOKUP_TIMEOUT_MS) {
   if (process.platform !== 'darwin') return null;
   const script = [
     'tell application "System Events"',
@@ -1858,13 +1978,14 @@ function stopActiveWindowTracker() {
 function startActiveWindowTracker({
   durationMs = ACTIVE_WINDOW_CACHE_DURATION_MS,
   intervalMs = ACTIVE_WINDOW_CACHE_INTERVAL_MS,
+  immediate = true,
 } = {}) {
   const tick = () => {
     void readActiveWindowSnapshot().catch(() => {
       // Context capture is best-effort and must not affect the launcher.
     });
   };
-  tick();
+  if (immediate) tick();
   if (activeWindowCacheTimer == null) {
     activeWindowCacheTimer = setInterval(tick, intervalMs);
   }
@@ -1874,7 +1995,7 @@ function startActiveWindowTracker({
   activeWindowCacheStopTimer = setTimeout(stopActiveWindowTracker, Math.max(1000, Number(durationMs) || ACTIVE_WINDOW_CACHE_DURATION_MS));
 }
 
-async function activeWindowWithTimeout(timeoutMs = 1200) {
+async function activeWindowWithTimeout(timeoutMs = ACTIVE_WINDOW_LOOKUP_TIMEOUT_MS) {
   const lookup = (async () => {
     try {
       const snapshot = await readActiveWindowSnapshot();
@@ -1891,31 +2012,73 @@ async function activeWindowWithTimeout(timeoutMs = 1200) {
 }
 
 async function captureLaunchContext(source, modalContextId) {
+  const startedAt = Date.now();
+  telemetry.contextCaptureStarted({
+    source,
+    modalContextId: modalContextId || null,
+  });
   const capturedAt = new Date().toISOString();
   const cursor = screen.getCursorScreenPoint();
   const display = screen.getDisplayNearestPoint(cursor);
-  const activeWindow = await activeWindowWithTimeout();
-  const frontmostApp = activeWindow && activeWindow.owner ? null : await frontmostAppWithTimeout();
-  const displayInfo = displayPayload(display);
-  const cursorInfo = cursor && Number.isFinite(cursor.x) && Number.isFinite(cursor.y)
-    ? { x: Math.trunc(cursor.x), y: Math.trunc(cursor.y) }
-    : null;
-  const missingContext = missingContextFields(activeWindow, frontmostApp, displayInfo, cursorInfo);
-  return {
-    schemaVersion: 1,
+  const activeWindowPromise = activeWindowWithTimeout();
+  const frontmostAppPromise = frontmostAppWithTimeout();
+  const activeWindow = await activeWindowPromise;
+  const frontmostApp = activeWindow && activeWindow.owner ? null : await frontmostAppPromise;
+  const context = buildLaunchContext({
     source,
     modalContextId,
     capturedAt,
-    platform: process.platform,
-    cursor: cursorInfo,
-    display: displayInfo,
     activeWindow,
     frontmostApp,
-    topWindowIsBrowserLike: isBrowserLikeWindow(activeWindow),
-    screenContextHint: screenContextHintForContext(activeWindow, frontmostApp),
-    contextQuality: contextQuality(activeWindow, frontmostApp, displayInfo, cursorInfo),
-    missingContext,
-  };
+    cursor,
+    display,
+    pending: false,
+  });
+  telemetry.contextCaptureCompleted({
+    source,
+    modalContextId: modalContextId || null,
+    durationMs: Date.now() - startedAt,
+    contextQuality: context.contextQuality,
+    missingContext: context.missingContext,
+  });
+  return context;
+}
+
+function startLaunchContextCapture(source, modalContextId) {
+  if (!modalContextId || launchContextCaptures.has(modalContextId)) return null;
+  const promise = captureLaunchContext(source, modalContextId)
+    .then((context) => {
+      const entry = modalContexts.get(modalContextId);
+      if (entry) {
+        modalContexts.set(modalContextId, {
+          launchContext: context,
+          pending: false,
+        });
+      }
+      telemetry.contextCaptureReady({
+        source,
+        modalContextId,
+        applied: !!entry,
+        contextQuality: context.contextQuality,
+        missingContext: context.missingContext,
+      });
+      return context;
+    })
+    .catch((error) => {
+      const entry = modalContexts.get(modalContextId);
+      if (entry) entry.pending = false;
+      telemetry.contextCaptureFailed({
+        source,
+        modalContextId,
+        error: error && error.message ? error.message : String(error || 'context capture failed'),
+      });
+      return null;
+    })
+    .finally(() => {
+      launchContextCaptures.delete(modalContextId);
+    });
+  launchContextCaptures.set(modalContextId, promise);
+  return promise;
 }
 
 async function handleNewCatShortcut(source = 'shortcut') {
@@ -1923,10 +2086,15 @@ async function handleNewCatShortcut(source = 'shortcut') {
   const modalContextId = randomUUID();
   activeModalContextId = modalContextId;
   const inputMode = selectedInputMode;
-  const launchContext = await captureLaunchContext(source, modalContextId);
-  startActiveWindowTracker();
-  modalContexts.set(modalContextId, launchContext);
-  recordTrace('shortcut_received', {
+  telemetry.shortcutInvoked({
+    source,
+    modalContextId,
+    inputMode,
+  });
+  const launchContext = initialLaunchContext(source, modalContextId);
+  setLaunchContext(modalContextId, launchContext, { pending: true });
+  startActiveWindowTracker({ immediate: false });
+  telemetry.shortcutReceived({
     source,
     modalContextId,
     contextQuality: launchContext.contextQuality,
@@ -1937,9 +2105,11 @@ async function handleNewCatShortcut(source = 'shortcut') {
   const newModalWindow = openNewCatModal(modalContextId, inputMode);
   if (!newModalWindow) {
     modalContexts.delete(modalContextId);
+    launchContextCaptures.delete(modalContextId);
     if (activeModalContextId === modalContextId) activeModalContextId = null;
     return;
   }
+  startLaunchContextCapture(source, modalContextId);
   if (inputMode === INPUT_MODE_VOICE && newModalWindow && !newModalWindow.isDestroyed()) {
     newModalWindow.webContents.once('did-finish-load', () => {
       if (newModalWindow.isDestroyed()) return;
@@ -1976,59 +2146,59 @@ async function startCatRunFromPayload(payload: MutableJsonObject = {}, opts: Mut
     normalizeCatId(payload && payload.modalContextId) ||
     activeModalContextId ||
     '';
-  const runtime = 'local';
   const prompt = boundedText(payload && payload.prompt);
   if (!catId) {
     return { ok: false, error: 'Invalid session id.' };
   }
-  const launchContext = modalContextId ? (modalContexts.get(modalContextId) || null) : null;
+  const launchContext = currentLaunchContext(modalContextId);
+  const contextPending = modalContextPending(modalContextId);
   if (!prompt.trim()) {
     const error = 'Missing task prompt.';
-    recordTrace('submit_rejected', {
+    telemetry.submitRejected({
       catId,
       modalContextId: modalContextId || null,
       reason: 'missing_prompt',
     });
     return { ok: false, error };
   }
-  recordTrace('submit_context_ready', {
+  telemetry.submitContextReady({
     catId,
     modalContextId: modalContextId || null,
+    pendingCapture: contextPending,
     contextQuality: launchContext ? launchContext.contextQuality : 'missing',
     missingContext: launchContext ? launchContext.missingContext : ['launch_context'],
   });
-  recordTrace('submit_requested', {
+  telemetry.submitRequested({
     catId,
     modalContextId: modalContextId || null,
     promptLength: prompt.length,
-    runtime,
+    pendingCapture: contextPending,
     contextQuality: launchContext ? launchContext.contextQuality : 'missing',
   });
 
-  const prepared = { catId, prompt, runtime, modalContextId, launchContext };
+  const prepared = { catId, prompt, modalContextId, launchContext };
   launchPreparedCatRun(prepared, { closeModal: opts.closeModal !== false });
-  return { ok: true, catId, runtime };
+  return { ok: true, catId };
 }
 
 function launchPreparedCatRun(prepared: PreparedCatRun = {}, opts: MutableJsonObject = {}) {
   const catId = normalizeCatId(prepared.catId) || randomUUID();
   const prompt = boundedText(prepared.prompt);
-  const runtime = 'local';
   const modalContextId = normalizeCatId(prepared.modalContextId);
   const launchContext = prepared.launchContext || null;
-  const out = { catId, prompt, runtime, modalContextId };
+  const out = { catId, prompt, modalContextId };
   if (modalContextId) modalContexts.delete(modalContextId);
+  if (modalContextId) launchContextCaptures.delete(modalContextId);
   if (activeModalContextId === modalContextId) activeModalContextId = null;
   if (opts.closeModal !== false && modalWindow && !modalWindow.isDestroyed()) {
     modalWindow.close();
   }
   sendSpawnCatToOverlay(out);
-  recordTrace('cat_spawn_sent', { catId, modalContextId: modalContextId || null, runtime });
+  telemetry.catSpawnSent({ catId, modalContextId: modalContextId || null });
   startAgentForCat(
     {
       catId,
       prompt,
-      runtime,
       pointerContext: launchContext,
     },
     { getMainWindow: () => mainWindow, log: console }
@@ -2058,16 +2228,8 @@ trustedIpcOn('cat-counts', (_event, payload) => {
   updateTrayTitle();
 });
 
-trustedIpcOn('pet-overlay-toggle', () => {
-  togglePetOverlay();
-});
-
 trustedIpcHandle('get-pet-characters', () => {
   return petCharactersPayload();
-});
-
-trustedIpcOn('pet-characters-refresh', () => {
-  refreshPetCharacterOptions({ notify: true });
 });
 
 trustedIpcOn('pet-context-menu', () => {
@@ -2289,17 +2451,17 @@ async function getEvalUiTargets() {
   return {
     ok: true,
     modal: {
-      modalContextId: activeModalContextId,
-      ...evalWindowState(modalWindow),
       ...modal,
+      ...evalWindowState(modalWindow),
+      modalContextId: activeModalContextId,
     },
     conversation: {
-      ...evalWindowState(conversationWindow),
       ...conversation,
+      ...evalWindowState(conversationWindow),
     },
     overlay: {
-      ...evalWindowState(mainWindow),
       ...overlay,
+      ...evalWindowState(mainWindow),
     },
     cats: Array.isArray(overlay.cats) ? overlay.cats.slice() : [],
     configDir: getAgentUIConfigDir(),
@@ -2315,7 +2477,7 @@ async function closeEvalModal() {
   if (modalWindow && !modalWindow.isDestroyed()) {
     modalWindow.close();
   }
-  recordTrace('cleanup_modal_closed', { ok: true });
+  telemetry.cleanupModalClosed({ ok: true });
   return { ok: true };
 }
 
@@ -2366,20 +2528,20 @@ function textTraceMeta(value, maxPreview = 80) {
 }
 
 async function captureVoicePromptTranscript(onStatus) {
-  recordTrace('voice_started', {});
+  telemetry.voiceStarted({});
   if (process.env.AGENT_UI_EVAL === '1') {
     const transcript = await readDeterministicTranscript();
     if (!transcript) {
-      recordTrace('voice_final_transcript', { deterministic: true, ...textTraceMeta('') });
+      telemetry.voiceFinalTranscript({ deterministic: true, ...textTraceMeta('') });
       return { ok: false, error: 'missing deterministic transcript' };
     }
-    recordTrace('voice_partial_transcript', { deterministic: true, ...textTraceMeta(transcript.slice(0, 80)) });
-    recordTrace('voice_final_transcript', { deterministic: true, ...textTraceMeta(transcript) });
+    telemetry.voicePartialTranscript({ deterministic: true, ...textTraceMeta(transcript.slice(0, 80)) });
+    telemetry.voiceFinalTranscript({ deterministic: true, ...textTraceMeta(transcript) });
     return { ok: true, deterministic: true, transcript };
   }
   const result = await captureAndTranscribeVoice({ onStatus });
   if (result.ok) {
-    recordTrace('voice_final_transcript', { deterministic: false, ...textTraceMeta(result.transcript) });
+    telemetry.voiceFinalTranscript({ deterministic: false, ...textTraceMeta(result.transcript) });
   }
   return result;
 }
@@ -2398,7 +2560,8 @@ function sendVoiceInputStatus(win, modalContextId, payload: MutableJsonObject = 
 
 async function startVoiceSessionFromShortcut(win, modalContextId) {
   if (!isCurrentWindow(win, () => modalWindow)) return;
-  recordTrace('voice_session_recording_requested', { modalContextId: modalContextId || null });
+  const startedAt = Date.now();
+  telemetry.voiceSessionRecordingRequested({ modalContextId: modalContextId || null });
   sendVoiceInputStatus(win, modalContextId, { state: 'recording' });
   const result = await captureVoicePromptTranscript((state) => {
     sendVoiceInputStatus(win, modalContextId, { state });
@@ -2406,20 +2569,29 @@ async function startVoiceSessionFromShortcut(win, modalContextId) {
   if (!isCurrentWindow(win, () => modalWindow)) return;
   if (!result || !result.ok) {
     const error = (result && result.error) || 'Could not capture voice input.';
-    recordTrace('voice_session_rejected', { modalContextId: modalContextId || null, error });
+    telemetry.voiceSessionRejected({
+      modalContextId: modalContextId || null,
+      durationMs: Date.now() - startedAt,
+      error,
+    });
     sendVoiceInputStatus(win, modalContextId, { state: 'error', error });
     return;
   }
   const prompt = String(result.transcript || '').trim();
   if (!prompt) {
     const error = 'Voice input produced no transcript.';
-    recordTrace('voice_session_rejected', { modalContextId: modalContextId || null, error });
+    telemetry.voiceSessionRejected({
+      modalContextId: modalContextId || null,
+      durationMs: Date.now() - startedAt,
+      error,
+    });
     sendVoiceInputStatus(win, modalContextId, { state: 'error', error });
     return;
   }
-  recordTrace('voice_session_transcript_ready', {
+  telemetry.voiceSessionTranscriptReady({
     modalContextId: modalContextId || null,
     deterministic: !!result.deterministic,
+    durationMs: Date.now() - startedAt,
     ...textTraceMeta(prompt),
   });
   sendVoiceInputStatus(win, modalContextId, {
@@ -2433,7 +2605,7 @@ trustedIpcOn('eval-trace-event', (_event, payload: MutableJsonObject = {}) => {
   if (!evalPayloadWithinLimit(payload)) return;
   const type = payload && payload.type ? payload.type : 'renderer_event';
   const { type: _type, ...rest } = payload && typeof payload === 'object' ? payload : {};
-  recordTrace(type, rest);
+  telemetry.rendererEvent(type, rest);
 });
 
 trustedIpcOn('eval-ui-state', (_event, payload: MutableJsonObject = {}) => {
@@ -2454,6 +2626,7 @@ app.whenReady().then(() => {
   installAttachmentProtocol();
   refreshPetCharacterOptions();
   void loadGetWindowsModule();
+  void prewarmGatewayReady({ log: console });
   if (process.platform === 'darwin' && app.dock && process.env.AGENT_UI_EVAL !== '1') {
     app.dock.hide();
   }
@@ -2467,6 +2640,11 @@ app.whenReady().then(() => {
       },
       listConversations: async () => ({ ok: true, conversations: listAgentConversations() }),
       getUiTargets: async () => getEvalUiTargets(),
+      openLauncher: async (payload: MutableJsonObject = {}) => {
+        const source = String(payload.source || 'eval-open-launcher').slice(0, 128);
+        await handleNewCatShortcut(source);
+        return { ok: true, source };
+      },
       start: async (payload: MutableJsonObject = {}) => {
         const catId = normalizeCatId(payload.catId);
         return startCatRunFromPayload(payload, {
@@ -2500,7 +2678,7 @@ app.whenReady().then(() => {
       dismiss: async ({ catId }: MutableJsonObject = {}) => {
         if (!catId) return { ok: false, error: 'missing cat id' };
         const result = await dismissAgent(String(catId), { getMainWindow: () => mainWindow, log: console });
-        recordTrace('cleanup_dismiss_completed', {
+        telemetry.cleanupDismissCompleted({
           catId: String(catId),
           ok: !!(result && result.ok),
           error: result && result.error ? result.error : null,
@@ -2511,6 +2689,10 @@ app.whenReady().then(() => {
     },
     console
   );
+  telemetry.appReady({
+    uptimeMs: Math.round(process.uptime() * 1000),
+    evalServer: !!closeEvalServer,
+  });
 
   /** Throttle overlay speech bubbles so streaming tokens do not flood IPC. */
   const streamBubbleThrottle = new Map();
@@ -2571,7 +2753,7 @@ app.whenReady().then(() => {
   const registered = globalShortcut.register(newCatAccelerator, () => {
     void handleNewCatShortcut(newCatAccelerator);
   });
-  recordTrace('shortcut_registered', { accelerator: newCatAccelerator, registered });
+  telemetry.shortcutRegistered({ accelerator: newCatAccelerator, registered });
 });
 
 app.on('will-quit', () => {

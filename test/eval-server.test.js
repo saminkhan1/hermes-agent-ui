@@ -78,6 +78,7 @@ test('eval server exposes release smoke control endpoints', async (t) => {
     getConversation: async (catId) => ({ ok: true, catId }),
     listConversations: async () => ({ ok: true, conversations: [] }),
     getUiTargets: async () => ({ ok: true, modal: {} }),
+    openLauncher: async (payload) => { calls.push(['openLauncher', payload]); return { ok: true }; },
     start: async (payload) => { calls.push(['start', payload]); return { ok: true, catId: payload.catId }; },
     followup: async (payload) => { calls.push(['followup', payload]); return { ok: true }; },
     cancel: async (payload) => { calls.push(['cancel', payload]); return { ok: true }; },
@@ -92,6 +93,7 @@ test('eval server exposes release smoke control endpoints', async (t) => {
 
   assert.deepEqual((await invokeEvalRoute('GET', '/health', null, handlers, {})).json, { ok: false, error: 'unauthorized' });
   assert.deepEqual((await invokeEvalRoute('GET', '/health', null, handlers)).json, { ok: true, app: 'agent-UI', eval: true });
+  assert.deepEqual((await invokeEvalRoute('POST', '/open-launcher', { source: 'test' }, handlers)).json, { ok: true });
   assert.deepEqual((await invokeEvalRoute('POST', '/start', { catId: 'cat-1', prompt: 'hello' }, handlers)).json, { ok: true, catId: 'cat-1' });
   assert.deepEqual((await invokeEvalRoute('POST', '/followup', { catId: 'cat-1', text: 'next' }, handlers)).json, { ok: true });
   assert.deepEqual((await invokeEvalRoute('POST', '/cancel', { catId: 'cat-1' }, handlers)).json, { ok: true });
@@ -101,6 +103,7 @@ test('eval server exposes release smoke control endpoints', async (t) => {
   assert.deepEqual((await invokeEvalRoute('POST', '/dismiss', { catId: 'cat-1' }, handlers)).json, { ok: true });
 
   assert.deepEqual(calls.map(([name]) => name), [
+    'openLauncher',
     'start',
     'followup',
     'cancel',
