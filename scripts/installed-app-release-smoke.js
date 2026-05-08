@@ -31,7 +31,7 @@ function resolveAppExecutable(value) {
       });
     if (executable) return executable;
   } catch {
-    // Fall through to the historical executable name.
+    // Fall through to the packaged executable name.
   }
   return path.join(macosDir, 'agent-UI');
 }

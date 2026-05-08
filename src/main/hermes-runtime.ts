@@ -10,7 +10,7 @@ const { spawn, execFile } = require('child_process');
 const { randomBytes } = require('crypto');
 const {
   defaultGatewayEnvPath,
-  readGatewayEnvFile,
+  parseGatewayEnvText,
   realUserHomeDir,
 } = require('./hermes-gateway-client');
 const {
@@ -187,7 +187,7 @@ function execFileTextWithJsonEvents(command, args, opts: JsonEventOptions = {}, 
         }
       }
       if (code !== 0) {
-      const err: CommandError = new Error(`Process exited with code ${code}${signal ? ` (${signal})` : ''}`);
+        const err: CommandError = new Error(`Process exited with code ${code}${signal ? ` (${signal})` : ''}`);
         err.stdout = stdout;
         err.stderr = stderr;
         reject(err);
@@ -702,7 +702,7 @@ function upsertGatewayEnvText(current, gatewayEnv) {
 function ensureGatewayEnvFile(overrides: GatewayEnvOverrides = {}) {
   const file = defaultGatewayEnvPath();
   const currentText = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-  const current = readGatewayEnvFile(file);
+  const current = parseGatewayEnvText(currentText);
   const nextPort = overrides.LOCAL_DESKTOP_PORT || overrides.port || current.LOCAL_DESKTOP_PORT || '8766';
   const nextHost = overrides.LOCAL_DESKTOP_HOST || overrides.host || current.LOCAL_DESKTOP_HOST || '127.0.0.1';
   const merged = {
@@ -716,7 +716,9 @@ function ensureGatewayEnvFile(overrides: GatewayEnvOverrides = {}) {
   };
   ensureDir(path.dirname(file));
   const body = upsertGatewayEnvText(currentText, merged);
-  fs.writeFileSync(file, body, { encoding: 'utf8', mode: 0o600 });
+  if (body !== currentText) {
+    fs.writeFileSync(file, body, { encoding: 'utf8', mode: 0o600 });
+  }
   fs.chmodSync(file, 0o600);
   return { file, env: merged };
 }

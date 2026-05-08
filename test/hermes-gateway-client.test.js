@@ -269,6 +269,25 @@ test('duplicate and stale SSE sequences are ignored', () => {
   assert.equal(seen[1].type, 'typing.started');
 });
 
+test('last sequence advances only after event handlers succeed', () => {
+  const statePath = tempStatePath();
+  const client = new HermesGatewayClient({
+    key: 'secret',
+    statePath,
+    fetchImpl: async () => {},
+    onEvent: () => {
+      throw new Error('renderer update failed');
+    },
+  });
+
+  assert.throws(
+    () => client.handleEvent({ seq: 8, type: 'message.created', conversation_id: 'cat-1' }),
+    /renderer update failed/
+  );
+
+  assert.equal(client.state.lastSeq, 0);
+});
+
 test('last sequence can be reset when local conversations are not hydrated', () => {
   const statePath = tempStatePath();
   fs.writeFileSync(statePath, JSON.stringify({ lastSeq: 31 }), 'utf8');

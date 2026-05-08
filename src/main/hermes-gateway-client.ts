@@ -82,18 +82,22 @@ function unquoteEnvValue(value) {
   return text;
 }
 
+function parseGatewayEnvText(text = ''): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const match = trimmed.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (!match) continue;
+    out[match[1]] = unquoteEnvValue(match[2]);
+  }
+  return out;
+}
+
 function readGatewayEnvFile(file = defaultGatewayEnvPath()): Record<string, string> {
   try {
     if (!fs.existsSync(file)) return {};
-    const out: Record<string, string> = {};
-    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const match = trimmed.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-      if (!match) continue;
-      out[match[1]] = unquoteEnvValue(match[2]);
-    }
-    return out;
+    return parseGatewayEnvText(fs.readFileSync(file, 'utf8'));
   } catch {
     return {};
   }
@@ -482,8 +486,10 @@ class HermesGatewayClient {
       const nextSeq = Math.trunc(seq);
       const currentSeq = Number(this.state.lastSeq || 0);
       if (nextSeq <= currentSeq) return;
+      this.onEvent(event);
       this.state.lastSeq = nextSeq;
       this.scheduleStateSave();
+      return;
     }
     this.onEvent(event);
   }
@@ -497,6 +503,7 @@ module.exports = {
   gatewayKeyFromEnv,
   getAgentUIConfigDir,
   parseSseFrame,
+  parseGatewayEnvText,
   realUserHomeDir,
   readGatewayEnvFile,
 };

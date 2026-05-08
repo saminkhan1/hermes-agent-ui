@@ -26,11 +26,10 @@ const runtimeTreeIgnoredNames = new Set([
   'build',
   'dist',
 ]);
-const legacyRequireSigned = String(process.env.RELEASE_VERIFY_REQUIRE_SIGNED || '').trim() === '1';
 const requestedSigningMode = String(
   process.env.RELEASE_VERIFY_SIGNING_MODE ||
   process.env.RELEASE_VERIFY_MODE ||
-  (legacyRequireSigned ? 'developer-id' : 'bootstrap')
+  'bootstrap'
 ).trim().toLowerCase();
 const signingMode = requestedSigningMode === 'developer-id' ? 'developer-id' : requestedSigningMode;
 const requestedAppMode = String(

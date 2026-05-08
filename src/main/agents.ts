@@ -757,20 +757,24 @@ function upsertGatewayAssistantMessage(catId, event: LocalDesktopMessageEvent | 
   const id = String(catId);
   const rec = conversations.get(id);
   if (!rec) return;
-  const text = event.text == null ? '' : String(event.text);
+  const hasText = event.text != null;
+  const text = hasText ? String(event.text) : '';
   const messageId = event.message_id == null ? '' : String(event.message_id);
-  if (!text && String(event.type || '') !== 'message.updated') return;
+  if (!hasText && String(event.type || '') !== 'message.updated') return;
 
   let target = null;
   if (messageId) {
     target = rec.items.find((it) => it && it.kind === 'assistant' && it.messageId === messageId);
   }
   if (!target) {
+    if (!hasText) return;
     target = { kind: 'assistant', text, at: eventTimeMs(event) } as AgentConversationItem;
     if (messageId) target.messageId = messageId;
     rec.items.push(target);
-  } else {
+  } else if (hasText) {
     target.text = text;
+    target.at = eventTimeMs(event);
+  } else {
     target.at = eventTimeMs(event);
   }
   target.seq = Number(event.seq || 0) || target.seq;
