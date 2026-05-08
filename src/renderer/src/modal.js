@@ -1,5 +1,6 @@
 /* global agentUI */
 
+import { activeElementForEval, rectForEvalElement, visibleTextForEval } from './eval-ui-state.js';
 import { insertNewlineAtCursor } from './insert-newline-at-cursor.js';
 
 const params = new URLSearchParams(window.location.search);
@@ -50,36 +51,17 @@ function traceEvalEvent(type, payload = {}) {
   window.agentUI.traceEvalEvent({ type, modalContextId: modalContextId || null, ...payload });
 }
 
-function rectFor(el) {
-  if (!(el instanceof HTMLElement)) return null;
-  const rect = el.getBoundingClientRect();
-  if (!rect || rect.width <= 0 || rect.height <= 0) return null;
-  const wx = window.screenX ?? window.screenLeft ?? 0;
-  const wy = window.screenY ?? window.screenTop ?? 0;
-  return {
-    left: Math.round(wx + rect.left),
-    top: Math.round(wy + rect.top),
-    right: Math.round(wx + rect.right),
-    bottom: Math.round(wy + rect.bottom),
-    width: Math.round(rect.width),
-    height: Math.round(rect.height),
-  };
-}
-
 function reportEvalUiState() {
   if (!window.agentUI || typeof window.agentUI.reportEvalUiState !== 'function') return;
-  const visibleText = document.body && typeof document.body.innerText === 'string'
-    ? document.body.innerText.replace(/\s+/g, ' ').trim()
-    : '';
+  const visibleText = visibleTextForEval();
   window.agentUI.reportEvalUiState('modal', {
     modalContextId: modalContextId || null,
-    promptRect: rectFor(promptEl),
-    createButtonRect: rectFor(btnCreateCat),
-    activeElement: document.activeElement ? { id: document.activeElement.id || '', tag: document.activeElement.tagName || '' } : null,
+    promptRect: rectForEvalElement(promptEl, { includeHidden: true }),
+    createButtonRect: rectForEvalElement(btnCreateCat, { includeHidden: true }),
+    activeElement: activeElementForEval(),
     promptValueLength: promptEl && typeof promptEl.value === 'string' ? promptEl.value.length : 0,
     promptValuePreview: promptEl && typeof promptEl.value === 'string' ? promptEl.value.slice(0, 120) : '',
-    visibleTextLength: visibleText.length,
-    visibleTextPreview: visibleText.slice(0, 4000),
+    ...visibleText,
   });
 }
 

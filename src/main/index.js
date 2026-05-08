@@ -504,9 +504,9 @@ function getAppSettingsPath() {
   return path.join(getAgentUIConfigDir(), 'settings.json');
 }
 
-function readAppSettings() {
+function readJsonStateStore(resolveFile) {
   try {
-    const file = getAppSettingsPath();
+    const file = resolveFile();
     if (!fs.existsSync(file)) return {};
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
     return data && typeof data === 'object' ? data : {};
@@ -515,14 +515,22 @@ function readAppSettings() {
   }
 }
 
-function writeAppSettings(patch = {}) {
+function writeJsonStateStore(resolveFile, readCurrent, patch = {}) {
   try {
-    const file = getAppSettingsPath();
-    const current = readAppSettings();
+    const file = resolveFile();
+    const current = readCurrent();
     fs.writeFileSync(file, JSON.stringify({ ...current, ...patch }, null, 2), 'utf8');
   } catch {
     // ignore persistence errors
   }
+}
+
+function readAppSettings() {
+  return readJsonStateStore(getAppSettingsPath);
+}
+
+function writeAppSettings(patch = {}) {
+  writeJsonStateStore(getAppSettingsPath, readAppSettings, patch);
 }
 
 function normalizeInputMode(value) {
@@ -540,24 +548,11 @@ function setSelectedInputMode(mode, { persist = true } = {}) {
 }
 
 function readPetOverlayState() {
-  try {
-    const file = getPetOverlayStatePath();
-    if (!fs.existsSync(file)) return {};
-    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return data && typeof data === 'object' ? data : {};
-  } catch {
-    return {};
-  }
+  return readJsonStateStore(getPetOverlayStatePath);
 }
 
 function writePetOverlayState(patch = {}) {
-  try {
-    const file = getPetOverlayStatePath();
-    const current = readPetOverlayState();
-    fs.writeFileSync(file, JSON.stringify({ ...current, ...patch }, null, 2), 'utf8');
-  } catch {
-    // ignore persistence errors
-  }
+  writeJsonStateStore(getPetOverlayStatePath, readPetOverlayState, patch);
 }
 
 function normalizePetCharacterId(id) {
@@ -1254,21 +1249,13 @@ function focusExistingSessionWindow(reason) {
   return false;
 }
 
-function openNewCatModal(modalContextId, inputMode = selectedInputMode) {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  const normalizedInputMode = normalizeInputMode(inputMode);
-  recordTrace('modal_show_requested', { modalContextId: modalContextId || null, inputMode: normalizedInputMode });
-
-  if (focusExistingSessionWindow('new_session_requested')) return null;
-
-  const modalBounds = centeredWindowBounds(680, 240, launchDisplayForModal(modalContextId));
-
-  const win = new BrowserWindow({
-    width: modalBounds.width,
-    height: modalBounds.height,
-    x: modalBounds.x,
-    y: modalBounds.y,
-    useContentSize: true,
+function overlaySessionWindowOptions(bounds, { useContentSize = false } = {}) {
+  return {
+    width: bounds.width,
+    height: bounds.height,
+    x: bounds.x,
+    y: bounds.y,
+    ...(useContentSize ? { useContentSize: true } : {}),
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -1286,7 +1273,28 @@ function openNewCatModal(modalContextId, inputMode = selectedInputMode) {
       contextIsolation: true,
       nodeIntegration: false,
     },
-  });
+  };
+}
+
+function loadTrustedRendererPage(win, pageName, query) {
+  const rendererDevBase = trustedRendererDevBaseUrl();
+  if (rendererDevBase) {
+    const base = rendererDevBase;
+    return win.loadURL(`${base}/${pageName}?${new URLSearchParams(query).toString()}`);
+  }
+  return win.loadFile(path.join(__dirname, `../renderer/${pageName}`), { query });
+}
+
+function openNewCatModal(modalContextId, inputMode = selectedInputMode) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const normalizedInputMode = normalizeInputMode(inputMode);
+  recordTrace('modal_show_requested', { modalContextId: modalContextId || null, inputMode: normalizedInputMode });
+
+  if (focusExistingSessionWindow('new_session_requested')) return null;
+
+  const modalBounds = centeredWindowBounds(680, 240, launchDisplayForModal(modalContextId));
+
+  const win = new BrowserWindow(overlaySessionWindowOptions(modalBounds, { useContentSize: true }));
   modalWindow = win;
   applyTrustedWebContentsPolicy(win);
   applyOverlayWindowPolicy(win, { level: FOCUSED_OVERLAY_WINDOW_LEVEL });
@@ -1325,18 +1333,8 @@ function openNewCatModal(modalContextId, inputMode = selectedInputMode) {
     });
   });
 
-  const rendererDevBase = trustedRendererDevBaseUrl();
-  if (rendererDevBase) {
-    const base = rendererDevBase;
-    win.loadURL(`${base}/modal.html?${new URLSearchParams({
-      modalContextId: modalContextId || '',
-      inputMode: normalizedInputMode,
-    }).toString()}`);
-  } else {
-    win.loadFile(path.join(__dirname, '../renderer/modal.html'), {
-      query: { modalContextId: modalContextId || '', inputMode: normalizedInputMode },
-    });
-  }
+  const query = { modalContextId: modalContextId || '', inputMode: normalizedInputMode };
+  loadTrustedRendererPage(win, 'modal.html', query);
   return win;
 }
 
@@ -1358,29 +1356,7 @@ function openConversationWindow(catId) {
     displayForPetOrCursor()
   );
 
-  const win = new BrowserWindow({
-    width: conversationBounds.width,
-    height: conversationBounds.height,
-    x: conversationBounds.x,
-    y: conversationBounds.y,
-    frame: false,
-    transparent: true,
-    backgroundColor: '#00000000',
-    hasShadow: false,
-    resizable: false,
-    minimizable: false,
-    maximizable: false,
-    modal: false,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    show: false,
-    ...macPanelWindowOptions(),
-    webPreferences: {
-      preload: path.join(__dirname, '../preload/index.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
+  const win = new BrowserWindow(overlaySessionWindowOptions(conversationBounds));
   conversationWindow = win;
   activeConversationCatId = q.catId;
   applyTrustedWebContentsPolicy(win);
@@ -1403,17 +1379,7 @@ function openConversationWindow(catId) {
     if (cleared) activeConversationCatId = null;
   });
 
-  const rendererDevBase = trustedRendererDevBaseUrl();
-  if (rendererDevBase) {
-    const base = rendererDevBase;
-    void win.loadURL(
-      `${base}/conversation.html?${new URLSearchParams(q).toString()}`
-    );
-  } else {
-    void win.loadFile(path.join(__dirname, '../renderer/conversation.html'), {
-      query: q,
-    });
-  }
+  void loadTrustedRendererPage(win, 'conversation.html', q);
 }
 
 function displayForAuthWindow(pendingRun = null) {
@@ -1433,30 +1399,7 @@ function openHermesAuthWindow({ pendingRun = null, reason = '' } = {}) {
   }
 
   const bounds = centeredWindowBounds(640, 560, displayForAuthWindow(pendingRun));
-  const win = new BrowserWindow({
-    width: bounds.width,
-    height: bounds.height,
-    x: bounds.x,
-    y: bounds.y,
-    useContentSize: true,
-    frame: false,
-    transparent: true,
-    backgroundColor: '#00000000',
-    hasShadow: false,
-    resizable: false,
-    minimizable: false,
-    maximizable: false,
-    modal: false,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    show: false,
-    ...macPanelWindowOptions(),
-    webPreferences: {
-      preload: path.join(__dirname, '../preload/index.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
+  const win = new BrowserWindow(overlaySessionWindowOptions(bounds, { useContentSize: true }));
   authWindow = win;
   applyTrustedWebContentsPolicy(win);
   applyOverlayWindowPolicy(win, { level: FOCUSED_OVERLAY_WINDOW_LEVEL });
@@ -1490,13 +1433,7 @@ function openHermesAuthWindow({ pendingRun = null, reason = '' } = {}) {
     pending: pendingAuthRun ? '1' : '',
     reason: String(reason || ''),
   };
-  const rendererDevBase = trustedRendererDevBaseUrl();
-  if (rendererDevBase) {
-    const base = rendererDevBase;
-    void win.loadURL(`${base}/auth.html?${new URLSearchParams(query).toString()}`);
-  } else {
-    void win.loadFile(path.join(__dirname, '../renderer/auth.html'), { query });
-  }
+  void loadTrustedRendererPage(win, 'auth.html', query);
   return win;
 }
 

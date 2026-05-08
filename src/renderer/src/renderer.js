@@ -1,5 +1,7 @@
 /* global agentUI */
 
+import { rectForEvalElement } from './eval-ui-state.js';
+
 const root = document.getElementById('pet-root');
 const shell = document.getElementById('pet-shell');
 const mascot = document.getElementById('pet-mascot');
@@ -119,29 +121,12 @@ function traceEvalEvent(type, payload = {}) {
   window.agentUI.traceEvalEvent({ type, ...payload });
 }
 
-function rectFor(el) {
-  if (!(el instanceof HTMLElement)) return null;
-  if (el.hidden || window.getComputedStyle(el).display === 'none') return null;
-  const rect = el.getBoundingClientRect();
-  if (!rect || rect.width <= 0 || rect.height <= 0) return null;
-  const wx = window.screenX ?? window.screenLeft ?? 0;
-  const wy = window.screenY ?? window.screenTop ?? 0;
-  return {
-    left: Math.round(wx + rect.left),
-    top: Math.round(wy + rect.top),
-    right: Math.round(wx + rect.right),
-    bottom: Math.round(wy + rect.bottom),
-    width: Math.round(rect.width),
-    height: Math.round(rect.height),
-  };
-}
-
 function reportEvalUiState(list = notifications()) {
   if (!window.agentUI || typeof window.agentUI.reportEvalUiState !== 'function') return;
   const top = list[0] || null;
   const cats = [];
   const push = (el, catId) => {
-    const rect = rectFor(el);
+    const rect = rectForEvalElement(el);
     if (!rect || !catId) return;
     cats.push({ catId, ...rect });
   };

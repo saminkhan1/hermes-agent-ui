@@ -1,5 +1,6 @@
 /* global agentUI */
 
+import { activeElementForEval, rectForEvalElement, visibleTextForEval } from './eval-ui-state.js';
 import { insertNewlineAtCursor } from './insert-newline-at-cursor.js';
 
 const params = new URLSearchParams(window.location.search);
@@ -17,27 +18,9 @@ const composerError = document.getElementById('composer-error');
 let unsubUpdated = null;
 let lastData = null;
 
-function rectFor(el) {
-  if (!(el instanceof HTMLElement)) return null;
-  const rect = el.getBoundingClientRect();
-  if (!rect || rect.width <= 0 || rect.height <= 0) return null;
-  const wx = window.screenX ?? window.screenLeft ?? 0;
-  const wy = window.screenY ?? window.screenTop ?? 0;
-  return {
-    left: Math.round(wx + rect.left),
-    top: Math.round(wy + rect.top),
-    right: Math.round(wx + rect.right),
-    bottom: Math.round(wy + rect.bottom),
-    width: Math.round(rect.width),
-    height: Math.round(rect.height),
-  };
-}
-
 function reportEvalUiState() {
   if (!window.agentUI || typeof window.agentUI.reportEvalUiState !== 'function') return;
-  const visibleText = document.body && typeof document.body.innerText === 'string'
-    ? document.body.innerText.replace(/\s+/g, ' ').trim()
-    : '';
+  const visibleText = visibleTextForEval();
   const lineEntries = Array.from(document.querySelectorAll('.line')).slice(0, 20).map((line) => {
     const label = line.querySelector('.line-label');
     const text = line.querySelector('.line-text');
@@ -48,11 +31,10 @@ function reportEvalUiState() {
   });
   window.agentUI.reportEvalUiState('conversation', {
     catId: catId || null,
-    logRect: rectFor(logEl),
-    followupRect: rectFor(followupInput),
-    activeElement: document.activeElement ? { id: document.activeElement.id || '', tag: document.activeElement.tagName || '' } : null,
-    visibleTextLength: visibleText.length,
-    visibleTextPreview: visibleText.slice(0, 4000),
+    logRect: rectForEvalElement(logEl, { includeHidden: true }),
+    followupRect: rectForEvalElement(followupInput, { includeHidden: true }),
+    activeElement: activeElementForEval(),
+    ...visibleText,
     lineEntries,
   });
 }
