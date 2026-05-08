@@ -10,6 +10,7 @@ const agents = require('../src/main/agents');
 
 const originalEnv = { ...process.env };
 const originalFetch = global.fetch;
+const originalDateNow = Date.now;
 
 function emptySseResponse() {
   return new Response(new ReadableStream({
@@ -53,6 +54,7 @@ function setupGatewayEnv(t) {
     agents.setOnAuthRequired(() => {});
     agents.setOnConversationPushed(() => {});
     global.fetch = originalFetch;
+    Date.now = originalDateNow;
     process.env = { ...originalEnv };
   });
 }
@@ -563,6 +565,86 @@ test('gateway typing events expose typing state without forcing terminal status'
 
   conversation = agents.getAgentConversation('cat-typing');
   assert.equal(conversation.runStatus, 'running');
+  assert.equal(conversation.typing.active, false);
+});
+
+test('gateway typing heartbeats are coalesced without hiding real state changes', (t) => {
+  setupGatewayEnv(t);
+  const pushes = [];
+  let currentTime = 100000;
+  Date.now = () => currentTime;
+  agents.setOnConversationPushed((info) => pushes.push(info));
+
+  agents._test.handleGatewayEvent({
+    seq: 100,
+    type: 'typing.started',
+    conversation_id: 'cat-heartbeat',
+    message_id: 'm1',
+    metadata: { phase: 'thinking' },
+  });
+  assert.equal(pushes.length, 1);
+
+  currentTime += 1000;
+  agents._test.handleGatewayEvent({
+    seq: 101,
+    type: 'typing.started',
+    conversation_id: 'cat-heartbeat',
+    message_id: 'm1',
+    metadata: { phase: 'thinking' },
+  });
+  assert.equal(pushes.length, 1);
+  assert.equal(agents.getAgentConversation('cat-heartbeat').typing.seq, 101);
+
+  currentTime += 1000;
+  agents._test.handleGatewayEvent({
+    seq: 102,
+    type: 'typing.started',
+    conversation_id: 'cat-heartbeat',
+    message_id: 'm1',
+    metadata: { phase: 'tool-call' },
+  });
+  assert.equal(pushes.length, 2);
+
+  currentTime += 1000;
+  agents._test.handleGatewayEvent({
+    seq: 103,
+    type: 'typing.started',
+    conversation_id: 'cat-heartbeat',
+    message_id: 'm2',
+    metadata: { phase: 'tool-call' },
+  });
+  assert.equal(pushes.length, 3);
+
+  currentTime += 4000;
+  agents._test.handleGatewayEvent({
+    seq: 104,
+    type: 'typing.started',
+    conversation_id: 'cat-heartbeat',
+    message_id: 'm2',
+    metadata: { phase: 'tool-call' },
+  });
+  assert.equal(pushes.length, 3);
+
+  currentTime += 1000;
+  agents._test.handleGatewayEvent({
+    seq: 105,
+    type: 'typing.started',
+    conversation_id: 'cat-heartbeat',
+    message_id: 'm2',
+    metadata: { phase: 'tool-call' },
+  });
+  assert.equal(pushes.length, 4);
+
+  currentTime += 100;
+  agents._test.handleGatewayEvent({
+    seq: 106,
+    type: 'typing.stopped',
+    conversation_id: 'cat-heartbeat',
+    outcome: 'success',
+  });
+  const conversation = agents.getAgentConversation('cat-heartbeat');
+  assert.equal(pushes.length, 5);
+  assert.equal(conversation.runStatus, 'completed');
   assert.equal(conversation.typing.active, false);
 });
 

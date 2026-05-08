@@ -83,6 +83,14 @@ h1 {
   line-height: 1.2;
 }
 
+.step-title {
+  color: rgba(237, 236, 236, 0.82);
+  font-size: 13px;
+  font-weight: 650;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 p {
   margin: 0;
 }
@@ -120,6 +128,60 @@ p {
   min-height: 0;
   overflow: auto;
   padding: 16px;
+}
+
+.pending-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(245, 78, 0, 0.28);
+  border-radius: 10px;
+  background: rgba(245, 78, 0, 0.1);
+  color: rgba(237, 236, 236, 0.78);
+  font-size: 12px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.pending-banner strong {
+  color: #fff;
+  font-size: 12px;
+}
+
+.setup-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+}
+
+.setup-step {
+  position: relative;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(237, 236, 236, 0.48);
+  font-size: 11px;
+  font-weight: 750;
+  text-align: center;
+}
+
+.setup-step.is-active {
+  border-color: rgba(245, 78, 0, 0.45);
+  background: rgba(245, 78, 0, 0.14);
+  color: #fff;
+}
+
+.setup-step.is-complete {
+  border-color: rgba(121, 184, 116, 0.36);
+  background: rgba(121, 184, 116, 0.1);
+  color: rgba(237, 236, 236, 0.78);
 }
 
 .step {
@@ -173,7 +235,6 @@ select.field {
   box-shadow: 0 0 0 1px rgba(245, 78, 0, 0.18);
 }
 
-.mode-row,
 .oauth-actions,
 .footer-actions {
   display: flex;
@@ -181,11 +242,6 @@ select.field {
   gap: 8px;
 }
 
-.mode-row {
-  margin-top: 4px;
-}
-
-.mode-btn,
 .secondary-action,
 .primary-action {
   border-radius: 7px;
@@ -195,7 +251,6 @@ select.field {
   line-height: 1.35;
 }
 
-.mode-btn,
 .secondary-action {
   padding: 6px 10px;
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -203,15 +258,8 @@ select.field {
   color: rgba(237, 236, 236, 0.88);
 }
 
-.mode-btn:hover,
 .secondary-action:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.13);
-  color: #fff;
-}
-
-.mode-btn.is-selected {
-  border-color: rgba(245, 78, 0, 0.5);
-  background: rgba(245, 78, 0, 0.16);
   color: #fff;
 }
 
@@ -229,8 +277,7 @@ select.field {
 }
 
 .primary-action:disabled,
-.secondary-action:disabled,
-.mode-btn:disabled {
+.secondary-action:disabled {
   opacity: 0.45;
   cursor: default;
 }

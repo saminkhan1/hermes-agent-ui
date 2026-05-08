@@ -7,7 +7,7 @@
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' agent-ui-pet: data: blob:; connect-src 'self' ws://localhost:* http://localhost:*; object-src 'none';"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Hermes Login</title>
+    <title>Agent UI Setup</title>
     <link rel="stylesheet" href="/src/auth.css" />
   </head>
   <body>
@@ -15,8 +15,8 @@
       <header class="header">
         <div id="header-app-icon" class="header-app-icon" role="img" aria-label="agent-UI"></div>
         <div class="header-copy">
-          <h1>Connect Hermes</h1>
-          <p id="subtitle">Hermes handles provider auth. agent-UI only sends input and shows output.</p>
+          <h1 id="title">Finish setup</h1>
+          <p id="subtitle">Sign in once, choose a model, then start working from the desktop shortcut.</p>
         </div>
         <button type="button" id="btn-close" class="close-btn" aria-label="Close">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
@@ -24,27 +24,32 @@
       </header>
 
       <main class="main">
+        <section id="pending-banner" class="pending-banner" hidden>
+          <strong>Your task is ready.</strong>
+          <span>Finish setup once and agent-UI will start it automatically.</span>
+        </section>
+
+        <ol class="setup-steps" aria-label="Setup progress">
+          <li id="step-signin" class="setup-step is-active">Sign in</li>
+          <li id="step-model" class="setup-step">Pick model</li>
+          <li id="step-start" class="setup-step">Ready</li>
+        </ol>
+
         <section id="connect-step" class="step">
+          <p class="step-title">Choose the provider Hermes should use.</p>
           <label class="field-label" for="provider-select">Provider</label>
           <select id="provider-select" class="field"></select>
-
-          <div class="mode-row">
-            <button type="button" id="btn-oauth" class="mode-btn">Use Hermes sign-in</button>
-            <button type="button" id="btn-api-mode" class="mode-btn">Use API key</button>
-          </div>
 
           <div id="api-panel" class="panel" hidden>
             <label class="field-label" for="api-key-input">API key</label>
             <input id="api-key-input" class="field" type="password" autocomplete="off" spellcheck="false" />
             <label class="field-label" for="label-input">Label <span>optional</span></label>
             <input id="label-input" class="field" type="text" autocomplete="off" spellcheck="false" />
-            <button type="button" id="btn-save-key" class="primary-action">Connect</button>
           </div>
 
           <div id="oauth-panel" class="panel" hidden>
             <div class="oauth-topline">
-              <span id="oauth-status" class="oauth-status">Ready to start browser sign-in.</span>
-              <button type="button" id="btn-start-oauth" class="primary-action">Start sign-in</button>
+              <span id="oauth-status" class="oauth-status">Ready to open the provider sign-in page.</span>
             </div>
             <div id="oauth-summary" class="oauth-summary" hidden>
               <label class="summary-label" for="oauth-url">Link</label>
@@ -69,6 +74,7 @@
         </section>
 
         <section id="model-step" class="step" hidden>
+          <p class="step-title">Choose the default model for new tasks.</p>
           <label class="field-label" for="model-provider-select">Provider</label>
           <select id="model-provider-select" class="field"></select>
 

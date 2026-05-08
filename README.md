@@ -135,6 +135,7 @@ Gateway mode behavior:
 - Sends follow-ups as plain text while Hermes owns same-session busy behavior.
 - Sends conversation-window cancel as `/stop` through the same Hermes gateway conversation.
 - Reconnects SSE from the last recorded sequence; if the replay window expired, it reconnects live and adds a local sync-gap error item.
+- Leaves Hermes session finalization in Hermes core. Follow-up there: decide whether `local_desktop` completion should finalize sessions earlier than idle expiry.
 
 ## Clone And Install
 
@@ -193,7 +194,8 @@ If the built app is missing, run `npm run build` from the repo root.
 11. In the app or tray menu, choose `Settings > Input Mode > Voice`.
 12. Press `Cmd+Shift+C`, grant macOS microphone permission if prompted, and confirm the prompt window shows voice recording/transcribing state.
 13. Confirm the transcribed prompt appears in the text box, edit it if needed, then submit it to start a new session.
-14. Quit/reopen the app and confirm the selected input mode and gateway reconnect path do not show a startup error.
+14. While the pet overlay is visible, share the active display from FaceTime, Zoom, and Discord, then confirm the share starts and the overlay remains visible in the shared display.
+15. Quit/reopen the app and confirm the selected input mode and gateway reconnect path do not show a startup error.
 
 Known first-run cases to check:
 

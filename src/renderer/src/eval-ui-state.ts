@@ -1,4 +1,4 @@
-export function rectForEvalElement(el, { includeHidden = false } = {}) {
+export function rectForEvalElement(el: any, { includeHidden = false } = {}) {
   if (!(el instanceof HTMLElement)) return null;
   if (!includeHidden && (el.hidden || window.getComputedStyle(el).display === 'none')) return null;
   const rect = el.getBoundingClientRect();

@@ -55,6 +55,18 @@ test('eval UI targets keep live window state authoritative over stale snapshots'
   assert.match(body, /overlay: \{[\s\S]*\.\.\.overlay,[\s\S]*\.\.\.evalWindowState\(mainWindow\)/);
 });
 
+test('overlay and session windows stay compatible with display screen sharing', () => {
+  const compatibilityBody = functionBody('applyScreenShareCompatibilityPolicy');
+  const overlayPolicyBody = functionBody('applyOverlayWindowPolicy');
+  const activeWindowBody = functionBody('readActiveWindowSnapshot');
+
+  assert.match(compatibilityBody, /setContentProtection\(false\)/);
+  assert.match(overlayPolicyBody, /applyScreenShareCompatibilityPolicy\(win\)/);
+  assert.match(activeWindowBody, /screenRecordingPermission: false/);
+  assert.doesNotMatch(main, /setContentProtection\(true\)/);
+  assert.doesNotMatch(main, /desktopCapturer|getDisplayMedia|ScreenCaptureKit/);
+});
+
 test('auth window dismisses without clearing pending auth work', () => {
   const body = functionBody('openHermesAuthWindow');
   const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'auth.ts'), 'utf8');
@@ -116,6 +128,26 @@ test('global quit shortcut is not registered', () => {
   assert.match(main, /globalShortcut\.register\(newCatAccelerator/);
   assert.doesNotMatch(main, /globalShortcut\.register\('Command\+Q'/);
   assert.doesNotMatch(main, /globalShortcut\.register\('Control\+Q'/);
+});
+
+test('new session entry points are available before startup gateway hydration', () => {
+  const readyStart = main.indexOf('app.whenReady().then');
+  assert.notEqual(readyStart, -1, 'app ready startup block exists');
+  const readyBody = main.slice(readyStart);
+  const registerIndex = readyBody.indexOf('registerNewCatShortcut()');
+  const evalServerIndex = readyBody.indexOf('startEvalServerIfNeeded()');
+  const prewarmIndex = readyBody.indexOf('prewarmGatewayReady');
+  const hydrationIndex = readyBody.indexOf('hydrateGatewayConversations');
+
+  assert.notEqual(registerIndex, -1, 'shortcut is registered during startup');
+  assert.notEqual(evalServerIndex, -1, 'eval launcher server starts during startup');
+  assert.notEqual(prewarmIndex, -1, 'gateway prewarm still starts during startup');
+  assert.notEqual(hydrationIndex, -1, 'gateway hydration still starts during startup');
+  assert.ok(registerIndex < prewarmIndex, 'shortcut is registered before gateway prewarm');
+  assert.ok(evalServerIndex < prewarmIndex, 'eval launcher starts before gateway prewarm');
+  assert.ok(prewarmIndex < hydrationIndex, 'gateway prewarm still precedes hydration');
+  assert.doesNotMatch(main, /sessionEntryReady/);
+  assert.doesNotMatch(main, /startup gateway readiness still pending/);
 });
 
 test('gateway replay hydration is pushed into the overlay on launch', () => {

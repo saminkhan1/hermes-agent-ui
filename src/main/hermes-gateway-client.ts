@@ -59,7 +59,7 @@ type GatewayError = Error & {
   body?: unknown;
 };
 
-function ensureDir(dir) {
+function ensureDir(dir: any) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
@@ -71,7 +71,7 @@ function defaultGatewayEnvPath() {
   return defaultGatewayEnvPathForMode();
 }
 
-function unquoteEnvValue(value) {
+function unquoteEnvValue(value: any) {
   const text = String(value || '').trim();
   if (
     (text.startsWith('"') && text.endsWith('"')) ||
@@ -103,7 +103,7 @@ function readGatewayEnvFile(file = defaultGatewayEnvPath()): Record<string, stri
   }
 }
 
-function gatewayEnvValue(name) {
+function gatewayEnvValue(name: any) {
   const direct = String(process.env[name] || '').trim();
   if (direct) return direct;
   return String(readGatewayEnvFile()[name] || '').trim();
@@ -121,7 +121,7 @@ function gatewayKeyFromEnv() {
   return gatewayEnvValue('AGENT_UI_HERMES_GATEWAY_KEY') || gatewayEnvValue('LOCAL_DESKTOP_GATEWAY_KEY');
 }
 
-function readJsonFile(file, fallback) {
+function readJsonFile(file: any, fallback: any) {
   try {
     if (!fs.existsSync(file)) return fallback;
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -131,33 +131,33 @@ function readJsonFile(file, fallback) {
   }
 }
 
-function writeJsonFile(file, value) {
+function writeJsonFile(file: any, value: any) {
   ensureDir(path.dirname(file));
   fs.writeFileSync(file, JSON.stringify(value, null, 2), 'utf8');
 }
 
-function sleep(ms) {
+function sleep(ms: any) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isRetryableStatus(status) {
+function isRetryableStatus(status: any) {
   const code = Number(status);
   return code === 429 || (code >= 500 && code <= 599);
 }
 
-function gatewayConnectionErrorMessage(error: any, baseUrl) {
+function gatewayConnectionErrorMessage(error: any, baseUrl: any) {
   const raw = error && error.message ? error.message : String(error || 'disconnected');
   const cause = error && error.cause && error.cause.message ? ` (${error.cause.message})` : '';
   return `${raw}${cause}. Check that Hermes gateway is running at ${baseUrl}.`;
 }
 
-function gatewayConnectionError(error, baseUrl) {
+function gatewayConnectionError(error: any, baseUrl: any) {
   const wrapped: GatewayError = new Error(gatewayConnectionErrorMessage(error, baseUrl));
   wrapped.cause = error;
   return wrapped;
 }
 
-function parseSseFrame(frame): LocalDesktopGatewayEvent | JsonObject | null {
+function parseSseFrame(frame: any): LocalDesktopGatewayEvent | JsonObject | null {
   const event = { event: 'message', data: '', id: '' };
   for (const rawLine of String(frame || '').split(/\r?\n/)) {
     if (!rawLine || rawLine.startsWith(':')) continue;
@@ -265,7 +265,7 @@ class HermesGatewayClient {
     if (this.stateDirty || this.stateSaveTimer) this.saveState();
   }
 
-  logSseDisconnect(error) {
+  logSseDisconnect(error: any) {
     const message = gatewayConnectionErrorMessage(error, this.baseUrl);
     const now = Date.now();
     if (

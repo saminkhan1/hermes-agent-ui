@@ -279,6 +279,7 @@ test('ensureGatewayProcess rotates the gateway port when the preferred port is o
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-runtime-port-'));
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-runtime-home-'));
   const blockedPort = 8766;
+  const warnings = [];
   mockCreateServer(t, (port) => port === blockedPort);
   t.after(() => {
     stopGatewayProcess();
@@ -289,15 +290,20 @@ test('ensureGatewayProcess rotates the gateway port when the preferred port is o
   process.env.AGENT_UI_HERMES_BIN = path.join(configDir, 'missing-hermes');
   ensureGatewayEnvFile({ LOCAL_DESKTOP_PORT: String(blockedPort) });
 
-  const result = await ensureGatewayProcess({ warn() {}, log() {} });
+  const result = await ensureGatewayProcess({ warn: (...args) => warnings.push(args), log() {} });
   const env = fs.readFileSync(path.join(homeDir, '.env'), 'utf8');
 
   assert.equal(result.ok, false);
   assert.match(result.error, /Hermes executable is missing/);
+  assert.equal(result.portRotated, true);
+  assert.equal(result.previousBaseUrl, `http://127.0.0.1:${blockedPort}`);
+  assert.equal(result.baseUrl, `http://127.0.0.1:${process.env.LOCAL_DESKTOP_PORT}`);
+  assert.equal(result.reason, 'preferred-port-occupied');
   assert.doesNotMatch(env, new RegExp(`LOCAL_DESKTOP_PORT=${blockedPort}\\b`));
   assert.match(env, /LOCAL_DESKTOP_PORT=\d+/);
   assert.notEqual(process.env.LOCAL_DESKTOP_PORT, String(blockedPort));
   assert.equal(process.env.AGENT_UI_HERMES_GATEWAY_URL, `http://127.0.0.1:${process.env.LOCAL_DESKTOP_PORT}`);
+  assert.equal(warnings.some((args) => /port was occupied/.test(args.join(' '))), true);
 });
 
 test('ensureGatewayProcess reconciles direct gateway URL with the Hermes env file', async (t) => {

@@ -13,7 +13,7 @@
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "strict": false,
+    "strict": true,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true
   },

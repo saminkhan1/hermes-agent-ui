@@ -10,21 +10,22 @@ import type {
 
 const params = new URLSearchParams(window.location.search);
 
+const titleEl = document.getElementById('title');
 const headerAppIcon = document.getElementById('header-app-icon');
 const subtitleEl = document.getElementById('subtitle');
 const closeBtn = document.getElementById('btn-close');
+const pendingBanner = document.getElementById('pending-banner');
+const stepSignin = document.getElementById('step-signin');
+const stepModel = document.getElementById('step-model');
+const stepStart = document.getElementById('step-start');
 const connectStep = document.getElementById('connect-step');
 const modelStep = document.getElementById('model-step');
 const providerSelect = document.getElementById('provider-select') as HTMLSelectElement | null;
-const oauthBtn = document.getElementById('btn-oauth') as HTMLButtonElement | null;
-const apiModeBtn = document.getElementById('btn-api-mode') as HTMLButtonElement | null;
 const apiPanel = document.getElementById('api-panel');
 const apiKeyInput = document.getElementById('api-key-input') as HTMLInputElement | null;
 const labelInput = document.getElementById('label-input') as HTMLInputElement | null;
-const saveKeyBtn = document.getElementById('btn-save-key') as HTMLButtonElement | null;
 const oauthPanel = document.getElementById('oauth-panel');
 const oauthStatus = document.getElementById('oauth-status');
-const startOauthBtn = document.getElementById('btn-start-oauth') as HTMLButtonElement | null;
 const oauthSummary = document.getElementById('oauth-summary');
 const oauthUrlEl = document.getElementById('oauth-url') as HTMLInputElement | null;
 const oauthCodeEl = document.getElementById('oauth-code') as HTMLInputElement | null;
@@ -51,25 +52,27 @@ let step = 'connect';
 let hasPendingRun = params.get('pending') === '1';
 let activeOauthSessionId = '';
 let latestOauthUrl = '';
+let openedOauthUrl = '';
 let latestUserCode = '';
 let oauthTranscript = '';
 let oauthCancelRequested = false;
 let oauthMonitorState = 'idle';
+let autoStartedOAuth = false;
 
-function stripAnsi(value) {
+function stripAnsi(value: any) {
   return String(value || '').replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
 }
 
-function cleanHermesOutput(value) {
+function cleanHermesOutput(value: any) {
   return stripAnsi(value).replace(/\r/g, '');
 }
 
-function extractUrls(value) {
+function extractUrls(value: any) {
   const text = cleanHermesOutput(value);
   return Array.from(new Set((text.match(/https?:\/\/[^\s)>"']+/g) || []).map((url) => url.replace(/[.,;]+$/, ''))));
 }
 
-function extractUserCode(value) {
+function extractUserCode(value: any) {
   const text = cleanHermesOutput(value);
   const explicit = text.match(/enter (?:this )?code:\s*\n\s*([A-Z0-9][A-Z0-9-]{3,})/i);
   if (explicit) return explicit[1].trim();
@@ -96,6 +99,9 @@ function sortedCatalog() {
     const aAuthed = authed.has(providerId(a)) ? 0 : 1;
     const bAuthed = authed.has(providerId(b)) ? 0 : 1;
     if (aAuthed !== bAuthed) return aAuthed - bAuthed;
+    const aOauth = a.oauth_capable || a.auth_type !== 'api_key' ? 0 : 1;
+    const bOauth = b.oauth_capable || b.auth_type !== 'api_key' ? 0 : 1;
+    if (aOauth !== bOauth) return aOauth - bOauth;
     return providerLabel(a).localeCompare(providerLabel(b));
   });
 }
@@ -113,7 +119,7 @@ function setError(message: unknown) {
 }
 
 function setBusy(busy: boolean, label = '') {
-  for (const el of [providerSelect, oauthBtn, apiModeBtn, startOauthBtn, checkOauthBtn, retryOauthBtn, saveKeyBtn, modelProviderSelect, modelSelect, customModelInput, primaryBtn, backBtn]) {
+  for (const el of [providerSelect, checkOauthBtn, retryOauthBtn, modelProviderSelect, modelSelect, customModelInput, primaryBtn, backBtn]) {
     if (el) el.disabled = !!busy;
   }
   if (primaryBtn && label) primaryBtn.textContent = label;
@@ -142,12 +148,45 @@ function syncFooter() {
   const hasCredentials = Array.isArray(status?.providers) && status.providers.length > 0;
   if (backBtn) backBtn.hidden = step !== 'model';
   if (primaryBtn) {
-    primaryBtn.hidden = step === 'connect' && !hasCredentials;
-    primaryBtn.textContent = step === 'model' ? (hasPendingRun ? 'Save & Start' : 'Save') : 'Continue';
+    const waitingForOauth = step === 'connect' && mode === 'oauth' && !!activeOauthSessionId && (oauthMonitorState === 'waiting' || oauthMonitorState === 'stale');
+    primaryBtn.hidden = false;
+    primaryBtn.disabled = waitingForOauth;
+    primaryBtn.textContent = step === 'model'
+      ? (hasPendingRun ? 'Save & Start Task' : 'Save Model')
+      : hasCredentials
+        ? 'Continue'
+        : waitingForOauth
+          ? 'Waiting for Sign-In'
+        : mode === 'api'
+          ? 'Save API Key'
+          : 'Open Browser Sign-In';
   }
   if (hintEl) {
     const escLabel = hasPendingRun || activeOauthSessionId || oauthMonitorState !== 'idle' ? '<kbd>Esc</kbd> hide' : '<kbd>Esc</kbd> close';
-    hintEl.innerHTML = step === 'model' ? 'Choose the model Hermes should use' : escLabel;
+    hintEl.innerHTML = step === 'model' ? 'Choose once; Hermes remembers it' : escLabel;
+  }
+}
+
+function syncSetupChrome() {
+  if (pendingBanner) pendingBanner.hidden = !hasPendingRun;
+  if (titleEl) titleEl.textContent = hasPendingRun ? 'Finish setup to start' : 'Finish setup';
+  for (const el of [stepSignin, stepModel, stepStart]) {
+    el?.classList.remove('is-active', 'is-complete');
+  }
+  const hasCredentials = Array.isArray(status?.providers) && status.providers.length > 0;
+  if (step === 'connect') {
+    stepSignin?.classList.add('is-active');
+  } else {
+    stepSignin?.classList.add('is-complete');
+    stepModel?.classList.add('is-active');
+  }
+  if (status?.ready) {
+    stepModel?.classList.remove('is-active');
+    stepModel?.classList.add('is-complete');
+    if (hasPendingRun) stepStart?.classList.add('is-active');
+  } else if (hasCredentials && step === 'connect') {
+    stepSignin?.classList.add('is-complete');
+    stepModel?.classList.add('is-active');
   }
 }
 
@@ -155,15 +194,15 @@ function showStep(nextStep: string) {
   step = nextStep;
   if (connectStep) connectStep.hidden = step !== 'connect';
   if (modelStep) modelStep.hidden = step !== 'model';
+  syncSetupChrome();
   syncFooter();
 }
 
 function setMode(nextMode: string) {
   mode = nextMode;
-  if (oauthBtn) oauthBtn.classList.toggle('is-selected', mode === 'oauth');
-  if (apiModeBtn) apiModeBtn.classList.toggle('is-selected', mode === 'api');
   if (oauthPanel) oauthPanel.hidden = mode !== 'oauth';
   if (apiPanel) apiPanel.hidden = mode !== 'api';
+  syncFooter();
 }
 
 function populateProviderSelect() {
@@ -178,17 +217,16 @@ function populateProviderSelect() {
   }
   if (prior && Array.from(providerSelect.options).some((option) => option.value === prior)) {
     providerSelect.value = prior;
-  } else if (status?.current_provider && Array.from(providerSelect.options).some((option) => option.value === status.current_provider)) {
+  } else if (status?.current_provider && Array.from(providerSelect.options).some((option) => option.value === status!.current_provider)) {
     providerSelect.value = status.current_provider;
   }
   syncProviderMode();
+  syncSetupChrome();
 }
 
 function syncProviderMode() {
   const provider = selectedCatalogProvider();
   const oauthCapable = !!(provider && (provider.oauth_capable || provider.auth_type !== 'api_key'));
-  if (oauthBtn) oauthBtn.disabled = !oauthCapable;
-  if (startOauthBtn) startOauthBtn.disabled = !oauthCapable || !!activeOauthSessionId;
   if (!mode) {
     setMode(oauthCapable ? 'oauth' : 'api');
   } else if (mode === 'oauth' && !oauthCapable) {
@@ -220,7 +258,7 @@ function populateModelProviders() {
 function populateModelsForSelectedProvider() {
   const provider = providerBySlug(modelProviderSelect?.value);
   const models = Array.isArray(provider?.models) ? provider.models : [];
-  const current = status?.current_provider === modelProviderSelect?.value ? String(status.current_model || '') : '';
+  const current = status?.current_provider === modelProviderSelect?.value ? String(status!.current_model || '') : '';
   if (modelSelect) {
     modelSelect.replaceChildren();
     for (const model of models) {
@@ -259,12 +297,16 @@ async function refreshStatus() {
   populateModelProviders();
   syncFooter();
   if (subtitleEl) {
-    if (status.ready) {
-      subtitleEl.textContent = `Connected: ${status.current_provider} / ${status.current_model}`;
-    } else if (status.needs_model) {
-      subtitleEl.textContent = 'Credentials found. Choose the model Hermes should use.';
+    if (status!.ready) {
+      subtitleEl.textContent = `Ready: ${status!.current_provider} / ${status!.current_model}`;
+    } else if (status!.needs_model) {
+      subtitleEl.textContent = hasPendingRun
+        ? 'Choose a model and your task will start automatically.'
+        : 'Choose the model Hermes should use.';
     } else {
-      subtitleEl.textContent = 'Hermes handles provider auth. agent-UI only sends input and shows output.';
+      subtitleEl.textContent = hasPendingRun
+        ? 'Sign in once and your task will continue automatically.'
+        : 'Sign in once, choose a model, then start working from the desktop shortcut.';
     }
   }
   return status;
@@ -290,7 +332,7 @@ async function saveApiKey() {
   }
 }
 
-function appendOauthOutput(text) {
+function appendOauthOutput(text: any) {
   oauthTranscript += cleanHermesOutput(text);
   const urls = extractUrls(oauthTranscript);
   latestOauthUrl = urls.length ? urls[urls.length - 1] : latestOauthUrl;
@@ -310,11 +352,9 @@ function setOauthStatus(message: unknown) {
 
 function syncOauthActions() {
   const hasSession = !!activeOauthSessionId;
-  const isWaiting = oauthMonitorState === 'waiting';
   const isStale = oauthMonitorState === 'stale';
   const isFailed = oauthMonitorState === 'failed';
   const isSuccess = oauthMonitorState === 'success';
-  if (startOauthBtn) startOauthBtn.disabled = hasSession && (isWaiting || isStale);
   if (openLinkBtn) openLinkBtn.disabled = !latestOauthUrl || isSuccess;
   if (copyLinkBtn) copyLinkBtn.disabled = !latestOauthUrl;
   if (copyCodeBtn) copyCodeBtn.disabled = !latestUserCode;
@@ -336,15 +376,27 @@ function updateOauthSummary() {
   syncOauthActions();
   if (!activeOauthSessionId || oauthMonitorState !== 'waiting') return;
   if (latestOauthUrl && latestUserCode) {
-    setOauthStatus('Open the link, then paste the code.');
+    maybeOpenOauthUrl();
+    setOauthStatus(openedOauthUrl === latestOauthUrl ? 'Browser opened. Enter the code there.' : 'Open the link, then paste the code.');
     setOauthMessage('Waiting for sign-in to finish.');
   } else if (latestOauthUrl) {
-    setOauthStatus('Open the link to continue.');
+    maybeOpenOauthUrl();
+    setOauthStatus(openedOauthUrl === latestOauthUrl ? 'Browser opened. Finish sign-in there.' : 'Open the link to continue.');
     setOauthMessage('Waiting for Hermes to provide a code.');
   } else {
     setOauthStatus('Starting browser sign-in.');
     setOauthMessage('Waiting for Hermes.');
   }
+}
+
+function maybeOpenOauthUrl() {
+  if (!latestOauthUrl || openedOauthUrl === latestOauthUrl || typeof window.agentUI?.openExternalUrl !== 'function') return;
+  openedOauthUrl = latestOauthUrl;
+  void window.agentUI.openExternalUrl(latestOauthUrl).then((result: any) => {
+    if (!result || result.ok !== false) return;
+    openedOauthUrl = '';
+    setError(result.error || 'Could not open the sign-in link.');
+  });
 }
 
 function resetCopyButton(button: HTMLButtonElement | null) {
@@ -378,6 +430,7 @@ async function applyAuthFlowSnapshot(flow: AuthFlow = {}, reason = '') {
   oauthMonitorState = nextState;
   activeOauthSessionId = String(flow.sessionId || '');
   latestOauthUrl = String(flow.latestUrl || '');
+  if (!latestOauthUrl) openedOauthUrl = '';
   latestUserCode = String(flow.userCode || '');
   if (flow.provider && providerSelect && Array.from(providerSelect.options).some((option) => option.value === flow.provider)) {
     providerSelect.value = flow.provider;
@@ -387,14 +440,19 @@ async function applyAuthFlowSnapshot(flow: AuthFlow = {}, reason = '') {
   setError('');
 
   if (nextState === 'waiting') {
-    setOauthStatus(latestOauthUrl ? 'Open the link, then paste the code.' : 'Starting browser sign-in.');
+    if (latestOauthUrl) maybeOpenOauthUrl();
+    setOauthStatus(latestOauthUrl
+      ? openedOauthUrl === latestOauthUrl
+        ? 'Browser opened. Finish sign-in there.'
+        : 'Open the link, then paste the code.'
+      : 'Starting browser sign-in.');
     setOauthMessage(latestOauthUrl ? 'Waiting for sign-in to finish.' : 'Waiting for Hermes.');
   } else if (nextState === 'stale') {
     setOauthStatus('Still waiting for browser sign-in.');
     setOauthMessage('Complete sign-in in your browser, or check again if you already finished.');
   } else if (nextState === 'failed') {
     setOauthStatus('Sign-in failed.');
-    setOauthMessage('Retry browser sign-in or use an API key.');
+    setOauthMessage('Retry browser sign-in or choose another provider.');
     setError(flow.lastError || 'Hermes sign-in failed.');
   } else if (nextState === 'success') {
     activeOauthSessionId = '';
@@ -407,8 +465,9 @@ async function applyAuthFlowSnapshot(flow: AuthFlow = {}, reason = '') {
   } else if (reason === 'auth-reset') {
     activeOauthSessionId = '';
     latestOauthUrl = '';
+    openedOauthUrl = '';
     latestUserCode = '';
-    setOauthStatus('Ready to start browser sign-in.');
+    setOauthStatus('Ready to open the provider sign-in page.');
     setOauthMessage('');
     updateOauthSummary();
   }
@@ -422,6 +481,7 @@ async function startOAuth(opts: { retry?: boolean } = {}) {
   setMode('oauth');
   setError('');
   latestOauthUrl = '';
+  openedOauthUrl = '';
   latestUserCode = '';
   oauthTranscript = '';
   oauthCancelRequested = false;
@@ -432,15 +492,13 @@ async function startOAuth(opts: { retry?: boolean } = {}) {
   resetCopyButton(copyLinkBtn);
   resetCopyButton(copyCodeBtn);
   updateOauthSummary();
-  if (startOauthBtn) startOauthBtn.disabled = true;
   if (cancelOauthBtn) cancelOauthBtn.disabled = true;
   const result = await window.agentUI.startHermesOAuth({ provider, retry: !!opts.retry });
   if (!result || result.ok === false) {
     oauthMonitorState = 'failed';
     setError((result && result.error) || 'Hermes could not start sign-in.');
     setOauthStatus('Sign-in could not start.');
-    setOauthMessage('Retry browser sign-in or use an API key.');
-    if (startOauthBtn) startOauthBtn.disabled = false;
+    setOauthMessage('Retry browser sign-in or choose another provider.');
     syncOauthActions();
     return;
   }
@@ -457,11 +515,11 @@ async function cancelOAuth() {
   oauthMonitorState = 'idle';
   activeOauthSessionId = '';
   latestOauthUrl = '';
+  openedOauthUrl = '';
   latestUserCode = '';
   setOauthStatus('Sign-in canceled.');
   setOauthMessage('');
   updateOauthSummary();
-  if (startOauthBtn) startOauthBtn.disabled = false;
   if (cancelOauthBtn) cancelOauthBtn.disabled = true;
 }
 
@@ -498,9 +556,16 @@ async function continueFromConnect() {
   if (mode === 'oauth') {
     await startOAuth();
   } else {
-    setMode('api');
-    apiKeyInput?.focus();
+    await saveApiKey();
   }
+}
+
+function maybeAutoStartOAuth() {
+  if (autoStartedOAuth || !hasPendingRun || step !== 'connect' || mode !== 'oauth') return;
+  if (activeOauthSessionId || oauthMonitorState !== 'idle') return;
+  if (status?.providers && status.providers.length > 0) return;
+  autoStartedOAuth = true;
+  void startOAuth();
 }
 
 async function closeWindow() {
@@ -513,24 +578,9 @@ async function closeWindow() {
 
 providerSelect?.addEventListener('change', () => {
   mode = '';
+  autoStartedOAuth = false;
   syncProviderMode();
-});
-
-oauthBtn?.addEventListener('click', () => {
-  setMode('oauth');
-});
-
-apiModeBtn?.addEventListener('click', () => {
-  setMode('api');
-  apiKeyInput?.focus();
-});
-
-startOauthBtn?.addEventListener('click', () => {
-  void startOAuth();
-});
-
-saveKeyBtn?.addEventListener('click', () => {
-  void saveApiKey();
+  syncFooter();
 });
 
 openLinkBtn?.addEventListener('click', () => {
@@ -625,16 +675,20 @@ window.agentUI?.onHermesAuthEvent?.((event: AuthEvent = {}) => {
 
 window.agentUI?.onHermesAuthContext?.((payload: AuthContext = {}) => {
   hasPendingRun = !!payload.hasPendingRun;
+  syncSetupChrome();
+  syncFooter();
   if (payload.authFlow) void applyAuthFlowSnapshot(payload.authFlow, payload.reason || '');
+  maybeAutoStartOAuth();
 });
 
 void (async () => {
   await loadHeaderAppIcon();
   showStep('connect');
-  await refreshStatus();
-  if (status?.ready || status?.needs_model) {
+  const currentStatus = await refreshStatus();
+  if (currentStatus?.ready || currentStatus?.needs_model) {
     showStep('model');
   } else {
     showStep('connect');
+    maybeAutoStartOAuth();
   }
 })();

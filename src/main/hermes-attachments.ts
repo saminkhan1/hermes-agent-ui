@@ -31,7 +31,7 @@ const DOCUMENT_EXTENSIONS = new Set([
   '.ipa',
 ]);
 
-const MIME_BY_EXTENSION = {
+const MIME_BY_EXTENSION: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -67,12 +67,12 @@ const MIME_BY_EXTENSION = {
 
 const localAttachmentRegistry = new Map();
 
-function text(value, max = REMOTE_REF_MAX_CHARS) {
+function text(value: any, max = REMOTE_REF_MAX_CHARS) {
   const out = value == null ? '' : String(value);
   return out.length > max ? out.slice(0, max) : out;
 }
 
-function normalizeAttachmentType(value) {
+function normalizeAttachmentType(value: any) {
   const type = String(value || '').trim().toLowerCase();
   if (type === 'image' || type === 'document' || type === 'voice' || type === 'video') return type;
   if (type === 'audio') return 'voice';
@@ -80,7 +80,7 @@ function normalizeAttachmentType(value) {
   return 'document';
 }
 
-function allowedExtensionsForType(type) {
+function allowedExtensionsForType(type: any) {
   const normalized = normalizeAttachmentType(type);
   if (normalized === 'image') return IMAGE_EXTENSIONS;
   if (normalized === 'video') return VIDEO_EXTENSIONS;
@@ -88,15 +88,15 @@ function allowedExtensionsForType(type) {
   return DOCUMENT_EXTENSIONS;
 }
 
-function maxBytesForType(type) {
+function maxBytesForType(type: any) {
   return normalizeAttachmentType(type) === 'image' ? IMAGE_MAX_BYTES : DEFAULT_MAX_BYTES;
 }
 
-function mimeForExtension(ext) {
+function mimeForExtension(ext: any) {
   return MIME_BY_EXTENSION[String(ext || '').toLowerCase()] || 'application/octet-stream';
 }
 
-function fileNameForRef(ref) {
+function fileNameForRef(ref: any) {
   const raw = String(ref || '').trim();
   if (!raw) return '';
   try {
@@ -111,7 +111,7 @@ function fileNameForRef(ref) {
   return path.basename(raw);
 }
 
-function pathFromLocalRef(ref) {
+function pathFromLocalRef(ref: any) {
   const raw = String(ref || '').trim();
   if (!raw) return '';
   if (raw.startsWith('~/')) return path.resolve(os.homedir(), raw.slice(2));
@@ -125,7 +125,7 @@ function pathFromLocalRef(ref) {
   return path.isAbsolute(raw) ? raw : '';
 }
 
-function remoteDescriptor(type, ref) {
+function remoteDescriptor(type: any, ref: any) {
   const raw = text(ref);
   let parsed;
   try {
@@ -156,14 +156,14 @@ function remoteDescriptor(type, ref) {
   };
 }
 
-function tokenForLocalAttachment(file, stat) {
+function tokenForLocalAttachment(file: any, stat: any) {
   return createHash('sha256')
     .update(`${file}\0${stat.size}\0${Number(stat.mtimeMs || 0)}`)
     .digest('hex')
     .slice(0, 48);
 }
 
-function blockedDescriptor(reason, type, ref, extra = {}) {
+function blockedDescriptor(reason: any, type: any, ref: any, extra = {}) {
   return {
     status: 'blocked',
     source: 'local',
@@ -177,7 +177,7 @@ function blockedDescriptor(reason, type, ref, extra = {}) {
   };
 }
 
-function resolveLocalDescriptor(type, ref) {
+function resolveLocalDescriptor(type: any, ref: any) {
   const file = pathFromLocalRef(ref);
   if (!file) return null;
 
@@ -237,7 +237,7 @@ function attachmentDescriptor(item: any = {}) {
   return blockedDescriptor('unsupported_ref', type, ref);
 }
 
-function resolveAttachmentRequest(urlValue) {
+function resolveAttachmentRequest(urlValue: any) {
   let parsed;
   try {
     parsed = new URL(String(urlValue || ''));

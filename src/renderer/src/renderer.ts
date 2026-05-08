@@ -17,7 +17,7 @@ const DEFAULT_LAYOUT = {
   viewport: { width: 356, height: 320 },
 };
 
-const STATUS_PRIORITY = {
+const STATUS_PRIORITY: Record<string, number> = {
   failed: 0,
   review: 1,
   running: 2,
@@ -59,7 +59,7 @@ const STATUS_META = {
   },
 };
 
-const DEFAULT_PET_OPTIONS = [];
+const DEFAULT_PET_OPTIONS: any[] = [];
 const DEFAULT_PET_ID = 'custom:goblin';
 const AVATAR_COLUMNS = 8;
 const AVATAR_ROWS = 9;
@@ -72,7 +72,7 @@ const IDLE_FRAMES = [
   { rowIndex: 0, columnIndex: 5, frameDurationMs: 320 },
 ];
 const LONG_IDLE_FRAMES = IDLE_FRAMES.map((frame) => ({ ...frame, frameDurationMs: frame.frameDurationMs * 6 }));
-const AVATAR_FRAMES = {
+const AVATAR_FRAMES: Record<string, any[]> = {
   failed: linearFrames(5, 8, 140, 240),
   idle: IDLE_FRAMES,
   jumping: linearFrames(4, 5, 140, 280),
@@ -105,19 +105,19 @@ let layout = DEFAULT_LAYOUT;
 let trayOpen = true;
 let mascotHover = false;
 let petPointerInteractionActive = false;
-let pointerInteractionPoint = null;
-let pointerInteractionFrame = null;
-let pointerInteractionObserver = null;
+let pointerInteractionPoint: any = null;
+let pointerInteractionFrame: any = null;
+let pointerInteractionObserver: any = null;
 let scrollState = { hasLatestNotificationsAbove: false, hiddenOlderNotificationCount: 0 };
 let lastElementSizePayload = '';
-let rowMeasureFrame = null;
-let petDrag = null;
-let petDragAvatarState = null;
-let petOptions = DEFAULT_PET_OPTIONS.slice();
+let rowMeasureFrame: any = null;
+let petDrag: any = null;
+let petDragAvatarState: any = null;
+let petOptions: any[] = DEFAULT_PET_OPTIONS.slice();
 let selectedPetId = DEFAULT_PET_ID;
-let renderFrame = null;
+let renderFrame: any = null;
 
-function traceEvalEvent(type, payload = {}) {
+function traceEvalEvent(type: any, payload = {}) {
   if (!window.agentUI || typeof window.agentUI.traceEvalEvent !== 'function') return;
   window.agentUI.traceEvalEvent({ type, ...payload });
 }
@@ -125,8 +125,8 @@ function traceEvalEvent(type, payload = {}) {
 function reportEvalUiState(list = notifications()) {
   if (!window.agentUI || typeof window.agentUI.reportEvalUiState !== 'function') return;
   const top = list[0] || null;
-  const cats = [];
-  const push = (el, catId) => {
+  const cats: any[] = [];
+  const push = (el: any, catId: any) => {
     const rect = rectForEvalElement(el);
     if (!rect || !catId) return;
     cats.push({ catId, ...rect });
@@ -144,7 +144,7 @@ function reportEvalUiState(list = notifications()) {
   });
 }
 
-function linearFrames(rowIndex, count, frameDurationMs, finalFrameDurationMs) {
+function linearFrames(rowIndex: any, count: any, frameDurationMs: any, finalFrameDurationMs: any) {
   return Array.from({ length: count }, (_unused, columnIndex) => ({
     columnIndex,
     frameDurationMs: columnIndex === count - 1 ? finalFrameDurationMs : frameDurationMs,
@@ -152,7 +152,7 @@ function linearFrames(rowIndex, count, frameDurationMs, finalFrameDurationMs) {
   }));
 }
 
-function normalizePetOption(option) {
+function normalizePetOption(option: any) {
   if (!option || typeof option !== 'object') return null;
   const id = String(option.id || '').trim();
   if (!id) return null;
@@ -165,7 +165,7 @@ function normalizePetOption(option) {
   };
 }
 
-function setPetOptions(options, selectedId = selectedPetId, selectedSpriteUrl = '') {
+function setPetOptions(options: any, selectedId = selectedPetId, selectedSpriteUrl = '') {
   const nextOptions = Array.isArray(options) ? options.map(normalizePetOption).filter(Boolean) : [];
   if (nextOptions.length > 0) petOptions = nextOptions;
   const candidate = String(selectedId || '').trim();
@@ -173,7 +173,7 @@ function setPetOptions(options, selectedId = selectedPetId, selectedSpriteUrl = 
   setActivePetSprite(selectedPetId, selectedSpriteUrl);
 }
 
-function setActivePetSprite(id, spriteUrl) {
+function setActivePetSprite(id: any, spriteUrl: any) {
   const url = String(spriteUrl || '').trim();
   if (!url) return;
   const pet = petOptions.find((option) => option.id === id);
@@ -206,7 +206,7 @@ async function loadPetOptionsFromBridge() {
   }
 }
 
-function petOptionById(id) {
+function petOptionById(id: any) {
   const value = String(id || '').trim();
   return petOptions.find((pet) => pet.id === value) || petOptions[0] || {
     assetRef: 'codex',
@@ -221,18 +221,18 @@ function currentPetOption() {
   return petOptionById(selectedPetId);
 }
 
-function setSelectedPet(id) {
+function setSelectedPet(id: any) {
   const next = petOptionById(id);
   if (selectedPetId === next.id) return;
   selectedPetId = next.id;
   renderAll();
 }
 
-function framePosition(frame) {
+function framePosition(frame: any) {
   return `${(frame.columnIndex / (AVATAR_COLUMNS - 1)) * 100}% ${(frame.rowIndex / (AVATAR_ROWS - 1)) * 100}%`;
 }
 
-function framesForState(state, prefersReducedMotion) {
+function framesForState(state: any, prefersReducedMotion: any) {
   const frames = AVATAR_FRAMES[state] || AVATAR_FRAMES.idle;
   if (prefersReducedMotion) return { frames: [frames[0]], loopStartIndex: null };
   if (state === 'idle') return { frames: LONG_IDLE_FRAMES, loopStartIndex: 0 };
@@ -240,7 +240,7 @@ function framesForState(state, prefersReducedMotion) {
   return { frames: [...lead, ...LONG_IDLE_FRAMES], loopStartIndex: lead.length };
 }
 
-function animateAvatar(el, state) {
+function animateAvatar(el: any, state: any) {
   if (!el) return;
   const nextState = state || 'idle';
   const pet = currentPetOption();
@@ -255,7 +255,7 @@ function animateAvatar(el, state) {
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const animation = framesForState(nextState, prefersReducedMotion);
   let index = 0;
-  let timer = null;
+  let timer: any = null;
   el.style.backgroundPosition = framePosition(animation.frames[index]);
   if (animation.frames.length <= 1) {
     avatarTimers.set(el, () => {});
@@ -284,7 +284,7 @@ function animateAvatar(el, state) {
   });
 }
 
-function iconMarkup(type) {
+function iconMarkup(type: any) {
   switch (type) {
     case 'check-circle':
       return '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.8 10.9 3.9 8l1-1 1.9 1.9 4.3-4.8 1.1.9-5.4 5.9Z"/><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm0 1.3a5.2 5.2 0 1 1 0 10.4A5.2 5.2 0 0 1 8 2.8Z"/></svg>';
@@ -302,13 +302,13 @@ function iconMarkup(type) {
   }
 }
 
-function summarize(text, max = 90) {
+function summarize(text: any, max = 90) {
   const value = String(text || '').replace(/\s+/g, ' ').trim();
   if (!value) return '';
   return value.length > max ? `${value.slice(0, max - 3)}...` : value;
 }
 
-function normalizeStatus(status) {
+function normalizeStatus(status: any) {
   const s = String(status || '').toLowerCase();
   if (s === 'running' || s === 'in_progress' || s === 'resuming') return 'running';
   if (s === 'review' || s === 'completed' || s === 'complete') return 'review';
@@ -316,16 +316,16 @@ function normalizeStatus(status) {
   return 'idle';
 }
 
-function statusMeta(status) {
+function statusMeta(status: any) {
   return STATUS_META[normalizeStatus(status)] || STATUS_META.idle;
 }
 
-function sessionTitle(session) {
+function sessionTitle(session: any) {
   const title = summarize(session.prompt, 48);
   return title || 'New session';
 }
 
-function sessionBody(session) {
+function sessionBody(session: any) {
   const state = normalizeStatus(session && session.status);
   if (state === 'running' && session.streamBubble) return String(session.streamBubble);
   if (session.finishLine) return String(session.finishLine);
@@ -333,12 +333,12 @@ function sessionBody(session) {
   return '';
 }
 
-function canDismissSession(session) {
+function canDismissSession(session: any) {
   const status = normalizeStatus(session && session.status);
   return status === 'review' || status === 'failed';
 }
 
-function notificationForSession(session) {
+function notificationForSession(session: any) {
   const state = normalizeStatus(session.status);
   if (state === 'idle') return null;
   const id = String(session.catId);
@@ -363,10 +363,10 @@ function notifications() {
     .map((session) => notificationForSession(session))
     .filter(Boolean)
     .sort((a, b) => {
-      const priority = (STATUS_PRIORITY[a.level] ?? 4) - (STATUS_PRIORITY[b.level] ?? 4);
+      const priority = (STATUS_PRIORITY[a!.level] ?? 4) - (STATUS_PRIORITY[b!.level] ?? 4);
       if (priority !== 0) return priority;
-      const updated = b.updatedAtMs - a.updatedAtMs;
-      return updated === 0 ? a.id.localeCompare(b.id) : updated;
+      const updated = b!.updatedAtMs - a!.updatedAtMs;
+      return updated === 0 ? a!.id.localeCompare(b!.id) : updated;
     });
 }
 
@@ -374,13 +374,13 @@ function visibleSessionCount(list = notifications()) {
   let active = 0;
   let review = 0;
   for (const notification of list) {
-    if (notification.level === 'running') active += 1;
+    if (notification!.level === 'running') active += 1;
     else review += 1;
   }
   return { active, review };
 }
 
-function reportPetPointerInteraction(active, { force = false } = {}) {
+function reportPetPointerInteraction(active: any, { force = false } = {}) {
   const next = !!active;
   if (!force && petPointerInteractionActive === next) return;
   petPointerInteractionActive = next;
@@ -389,7 +389,7 @@ function reportPetPointerInteraction(active, { force = false } = {}) {
   }
 }
 
-function elementIsUsableHitRegion(el) {
+function elementIsUsableHitRegion(el: any) {
   if (!(el instanceof HTMLElement)) return false;
   if (el.hidden || el.closest('[hidden]')) return false;
   if (el.closest('[inert], [aria-hidden="true"]')) return false;
@@ -404,7 +404,7 @@ function elementIsUsableHitRegion(el) {
   return rect.width > 0 && rect.height > 0;
 }
 
-function pointHitsPetRegion(point) {
+function pointHitsPetRegion(point: any) {
   if (!point) return false;
   const x = Number(point.clientX);
   const y = Number(point.clientY);
@@ -438,7 +438,7 @@ function clearPetPointerInteraction({ force = false } = {}) {
 }
 
 function installPetPointerInteractivity() {
-  const rememberPoint = (e) => {
+  const rememberPoint = (e: any) => {
     pointerInteractionPoint = { clientX: e.clientX, clientY: e.clientY };
     schedulePetPointerInteraction(pointerInteractionPoint);
   };
@@ -461,7 +461,7 @@ function installPetPointerInteractivity() {
   petPointerInteractionActive = false;
 }
 
-function dragSample(e) {
+function dragSample(e: any) {
   return {
     screenX: e.screenX,
     screenY: e.screenY,
@@ -469,16 +469,16 @@ function dragSample(e) {
   };
 }
 
-function recentDragSamples(samples) {
+function recentDragSamples(samples: any) {
   const last = samples.at(-1);
   if (!last) return samples;
-  return samples.filter((sample) => last.timeMs - sample.timeMs <= DRAG_MAX_SAMPLE_AGE_MS);
+  return samples.filter((sample: any) => last.timeMs - sample.timeMs <= DRAG_MAX_SAMPLE_AGE_MS);
 }
 
-function flingVelocity(samples) {
+function flingVelocity(samples: any) {
   const last = samples.at(-1);
   if (!last) return null;
-  const baseline = samples.find((sample) => last.timeMs - sample.timeMs > 16);
+  const baseline = samples.find((sample: any) => last.timeMs - sample.timeMs > 16);
   if (!baseline) return null;
   const seconds = (last.timeMs - baseline.timeMs) / 1000;
   if (seconds <= 0) return null;
@@ -493,18 +493,21 @@ function flingVelocity(samples) {
   return { x: velocity.x * scale, y: velocity.y * scale };
 }
 
-function dragReleaseVelocity(startState, releaseSample) {
+function dragReleaseVelocity(startState: any, releaseSample: any) {
   if (!startState || !startState.hasMoved || !releaseSample) return null;
   return flingVelocity(recentDragSamples([...startState.samples, releaseSample]));
 }
 
-function dragStateForDelta(currentDragState, deltaX) {
+function dragStateForDelta(currentDragState: any, deltaX: any) {
   if (deltaX >= DRAG_THRESHOLD_PX) return 'running-right';
   if (deltaX <= -DRAG_THRESHOLD_PX) return 'running-left';
   return currentDragState;
 }
 
-function finishPetDrag(pointerId, { releaseSample = null, shouldOpenMainWindow = false } = {}) {
+function finishPetDrag(
+  pointerId: any,
+  { releaseSample = null, shouldOpenMainWindow = false }: { releaseSample?: any; shouldOpenMainWindow?: boolean } = {}
+) {
   if (!petDrag || petDrag.pointerId !== pointerId) return;
   const currentDrag = petDrag;
   petDrag = null;
@@ -524,7 +527,7 @@ function finishPetDrag(pointerId, { releaseSample = null, shouldOpenMainWindow =
   renderAll();
 }
 
-function onPetPointerDown(e) {
+function onPetPointerDown(e: any) {
   if (
     e.button !== 0 ||
     !(e.target instanceof Element) ||
@@ -547,7 +550,7 @@ function onPetPointerDown(e) {
   renderMascot(notifications());
 }
 
-function onPetPointerMove(e) {
+function onPetPointerMove(e: any) {
   if (!petDrag || petDrag.pointerId !== e.pointerId) return;
   const sample = dragSample(e);
   petDrag.samples = recentDragSamples([...petDrag.samples, sample]);
@@ -564,13 +567,13 @@ function onPetPointerMove(e) {
   renderMascot(notifications());
 }
 
-function openSessionConversation(catId) {
+function openSessionConversation(catId: any) {
   if (window.agentUI && typeof window.agentUI.openCatConversation === 'function') {
     window.agentUI.openCatConversation(String(catId));
   }
 }
 
-function dismissNotification(notification) {
+function dismissNotification(notification: any) {
   if (!notification || !notification.canDismiss) return;
   const id = String(notification.catId || notification.id || '').trim();
   if (!id) return;
@@ -582,7 +585,7 @@ function dismissNotification(notification) {
   removeSession(id);
 }
 
-function styleBox(el, box) {
+function styleBox(el: any, box: any) {
   if (!el || !box) return;
   el.style.left = `${box.left}px`;
   el.style.top = `${box.top}px`;
@@ -604,10 +607,10 @@ function ensureMascotAvatar() {
   return avatar;
 }
 
-function renderMascot(list) {
+function renderMascot(list: any) {
   const top = list[0] || null;
   const meta = statusMeta(top ? top.level : 'idle');
-  const state = petDragAvatarState || (mascotHover ? 'jumping' : meta.mascotState);
+  const state: any = petDragAvatarState || (mascotHover ? 'jumping' : meta.mascotState);
   const pet = currentPetOption();
   const stage = mascot ? mascot.closest('.pet-stage') as HTMLElement | null : null;
   styleBox(stage, layout.mascot);
@@ -640,16 +643,16 @@ function renderMascot(list) {
   );
 }
 
-function notificationCanExpand(notification) {
+function notificationCanExpand(notification: any) {
   return expandableRows.get(String(notification.id)) === true;
 }
 
-function rowBody(notification) {
+function rowBody(notification: any) {
   const meta = statusMeta(notification.level);
   return notification.body || meta.defaultBody;
 }
 
-function makeStatusIcon(notification) {
+function makeStatusIcon(notification: any) {
   const meta = statusMeta(notification.level);
   const span = document.createElement('span');
   span.className = `pet-row-status pet-row-status-${notification.level}`;
@@ -658,7 +661,7 @@ function makeStatusIcon(notification) {
   return span;
 }
 
-function makeRow(notification, index) {
+function makeRow(notification: any, index: any) {
   const row = document.createElement('div');
   row.className = 'pet-row no-drag';
   row.dataset.notificationId = notification.id;
@@ -752,7 +755,7 @@ function makeRow(notification, index) {
   return row;
 }
 
-function rowRenderKey(notification) {
+function rowRenderKey(notification: any) {
   const id = String(notification.id);
   return JSON.stringify({
     id,
@@ -765,7 +768,7 @@ function rowRenderKey(notification) {
   });
 }
 
-function rowMeasureKey(notification) {
+function rowMeasureKey(notification: any) {
   return JSON.stringify({
     id: String(notification.id),
     body: rowBody(notification),
@@ -778,14 +781,14 @@ function trayRows() {
   return Array.from(trayList.children).filter((child) => child instanceof HTMLElement);
 }
 
-function pruneExpandableRows(list) {
-  const ids = new Set(list.map((notification) => String(notification.id)));
+function pruneExpandableRows(list: any) {
+  const ids = new Set(list.map((notification: any) => String(notification.id)));
   for (const id of expandableRows.keys()) {
     if (!ids.has(id)) expandableRows.delete(id);
   }
 }
 
-function scheduleRowOverflowMeasurement(list, { force = false } = {}) {
+function scheduleRowOverflowMeasurement(list: any, { force = false } = {}) {
   if (!trayList || rowMeasureFrame != null) return;
   let changed = force;
   for (const notification of list) {
@@ -828,11 +831,11 @@ function isScrolledToOlderEnd(scrollTop = trayList ? trayList.scrollTop : 0) {
   return scrollTop >= maxScrollTop - SCROLL_EDGE_SLOP;
 }
 
-function visibleAnchorOffset(rows, scrollTop = trayList ? trayList.scrollTop : 0) {
+function visibleAnchorOffset(rows: any, scrollTop = trayList ? trayList.scrollTop : 0) {
   return scrollTop + (rows[0]?.offsetTop || 0) + SCROLL_EDGE_SLOP;
 }
 
-function rowIndexAtOffset(rows, offset) {
+function rowIndexAtOffset(rows: any, offset: any) {
   let index = 0;
   for (let i = 0; i < rows.length; i += 1) {
     if (rows[i].offsetTop <= offset) index = i;
@@ -840,10 +843,10 @@ function rowIndexAtOffset(rows, offset) {
   return index;
 }
 
-function hiddenOlderCount(rows, anchorOffset) {
+function hiddenOlderCount(rows: any, anchorOffset: any) {
   if (!trayList) return 0;
   const lowerEdge = anchorOffset + trayList.clientHeight - SCROLL_EDGE_SLOP;
-  return rows.filter((row) => row.offsetTop + row.offsetHeight > lowerEdge).length;
+  return rows.filter((row: any) => row.offsetTop + row.offsetHeight > lowerEdge).length;
 }
 
 function updateScrollState(scrollTop = trayList ? trayList.scrollTop : 0) {
@@ -863,7 +866,7 @@ function updateScrollState(scrollTop = trayList ? trayList.scrollTop : 0) {
   scrollState = { hasLatestNotificationsAbove, hiddenOlderNotificationCount };
 }
 
-function makeScrollButton(kind, count) {
+function makeScrollButton(kind: any, count: any) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = `pet-scroll-control pet-scroll-${kind} no-drag`;
@@ -872,7 +875,7 @@ function makeScrollButton(kind, count) {
     button.setAttribute('aria-label', 'Show latest activity');
     button.innerHTML = '<span>Latest</span>' + iconMarkup('chevron');
     button.addEventListener('click', () => {
-      trayList.scrollTo({ behavior: 'smooth', top: 0 });
+      trayList!.scrollTo({ behavior: 'smooth', top: 0 });
       requestAnimationFrame(() => updateScrollState(0));
     });
   } else {
@@ -882,16 +885,16 @@ function makeScrollButton(kind, count) {
       const rows = trayRows();
       const currentIndex = rowIndexAtOffset(rows, visibleAnchorOffset(rows));
       const target = count <= VISIBLE_SCROLL_STEP
-        ? trayList.scrollHeight
-        : rows[currentIndex + VISIBLE_SCROLL_STEP]?.offsetTop ?? trayList.scrollHeight;
-      trayList.scrollTo({ behavior: 'smooth', top: target });
+        ? trayList!.scrollHeight
+        : rows[currentIndex + VISIBLE_SCROLL_STEP]?.offsetTop ?? trayList!.scrollHeight;
+      trayList!.scrollTo({ behavior: 'smooth', top: target });
       requestAnimationFrame(() => updateScrollState(target));
     });
   }
   return button;
 }
 
-function renderTray(list) {
+function renderTray(list: any) {
   if (!tray || !trayList) return;
   const hasNotifications = list.length > 0;
   const isVisible = hasNotifications && trayOpen;
@@ -920,7 +923,7 @@ function renderTray(list) {
   let rowsChanged = existingRows.size !== list.length;
   trayList.dataset.avatarOverlaySize = 'notification-tray-list';
   trayList.setAttribute('aria-label', 'Activity notifications');
-  list.forEach((notification, index) => {
+  list.forEach((notification: any, index: any) => {
     const id = String(notification.id);
     const key = rowRenderKey(notification);
     const existing = existingRows.get(id);
@@ -933,7 +936,7 @@ function renderTray(list) {
     renderedRowKeys.set(id, key);
     fragment.appendChild(row);
   });
-  const ids = new Set(list.map((notification) => String(notification.id)));
+  const ids = new Set(list.map((notification: any) => String(notification.id)));
   for (const id of renderedRowKeys.keys()) {
     if (!ids.has(id)) renderedRowKeys.delete(id);
   }
@@ -956,14 +959,14 @@ function renderTray(list) {
   }
 }
 
-function updateCounts(list) {
+function updateCounts(list: any) {
   const counts = visibleSessionCount(list);
   if (window.agentUI && typeof window.agentUI.reportCatCounts === 'function') {
     window.agentUI.reportCatCounts({ active: counts.active, inReview: counts.review });
   }
 }
 
-function reportElementSize(list) {
+function reportElementSize(list: any) {
   if (!window.agentUI || typeof window.agentUI.reportPetElementSize !== 'function') return;
   requestAnimationFrame(() => {
     const avatar = mascot ? mascot.querySelector('.codex-avatar-root') : null;
@@ -1071,7 +1074,7 @@ function applyFinish(ev: AgentUIPayload = {}) {
   renderAll();
 }
 
-function reactivate(catId) {
+function reactivate(catId: any) {
   const id = String(catId || '').trim();
   if (!id) return;
   const session = sessions.get(id);
@@ -1083,7 +1086,7 @@ function reactivate(catId) {
   renderAll();
 }
 
-function removeSession(catId) {
+function removeSession(catId: any) {
   const id = String(catId || '').trim();
   if (!id) return;
   sessions.delete(id);
@@ -1102,7 +1105,7 @@ async function boot() {
   }
 
   if (typeof window.agentUI.onPetLayoutChanged === 'function') {
-    window.agentUI.onPetLayoutChanged((payload) => {
+    window.agentUI.onPetLayoutChanged((payload: any) => {
       if (payload && payload.layout) {
         layout = {
           mascot: payload.layout.mascot || DEFAULT_LAYOUT.mascot,
@@ -1116,7 +1119,7 @@ async function boot() {
   }
 
   if (typeof window.agentUI.onPetCharacterChanged === 'function') {
-    window.agentUI.onPetCharacterChanged((payload) => {
+    window.agentUI.onPetCharacterChanged((payload: any) => {
       if (payload && Array.isArray(payload.options)) {
         setPetOptions(
           payload.options,
@@ -1132,7 +1135,7 @@ async function boot() {
   }
 
   if (typeof window.agentUI.onSpawnCat === 'function') {
-    window.agentUI.onSpawnCat((payload) => {
+    window.agentUI.onSpawnCat((payload: any) => {
       const session = upsertSession(payload);
       if (!session) return;
       renderAll();
@@ -1149,7 +1152,7 @@ async function boot() {
   }
 
   if (typeof window.agentUI.onAgentFinished === 'function') {
-    window.agentUI.onAgentFinished((ev) => {
+    window.agentUI.onAgentFinished((ev: any) => {
       const id = String(ev && ev.catId ? ev.catId : '').trim();
       if (!id) return;
       if (!sessions.has(id)) {
@@ -1161,7 +1164,7 @@ async function boot() {
   }
 
   if (typeof window.agentUI.onAgentStreamBubble === 'function') {
-    window.agentUI.onAgentStreamBubble((ev) => {
+    window.agentUI.onAgentStreamBubble((ev: any) => {
       const id = String(ev && ev.catId ? ev.catId : '').trim();
       if (!id) return;
       if (!sessions.has(id)) {
@@ -1173,13 +1176,13 @@ async function boot() {
   }
 
   if (typeof window.agentUI.onAgentRestarted === 'function') {
-    window.agentUI.onAgentRestarted((ev) => {
+    window.agentUI.onAgentRestarted((ev: any) => {
       if (ev && ev.catId != null) reactivate(ev.catId);
     });
   }
 
   if (typeof window.agentUI.onRemoveCat === 'function') {
-    window.agentUI.onRemoveCat((payload) => {
+    window.agentUI.onRemoveCat((payload: any) => {
       if (payload && payload.catId != null) removeSession(payload.catId);
     });
   }

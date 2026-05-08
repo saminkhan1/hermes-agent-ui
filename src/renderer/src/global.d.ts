@@ -2,7 +2,7 @@ export {};
 
 declare global {
   interface Window {
-    agentUI?: Record<string, (...args: any[]) => any>;
+    agentUI: Record<string, (...args: any[]) => any>;
   }
 
   interface Navigator {

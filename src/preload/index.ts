@@ -9,24 +9,24 @@ const MAX_EVAL_PAYLOAD_BYTES = 65536;
 type SafeCallback = (payload: unknown) => void;
 type PayloadMapper = (payload: unknown) => unknown | typeof SKIP_PAYLOAD;
 
-function text(value, maxChars = MAX_TEXT_CHARS) {
+function text(value: any, maxChars = MAX_TEXT_CHARS) {
   const out = value == null ? '' : String(value);
   return out.length > maxChars ? out.slice(0, maxChars) : out;
 }
 
-function catId(value) {
+function catId(value: any) {
   const id = String(value || '').trim();
   if (!id || id.length > MAX_CAT_ID_LENGTH) return '';
   return /^[A-Za-z0-9_.:-]+$/.test(id) ? id : '';
 }
 
-function number(value, maxAbs = 10000) {
+function number(value: any, maxAbs = 10000) {
   const n = Number(value);
   if (!Number.isFinite(n) || Math.abs(n) > maxAbs) return null;
   return n;
 }
 
-function payloadWithinLimit(payload) {
+function payloadWithinLimit(payload: any) {
   try {
     return Buffer.byteLength(JSON.stringify(payload || {}), 'utf8') <= MAX_EVAL_PAYLOAD_BYTES;
   } catch {
@@ -55,10 +55,10 @@ function onSafe(channel: string, callback: SafeCallback, mapPayload: PayloadMapp
 }
 
 contextBridge.exposeInMainWorld('agentUI', {
-  traceEvalEvent: (payload) => {
+  traceEvalEvent: (payload: any) => {
     if (payloadWithinLimit(payload)) ipcRenderer.send('eval-trace-event', payload);
   },
-  reportEvalUiState: (surface, payload) => {
+  reportEvalUiState: (surface: any, payload: any) => {
     const safePayload = { surface: text(surface, 64), payload };
     if (payloadWithinLimit(safePayload)) ipcRenderer.send('eval-ui-state', safePayload);
   },
@@ -95,41 +95,41 @@ contextBridge.exposeInMainWorld('agentUI', {
     if (velocityX == null || velocityY == null) return;
     ipcRenderer.send('pet-drag-release', { velocityX, velocityY });
   },
-  reportPetElementSize: (payload) => {
+  reportPetElementSize: (payload: any) => {
     if (payload && typeof payload === 'object') ipcRenderer.send('pet-element-size-changed', payload);
   },
-  setPetPointerInteraction: (active) => ipcRenderer.send('pet-pointer-interaction-changed', { active: !!active }),
-  onPetLayoutChanged: (callback) => onSafe('pet-layout-changed', callback),
-  onPetCharacterChanged: (callback) => onSafe('pet-character-changed', callback),
-  onSpawnCat: (callback) => onSafe('spawn-cat', callback),
-  onAgentFinished: (callback) => onSafe('agent-finished', callback),
-  onAgentStreamBubble: (callback) => onSafe('agent-stream-bubble', callback),
-  openCatConversation: (value) => {
+  setPetPointerInteraction: (active: any) => ipcRenderer.send('pet-pointer-interaction-changed', { active: !!active }),
+  onPetLayoutChanged: (callback: any) => onSafe('pet-layout-changed', callback),
+  onPetCharacterChanged: (callback: any) => onSafe('pet-character-changed', callback),
+  onSpawnCat: (callback: any) => onSafe('spawn-cat', callback),
+  onAgentFinished: (callback: any) => onSafe('agent-finished', callback),
+  onAgentStreamBubble: (callback: any) => onSafe('agent-stream-bubble', callback),
+  openCatConversation: (value: any) => {
     const id = catId(value);
     if (id) ipcRenderer.send('open-cat-conversation', { catId: id });
   },
-  getAgentConversation: (value) => ipcRenderer.invoke('get-agent-conversation', catId(value)),
-  onConversationUpdated: (callback) => onSafe('conversation-updated', callback),
+  getAgentConversation: (value: any) => ipcRenderer.invoke('get-agent-conversation', catId(value)),
+  onConversationUpdated: (callback: any) => onSafe('conversation-updated', callback),
   closeConversationWindow: () => {
     ipcRenderer.send('close-conversation-window');
   },
-  dismissCat: (value) => {
+  dismissCat: (value: any) => {
     const id = catId(value);
     if (id) ipcRenderer.send('dismiss-cat', { catId: id });
   },
-  sendFollowup: (value, body) => {
+  sendFollowup: (value: any, body: any) => {
     return ipcRenderer.invoke('agent-followup', { catId: catId(value), text: text(body) });
   },
-  cancelAgent: (value) => {
+  cancelAgent: (value: any) => {
     return ipcRenderer.invoke('agent-cancel', { catId: catId(value) });
   },
-  openAgentAttachment: (url) => {
+  openAgentAttachment: (url: any) => {
     return ipcRenderer.invoke('open-agent-attachment', { url: text(url, 4096) });
   },
-  openExternalUrl: (url) => {
+  openExternalUrl: (url: any) => {
     return ipcRenderer.invoke('open-external-url', { url: text(url, 4096) });
   },
-  copyText: (value) => {
+  copyText: (value: any) => {
     return ipcRenderer.invoke('clipboard-write-text', { text: text(value, 20000) });
   },
   getHermesAuthStatus: () => ipcRenderer.invoke('hermes-auth-status'),
@@ -158,11 +158,11 @@ contextBridge.exposeInMainWorld('agentUI', {
   checkHermesAuthNow: () => ipcRenderer.invoke('hermes-auth-check-now'),
   closeHermesAuth: () => ipcRenderer.send('hermes-auth-close'),
   openHermesAuth: () => ipcRenderer.send('hermes-auth-open'),
-  onHermesAuthEvent: (callback) => onSafe('hermes-auth-event', callback),
-  onHermesAuthContext: (callback) => onSafe('hermes-auth-context', callback),
-  onAgentRestarted: (callback) => onSafe('agent-restarted', callback),
-  onRemoveCat: (callback) => onSafe('remove-cat', callback),
-  reportCatCounts: (counts) => {
+  onHermesAuthEvent: (callback: any) => onSafe('hermes-auth-event', callback),
+  onHermesAuthContext: (callback: any) => onSafe('hermes-auth-context', callback),
+  onAgentRestarted: (callback: any) => onSafe('agent-restarted', callback),
+  onRemoveCat: (callback: any) => onSafe('remove-cat', callback),
+  reportCatCounts: (counts: any) => {
     ipcRenderer.send('cat-counts', counts);
   },
 });

@@ -12,7 +12,7 @@ const runDir = path.join(baseDir, 'runs', runId);
 const traceFile = path.join(runDir, 'trace.jsonl');
 
 /** @type {Array<Record<string, unknown>>} */
-const events = [];
+const events: any[] = [];
 let seq = 0;
 const startedHr = process.hrtime.bigint();
 
@@ -25,18 +25,18 @@ function ensureRunDir() {
   fs.mkdirSync(runDir, { recursive: true });
 }
 
-function safeName(value) {
+function safeName(value: any) {
   return String(value || 'unknown').replace(/[^A-Za-z0-9_.-]/g, '_');
 }
 
-function getCatArtifactDir(catId) {
+function getCatArtifactDir(catId: any) {
   if (!enabled) return null;
   const dir = path.join(runDir, 'cats', safeName(catId));
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
-function artifactPath(catId, relPath) {
+function artifactPath(catId: any, relPath: any) {
   const dir = getCatArtifactDir(catId);
   if (!dir) return null;
   const full = path.resolve(path.join(dir, String(relPath || 'artifact')));
@@ -47,29 +47,29 @@ function artifactPath(catId, relPath) {
   return full;
 }
 
-function writeArtifactText(catId, relPath, text) {
+function writeArtifactText(catId: any, relPath: any, text: any) {
   if (!enabled) return null;
   const file = artifactPath(catId, relPath);
   fs.writeFileSync(file, String(text || ''), 'utf8');
   return file;
 }
 
-function appendArtifactText(catId, relPath, text) {
+function appendArtifactText(catId: any, relPath: any, text: any) {
   if (!enabled) return null;
   const file = artifactPath(catId, relPath);
   fs.appendFileSync(file, String(text || ''), 'utf8');
   return file;
 }
 
-function writeArtifactJson(catId, relPath, value) {
+function writeArtifactJson(catId: any, relPath: any, value: any) {
   return writeArtifactText(catId, relPath, JSON.stringify(value, null, 2));
 }
 
-function appendArtifactJsonl(catId, relPath, value) {
+function appendArtifactJsonl(catId: any, relPath: any, value: any) {
   return appendArtifactText(catId, relPath, `${JSON.stringify(value)}\n`);
 }
 
-function recordTrace(type, payload = {}) {
+function recordTrace(type: any, payload = {}) {
   if (!enabled) return null;
   const event = {
     type: String(type || 'event'),

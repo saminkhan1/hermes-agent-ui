@@ -148,6 +148,12 @@ Voice and permissions:
 - granting microphone permission records, transcribes, shows the transcript for review, and submits after edit
 - speech/audio behavior does not require `/usr/bin/swift` or developer tools
 
+Screen sharing:
+
+- with the pet overlay visible, FaceTime display sharing starts and includes the overlay on the shared display
+- with the pet overlay visible, Zoom display sharing starts and includes the overlay on the shared display
+- with the pet overlay visible, Discord display sharing starts and includes the overlay on the shared display
+
 Bootstrap artifacts are ad-hoc signed and not notarized. `spctl` and stapler rejection is expected evidence for bootstrap artifacts, not a release failure.
 
 ## Private Bootstrap Release

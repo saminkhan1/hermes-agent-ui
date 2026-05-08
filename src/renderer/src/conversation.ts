@@ -205,7 +205,7 @@ function renderAuthErrorAction() {
 }
 
 function renderLogItems(items: ConversationItem[] = []) {
-  logEl.replaceChildren();
+  logEl!.replaceChildren();
   for (const item of items || []) {
     if (!item || !['user', 'assistant', 'error', 'attachment'].includes(item.kind)) continue;
 
@@ -228,7 +228,7 @@ function renderLogItems(items: ConversationItem[] = []) {
     }
 
     line.append(label, text);
-    logEl.appendChild(line);
+    logEl!.appendChild(line);
   }
 }
 
@@ -294,7 +294,7 @@ function setComposerError(message: unknown) {
 
 async function render() {
   if (!window.agentUI?.getAgentConversation || !catId) {
-    logEl.textContent = 'No conversation to show.';
+    logEl!.textContent = 'No conversation to show.';
     updateComposerFromData(null);
     updateStatusFromData(null);
     reportEvalUiState();
@@ -303,7 +303,7 @@ async function render() {
   const data = await window.agentUI.getAgentConversation(catId) as ConversationData | null;
   lastData = data;
   if (!data || !data.found) {
-    logEl.textContent = 'This conversation is not available yet, or the agent was not started.';
+    logEl!.textContent = 'This conversation is not available yet, or the agent was not started.';
     updateComposerFromData(null);
     updateStatusFromData(null);
     reportEvalUiState();
@@ -311,14 +311,14 @@ async function render() {
   }
 
   if (data.locationLabel) {
-    metaEl.hidden = false;
-    metaEl.textContent = data.prompt ? `${data.locationLabel} - "${data.prompt}"` : data.locationLabel;
+    metaEl!.hidden = false;
+    metaEl!.textContent = data.prompt ? `${data.locationLabel} - "${data.prompt}"` : data.locationLabel;
   } else {
-    metaEl.hidden = true;
+    metaEl!.hidden = true;
   }
 
   renderLogItems(data.items || []);
-  logEl.scrollTop = logEl.scrollHeight;
+  logEl!.scrollTop = logEl!.scrollHeight;
   updateComposerFromData(data);
   updateStatusFromData(data);
   reportEvalUiState();
@@ -376,7 +376,7 @@ if (catId) {
     });
   }
 } else {
-  logEl.textContent = 'Missing session id.';
+  logEl!.textContent = 'Missing session id.';
 }
 
 function close() {
@@ -393,7 +393,7 @@ function dismiss() {
   }
 }
 
-closeBtn.addEventListener('click', () => {
+closeBtn!.addEventListener('click', () => {
   close();
 });
 

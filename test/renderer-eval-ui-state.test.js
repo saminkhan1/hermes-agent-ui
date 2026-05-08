@@ -4,14 +4,14 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { pathToFileURL } = require('url');
 
 const root = path.resolve(__dirname, '..');
 const helperPath = path.join(root, 'src/renderer/src/eval-ui-state.ts');
 
 async function loadHelper() {
-  const source = fs.readFileSync(helperPath, 'utf8');
-  const encoded = Buffer.from(source, 'utf8').toString('base64');
-  return import(`data:text/javascript;base64,${encoded}#${Date.now()}${Math.random()}`);
+  const mod = await import(`${pathToFileURL(helperPath).href}?${Date.now()}${Math.random()}`);
+  return mod.default || mod;
 }
 
 class MockHTMLElement {}

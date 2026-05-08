@@ -26,7 +26,7 @@ test('voice input is backed by Hermes voice-mode capture and transcription', () 
   assert.match(runtime, /result = transcribe_recording\(audio_path\)/);
   assert.match(main, /const result = await captureAndTranscribeVoice\(\{ onStatus \}\)/);
   assert.match(runtime, /"status": "transcribing"/);
-  assert.match(main, /async function startVoiceSessionFromShortcut\(win, modalContextId\)/);
+  assert.match(main, /async function startVoiceSessionFromShortcut\(win(?:: [^)]+)?, modalContextId(?:: [^)]+)?\)/);
   assert.match(main, /sendVoiceInputStatus\(win, modalContextId, \{\s*state: 'transcript_ready'/);
   assert.doesNotMatch(main, /startCatRunFromPayload\(\{ prompt, modalContextId \}, \{ closeModal: false \}\)/);
 });
@@ -39,9 +39,9 @@ test('voice and text are direct menu-selected input modes', () => {
 
   assert.match(main, /const INPUT_MODE_TEXT = 'text'/);
   assert.match(main, /const INPUT_MODE_VOICE = 'voice'/);
-  assert.match(main, /function newSessionMenuItem\(\{ accelerator = undefined \} = \{\}\)/);
+  assert.match(main, /function newSessionMenuItem\(\{ accelerator = undefined \}(?:: [^)]+)? = \{\}\)/);
   assert.match(main, /label: 'New Session…'/);
-  assert.match(main, /function inputModeMenuItem\(mode\)/);
+  assert.match(main, /function inputModeMenuItem\(mode(?:: [^)]+)?\)/);
   assert.match(main, /label: normalizedInputMode === INPUT_MODE_VOICE \? 'Use Voice Input' : 'Use Text Input'/);
   assert.match(main, /type: 'radio'/);
   assert.match(main, /checked: selectedInputMode === normalizedInputMode/);

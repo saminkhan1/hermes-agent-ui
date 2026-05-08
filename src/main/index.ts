@@ -118,7 +118,7 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-let getWindowsModulePromise = null;
+let getWindowsModulePromise: any = null;
 
 function loadGetWindowsModule() {
   if (!getWindowsModulePromise) {
@@ -145,7 +145,7 @@ function getCodexHomeDir() {
   return configured ? path.resolve(configured) : path.join(os.homedir(), '.codex');
 }
 
-function ensureDir(dir) {
+function ensureDir(dir: any) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
@@ -169,13 +169,13 @@ function petCharactersPayload() {
   });
 }
 
-function findPetCharacter(id) {
+function findPetCharacter(id: any) {
   const value = String(id || '').trim();
   return petCharacterOptions.find((pet) => pet.id === value) || null;
 }
 
 function installPetAssetProtocol() {
-  protocol.handle(PET_ASSET_SCHEME, (request) => {
+  protocol.handle(PET_ASSET_SCHEME, (request: any) => {
     try {
       const url = new URL(request.url);
       if (url.hostname !== 'sprite') return new Response('not found', { status: 404 });
@@ -190,7 +190,7 @@ function installPetAssetProtocol() {
 }
 
 function installAttachmentProtocol() {
-  protocol.handle(ATTACHMENT_SCHEME, async (request) => {
+  protocol.handle(ATTACHMENT_SCHEME, async (request: any) => {
     try {
       const resolved = hermesAttachments.resolveAttachmentRequest(request.url);
       if (!resolved || !resolved.file) return new Response('not found', { status: 404 });
@@ -209,9 +209,9 @@ function installAttachmentProtocol() {
   });
 }
 
-function execFileText(command, args, opts = {}) {
+function execFileText(command: any, args: any, opts = {}) {
   return new Promise((resolve, reject) => {
-    execFile(command, args, { encoding: 'utf8', timeout: 5000, ...opts }, (err, stdout, stderr) => {
+    execFile(command, args, { encoding: 'utf8', timeout: 5000, ...opts }, (err: any, stdout: any, stderr: any) => {
       if (err) {
         err.stdout = stdout;
         err.stderr = stderr;
@@ -223,48 +223,49 @@ function execFileText(command, args, opts = {}) {
   });
 }
 
-let mainWindow;
-let modalWindow;
-let conversationWindow;
-let authWindow;
-let activeConversationCatId = null;
+let mainWindow: any;
+let modalWindow: any;
+let conversationWindow: any;
+let authWindow: any;
+let activeConversationCatId: any = null;
 /** Square conversation panel — content dimensions (px). */
 const CONVERSATION_WINDOW_SIDE = 800;
 /** When true, the overlay is accepting mouse (cursor over a cat). */
 let mainWindowMouseable = false;
-let tray;
-let closeEvalServer = null;
+let tray: any;
+let closeEvalServer: any = null;
+let newCatShortcutRegistered = false;
 /** Latest overlay session counts from renderer (dock / tray menu). */
 let catCounts = { active: 0, inReview: 0 };
 let overlayReady = false;
-const pendingSpawnCats = [];
-let activeModalContextId = null;
+const pendingSpawnCats: any[] = [];
+let activeModalContextId: any = null;
 const modalContexts = new Map();
 const launchContextCaptures = new Map();
-let pendingAuthRun = null;
-let authMonitorTimer = null;
+let pendingAuthRun: any = null;
+let authMonitorTimer: any = null;
 let authFlow = idleAuthFlow();
 const ignoredAuthSessionIds = new Set();
 const evalUiSnapshots = new Map();
-let lastExternalWindowSnapshot = null;
-let activeWindowCacheTimer = null;
-let activeWindowCacheStopTimer = null;
+let lastExternalWindowSnapshot: any = null;
+let activeWindowCacheTimer: any = null;
+let activeWindowCacheStopTimer: any = null;
 let petOverlayOpenRequested = false;
-let petWindowMovePersistTimer = null;
+let petWindowMovePersistTimer: any = null;
 let applyingPetWindowBounds = false;
 let petPointerInteractive = false;
-let petAnchor = null;
-let petDragState = null;
-let petLayout = null;
+let petAnchor: any = null;
+let petDragState: any = null;
+let petLayout: any = null;
 let petMascotSize = { ...PET_DEFAULT_MASCOT_SIZE };
-let petMomentumTimer = null;
-let petTraySize = null;
+let petMomentumTimer: any = null;
+let petTraySize: any = null;
 let petPlacement = 'top-end';
-let petCharacterOptions = [];
+let petCharacterOptions: any[] = [];
 let selectedPetCharacterId = FALLBACK_PET_CHARACTER_ID;
 let selectedInputMode = INPUT_MODE_TEXT;
 
-hermesAuth.onSessionEvent((payload) => {
+hermesAuth.onSessionEvent((payload: any) => {
   handleHermesAuthSessionEvent(payload);
 });
 
@@ -419,7 +420,7 @@ async function checkHermesAuthFlow(reason = 'check') {
     stopAuthMonitor();
     markAuthFlow('failed', {
       hidden: false,
-      lastError: error && error.message ? error.message : String(error),
+      lastError: error instanceof Error && error.message ? error.message : String(error),
     });
     showHermesAuthWindowForState('auth-status-failed');
   }
@@ -526,7 +527,7 @@ function getAppSettingsPath() {
   return path.join(getAgentUIConfigDir(), 'settings.json');
 }
 
-function readJsonStateStore(resolveFile) {
+function readJsonStateStore(resolveFile: any) {
   try {
     const file = resolveFile();
     if (!fs.existsSync(file)) return {};
@@ -537,7 +538,7 @@ function readJsonStateStore(resolveFile) {
   }
 }
 
-function writeJsonStateStore(resolveFile, readCurrent, patch = {}) {
+function writeJsonStateStore(resolveFile: any, readCurrent: any, patch = {}) {
   try {
     const file = resolveFile();
     const current = readCurrent();
@@ -555,7 +556,7 @@ function writeAppSettings(patch = {}) {
   writeJsonStateStore(getAppSettingsPath, readAppSettings, patch);
 }
 
-function normalizeInputMode(value) {
+function normalizeInputMode(value: any) {
   return String(value || '').trim() === INPUT_MODE_VOICE ? INPUT_MODE_VOICE : INPUT_MODE_TEXT;
 }
 
@@ -563,7 +564,7 @@ function loadInputModeSetting() {
   selectedInputMode = normalizeInputMode(readAppSettings().inputMode);
 }
 
-function setSelectedInputMode(mode, { persist = true } = {}) {
+function setSelectedInputMode(mode: any, { persist = true } = {}) {
   selectedInputMode = normalizeInputMode(mode);
   if (persist) writeAppSettings({ inputMode: selectedInputMode });
   rebuildAppMenus();
@@ -577,13 +578,13 @@ function writePetOverlayState(patch = {}) {
   writeJsonStateStore(getPetOverlayStatePath, readPetOverlayState, patch);
 }
 
-function normalizePetCharacterId(id) {
+function normalizePetCharacterId(id: any) {
   const value = String(id || '').trim();
   const aliases = [
     value,
     value.startsWith(CUSTOM_PET_PREFIX) ? value.slice(CUSTOM_PET_PREFIX.length) : `${CUSTOM_PET_PREFIX}${value}`,
   ];
-  const match = aliases.find((candidate) => petCharacterOptions.some((pet) => pet.id === candidate));
+  const match: any = aliases.find((candidate) => petCharacterOptions.some((pet) => pet.id === candidate));
   return match || (petCharacterOptions[0] ? petCharacterOptions[0].id : FALLBACK_PET_CHARACTER_ID);
 }
 
@@ -599,7 +600,7 @@ function refreshPetCharacterOptions({ notify = false } = {}) {
   rebuildAppMenus();
 }
 
-function setSelectedPetCharacter(id, { persist = true } = {}) {
+function setSelectedPetCharacter(id: any, { persist = true } = {}) {
   const next = normalizePetCharacterId(id);
   const changed = selectedPetCharacterId !== next;
   selectedPetCharacterId = next;
@@ -608,23 +609,23 @@ function setSelectedPetCharacter(id, { persist = true } = {}) {
   rebuildAppMenus();
 }
 
-function safeInteger(value) {
+function safeInteger(value: any) {
   const n = Number(value);
   return Number.isFinite(n) ? Math.trunc(n) : null;
 }
 
-function boundedText(value, maxChars = MAX_PROMPT_CHARS) {
+function boundedText(value: any, maxChars = MAX_PROMPT_CHARS) {
   const text = value == null ? '' : String(value);
   return text.length > maxChars ? text.slice(0, maxChars) : text;
 }
 
-function normalizeCatId(value) {
+function normalizeCatId(value: any) {
   const id = String(value || '').trim();
   if (!id || id.length > MAX_CAT_ID_LENGTH) return '';
   return /^[A-Za-z0-9_.:-]+$/.test(id) ? id : '';
 }
 
-function finiteNumberInRange(value, maxAbs = MAX_DRAG_COORDINATE) {
+function finiteNumberInRange(value: any, maxAbs = MAX_DRAG_COORDINATE) {
   const n = Number(value);
   if (!Number.isFinite(n)) return null;
   if (Math.abs(n) > maxAbs) return null;
@@ -647,13 +648,13 @@ function normalizedDragReleasePayload(payload: MutableJsonObject = {}) {
   return { velocityX, velocityY };
 }
 
-function normalizedSize(value) {
+function normalizedSize(value: any) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0 || n > MAX_REPORTED_ELEMENT_SIZE) return null;
   return Math.ceil(n);
 }
 
-function evalPayloadWithinLimit(payload) {
+function evalPayloadWithinLimit(payload: any) {
   try {
     return Buffer.byteLength(JSON.stringify(payload || {}), 'utf8') <= MAX_EVAL_PAYLOAD_BYTES;
   } catch {
@@ -664,7 +665,7 @@ function evalPayloadWithinLimit(payload) {
 const TRUSTED_RENDERER_PAGES = new Set(['index.html', 'modal.html', 'conversation.html', 'auth.html']);
 const TRUSTED_RENDERER_DEV_PATHS = new Set(['/', '/index.html', '/modal.html', '/conversation.html', '/auth.html']);
 
-function isLoopbackHost(hostname) {
+function isLoopbackHost(hostname: any) {
   const host = String(hostname || '').trim().toLowerCase();
   return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
 }
@@ -696,7 +697,7 @@ function trustedRendererFileDir() {
   return path.resolve(__dirname, '../renderer');
 }
 
-function isTrustedRendererUrl(urlValue) {
+function isTrustedRendererUrl(urlValue: any) {
   const raw = String(urlValue || '').trim();
   if (!raw) return false;
   try {
@@ -715,17 +716,17 @@ function isTrustedRendererUrl(urlValue) {
   }
 }
 
-function applyTrustedWebContentsPolicy(win) {
+function applyTrustedWebContentsPolicy(win: any) {
   if (!win || win.isDestroyed()) return;
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  win.webContents.on('will-navigate', (event, urlValue) => {
+  win.webContents.on('will-navigate', (event: any, urlValue: any) => {
     if (!isTrustedRendererUrl(urlValue)) {
       event.preventDefault();
     }
   });
 }
 
-function isTrustedIpcEvent(event, channel) {
+function isTrustedIpcEvent(event: any, channel: any) {
   const urlValue = String(
     (event && event.senderFrame && event.senderFrame.url) ||
     (event && event.sender && typeof event.sender.getURL === 'function' ? event.sender.getURL() : '') ||
@@ -737,14 +738,14 @@ function isTrustedIpcEvent(event, channel) {
 }
 
 function trustedIpcOn(channel: string, listener: IpcListener) {
-  ipcMain.on(channel, (event, ...args) => {
+  ipcMain.on(channel, (event: any, ...args: any[]) => {
     if (!isTrustedIpcEvent(event, channel)) return;
     return listener(event, ...args);
   });
 }
 
 function trustedIpcHandle(channel: string, listener: IpcHandler) {
-  ipcMain.handle(channel, (event, ...args) => {
+  ipcMain.handle(channel, (event: any, ...args: any[]) => {
     if (!isTrustedIpcEvent(event, channel)) {
       return { ok: false, error: 'Untrusted renderer.' };
     }
@@ -756,8 +757,16 @@ function macPanelWindowOptions() {
   return IS_MAC ? { type: 'panel' } : {};
 }
 
-function applyOverlayWindowPolicy(win, { level = PET_OVERLAY_WINDOW_LEVEL } = {}) {
+function applyScreenShareCompatibilityPolicy(win: any) {
   if (!win || win.isDestroyed()) return;
+  if (typeof win.setContentProtection === 'function') {
+    win.setContentProtection(false);
+  }
+}
+
+function applyOverlayWindowPolicy(win: any, { level = PET_OVERLAY_WINDOW_LEVEL } = {}) {
+  if (!win || win.isDestroyed()) return;
+  applyScreenShareCompatibilityPolicy(win);
   if (IS_MAC) {
     win.setVisibleOnAllWorkspaces(true, MAC_FULL_SCREEN_WORKSPACE_OPTIONS);
     win.setAlwaysOnTop(true, level);
@@ -766,7 +775,7 @@ function applyOverlayWindowPolicy(win, { level = PET_OVERLAY_WINDOW_LEVEL } = {}
   win.setAlwaysOnTop(true);
 }
 
-function usableBounds(rect) {
+function usableBounds(rect: any) {
   if (!rect || typeof rect !== 'object') return null;
   const x = Number(rect.x);
   const y = Number(rect.y);
@@ -776,7 +785,7 @@ function usableBounds(rect) {
   return { x, y, width, height };
 }
 
-function displayPlacementBounds(displayLike) {
+function displayPlacementBounds(displayLike: any) {
   const direct = displayLike && typeof displayLike === 'object' ? displayLike : null;
   const bounds = usableBounds(direct && (direct.workArea || direct.bounds));
   if (bounds) return bounds;
@@ -784,7 +793,7 @@ function displayPlacementBounds(displayLike) {
   return usableBounds(fallbackDisplay.workArea) || usableBounds(fallbackDisplay.bounds);
 }
 
-function centeredWindowBounds(width, height, displayLike) {
+function centeredWindowBounds(width: any, height: any, displayLike: any) {
   const windowWidth = Math.max(1, Math.round(Number(width) || 1));
   const windowHeight = Math.max(1, Math.round(Number(height) || 1));
   const primaryDisplay = screen.getPrimaryDisplay();
@@ -801,7 +810,7 @@ function centeredWindowBounds(width, height, displayLike) {
   };
 }
 
-function launchDisplayForModal(modalContextId) {
+function launchDisplayForModal(modalContextId: any) {
   const launchContext = currentLaunchContext(modalContextId);
   if (launchContext && launchContext.display) return launchContext.display;
   if (launchContext && launchContext.cursor) return screen.getDisplayNearestPoint(launchContext.cursor);
@@ -892,7 +901,7 @@ function sendPetLayoutToRenderer() {
   });
 }
 
-function setPetWindowBounds(bounds) {
+function setPetWindowBounds(bounds: any) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (!bounds || !Number.isFinite(Number(bounds.x)) || !Number.isFinite(Number(bounds.y))) return;
   applyingPetWindowBounds = true;
@@ -924,7 +933,7 @@ function applyPetLayout(displayBounds = displayBoundsForPetAnchor(), { persist =
   if (persist) persistPetWindowBounds();
 }
 
-function rectEquals(a, b) {
+function rectEquals(a: any, b: any) {
   return !!(
     a &&
     b &&
@@ -935,7 +944,7 @@ function rectEquals(a, b) {
   );
 }
 
-function expandRect(rect, amount) {
+function expandRect(rect: any, amount: any) {
   return {
     x: rect.x - amount,
     y: rect.y - amount,
@@ -944,7 +953,7 @@ function expandRect(rect, amount) {
   };
 }
 
-function pointInRect(point, rect) {
+function pointInRect(point: any, rect: any) {
   return (
     point.x >= rect.x &&
     point.x < rect.x + rect.width &&
@@ -953,7 +962,7 @@ function pointInRect(point, rect) {
   );
 }
 
-function displayBoundsForDragPoint(point, previousDisplayBounds) {
+function displayBoundsForDragPoint(point: any, previousDisplayBounds: any) {
   const nearestBounds = screen.getDisplayNearestPoint(point).bounds;
   if (rectEquals(nearestBounds, previousDisplayBounds)) return nearestBounds;
   if (previousDisplayBounds && pointInRect(point, expandRect(previousDisplayBounds, PET_DRAG_DISPLAY_HYSTERESIS))) {
@@ -988,7 +997,7 @@ function startPetDrag({ pointerWindowX, pointerWindowY }: MutableJsonObject = {}
   const y = Number(pointerWindowY);
   if (!Number.isFinite(x) || !Number.isFinite(y)) return;
   cancelPetMomentum();
-  const currentLayout = petLayout || computePetLayout({
+  const currentLayout: any = petLayout || computePetLayout({
     anchor: petAnchor || defaultPetAnchor(),
     displayBounds: displayBoundsForPetAnchor(),
     mascotSize: petMascotSize,
@@ -1017,21 +1026,21 @@ function endPetDrag() {
   applyPetLayout(undefined, { persist: true });
 }
 
-function throwPetWithVelocity(velocityX, velocityY) {
+function throwPetWithVelocity(velocityX: any, velocityY: any) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   let vx = Number(velocityX);
   let vy = Number(velocityY);
   if (!Number.isFinite(vx) || !Number.isFinite(vy) || (vx === 0 && vy === 0)) return;
   cancelPetMomentum();
   let elapsed = 0;
-  const step = () => {
+  const step: any = () => {
     if (!mainWindow || mainWindow.isDestroyed()) {
       cancelPetMomentum();
       return;
     }
     petMomentumTimer = null;
     elapsed += PET_MOMENTUM_INTERVAL_MS;
-    const intended = {
+    const intended: any = {
       ...(petAnchor || defaultPetAnchor()),
       x: (petAnchor || defaultPetAnchor()).x + (vx * PET_MOMENTUM_INTERVAL_MS) / 1000,
       y: (petAnchor || defaultPetAnchor()).y + (vy * PET_MOMENTUM_INTERVAL_MS) / 1000,
@@ -1074,7 +1083,7 @@ function scheduleMovedPetPersist() {
   }, 140);
 }
 
-function refreshCursorAtCurrentMousePosition(win) {
+function refreshCursorAtCurrentMousePosition(win: any) {
   if (!win || win.isDestroyed()) return;
   const p = screen.getCursorScreenPoint();
   const b = win.getBounds();
@@ -1090,7 +1099,7 @@ function refreshCursorAtCurrentMousePosition(win) {
   });
 }
 
-function setPetWindowMouseable(enabled, { refreshCursor = false } = {}) {
+function setPetWindowMouseable(enabled: any, { refreshCursor = false } = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const next = !!enabled;
   if (mainWindowMouseable === next) {
@@ -1124,7 +1133,7 @@ function openPetOverlay({ persist = true } = {}) {
   rebuildAppMenus();
 }
 
-function setPetPointerInteraction(enabled) {
+function setPetPointerInteraction(enabled: any) {
   petPointerInteractive = !!enabled;
   applyPetMouseInteractivityPolicy();
 }
@@ -1209,7 +1218,7 @@ function flushPendingSpawnCats() {
   }
 }
 
-function sendSpawnCatToOverlay(payload) {
+function sendSpawnCatToOverlay(payload: any) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   ensureOverlayVisibleForSpawn();
   if (!overlayReady) {
@@ -1219,10 +1228,10 @@ function sendSpawnCatToOverlay(payload) {
   mainWindow.webContents.send('spawn-cat', payload);
 }
 
-function conversationSpawnPayload(catId) {
+function conversationSpawnPayload(catId: any) {
   const id = normalizeCatId(catId);
   if (!id) return null;
-  const rec = listAgentConversations().find((item) => String(item.catId) === id);
+  const rec = listAgentConversations().find((item: any) => String(item.catId) === id);
   if (!rec) return null;
   return {
     catId: id,
@@ -1231,20 +1240,20 @@ function conversationSpawnPayload(catId) {
   };
 }
 
-function sendConversationToOverlay(catId) {
+function sendConversationToOverlay(catId: any) {
   const payload = conversationSpawnPayload(catId);
   if (payload) sendSpawnCatToOverlay(payload);
 }
 
-function closeWindowOnEscape(win, closeFn) {
-  win.webContents.on('before-input-event', (event, input) => {
+function closeWindowOnEscape(win: any, closeFn: any) {
+  win.webContents.on('before-input-event', (event: any, input: any) => {
     if (input.type !== 'keyDown' || input.key !== 'Escape') return;
     event.preventDefault();
     closeFn();
   });
 }
 
-function focusExistingSessionWindow(reason) {
+function focusExistingSessionWindow(reason: any) {
   if (isLiveWindow(modalWindow)) {
     focusWindow(modalWindow);
     telemetry.sessionWindowOpenBlocked({ reason, surface: 'modal' });
@@ -1262,7 +1271,7 @@ function focusExistingSessionWindow(reason) {
   return false;
 }
 
-function overlaySessionWindowOptions(bounds, { useContentSize = false } = {}) {
+function overlaySessionWindowOptions(bounds: any, { useContentSize = false } = {}) {
   return {
     width: bounds.width,
     height: bounds.height,
@@ -1289,7 +1298,7 @@ function overlaySessionWindowOptions(bounds, { useContentSize = false } = {}) {
   };
 }
 
-function loadTrustedRendererPage(win, pageName, query) {
+function loadTrustedRendererPage(win: any, pageName: any, query: any) {
   const rendererDevBase = trustedRendererDevBaseUrl();
   if (rendererDevBase) {
     const base = rendererDevBase;
@@ -1298,7 +1307,7 @@ function loadTrustedRendererPage(win, pageName, query) {
   return win.loadFile(path.join(__dirname, `../renderer/${pageName}`), { query });
 }
 
-function openNewCatModal(modalContextId, inputMode = selectedInputMode) {
+function openNewCatModal(modalContextId: any, inputMode = selectedInputMode) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const normalizedInputMode = normalizeInputMode(inputMode);
   telemetry.modalShowRequested({ modalContextId: modalContextId || null, inputMode: normalizedInputMode });
@@ -1324,7 +1333,7 @@ function openNewCatModal(modalContextId, inputMode = selectedInputMode) {
   });
 
   win.once('ready-to-show', () => {
-    runForCurrentWindow(win, () => modalWindow, (currentWindow) => {
+    runForCurrentWindow(win, () => modalWindow, (currentWindow: any) => {
       currentWindow.show();
       currentWindow.moveTop();
       currentWindow.focus();
@@ -1343,7 +1352,7 @@ function openNewCatModal(modalContextId, inputMode = selectedInputMode) {
     if (activeModalContextId === modalContextId) {
       activeModalContextId = null;
     }
-    clearCurrentWindow(win, () => modalWindow, (next) => {
+    clearCurrentWindow(win, () => modalWindow, (next: any) => {
       modalWindow = next;
     });
   });
@@ -1353,14 +1362,14 @@ function openNewCatModal(modalContextId, inputMode = selectedInputMode) {
   return win;
 }
 
-function showConversationWindow(win) {
+function showConversationWindow(win: any) {
   focusWindow(win);
 }
 
-function showExistingConversationWindow(catId) {
+function showExistingConversationWindow(catId: any) {
   if (!isLiveWindow(conversationWindow)) return false;
   const id = String(catId || '');
-  const previousCatId = activeConversationCatId || null;
+  const previousCatId: any = activeConversationCatId || null;
   if (id && previousCatId !== id) {
     activeConversationCatId = id;
     void loadTrustedRendererPage(conversationWindow, 'conversation.html', { catId: id });
@@ -1376,7 +1385,7 @@ function showExistingConversationWindow(catId) {
   return true;
 }
 
-function openConversationWindow(catId) {
+function openConversationWindow(catId: any) {
   if (!mainWindow || mainWindow.isDestroyed() || !catId) return;
 
   const q = { catId: String(catId) };
@@ -1411,7 +1420,7 @@ function openConversationWindow(catId) {
   });
 
   win.on('closed', () => {
-    const cleared = clearCurrentWindow(win, () => conversationWindow, (next) => {
+    const cleared: any = clearCurrentWindow(win, () => conversationWindow, (next: any) => {
       conversationWindow = next;
     });
     if (cleared) activeConversationCatId = null;
@@ -1420,14 +1429,14 @@ function openConversationWindow(catId) {
   void loadTrustedRendererPage(win, 'conversation.html', q);
 }
 
-function displayForAuthWindow(pendingRun = null) {
+function displayForAuthWindow(pendingRun: any = null) {
   const launchContext = pendingRun && pendingRun.launchContext ? pendingRun.launchContext : null;
   if (launchContext && launchContext.display) return launchContext.display;
   if (launchContext && launchContext.cursor) return screen.getDisplayNearestPoint(launchContext.cursor);
   return displayForPetOrCursor();
 }
 
-function openHermesAuthWindow({ pendingRun = null, reason = '' } = {}) {
+function openHermesAuthWindow({ pendingRun = null, reason = '' }: any = {}) {
   if (pendingRun) pendingAuthRun = pendingRun;
   telemetry.authWindowRequested({
     reason: String(reason || ''),
@@ -1464,7 +1473,7 @@ function openHermesAuthWindow({ pendingRun = null, reason = '' } = {}) {
   });
 
   win.once('ready-to-show', () => {
-    runForCurrentWindow(win, () => authWindow, (currentWindow) => {
+    runForCurrentWindow(win, () => authWindow, (currentWindow: any) => {
       currentWindow.show();
       currentWindow.moveTop();
       currentWindow.focus();
@@ -1479,12 +1488,12 @@ function openHermesAuthWindow({ pendingRun = null, reason = '' } = {}) {
   });
 
   win.on('closed', () => {
-    clearCurrentWindow(win, () => authWindow, (next) => {
+    clearCurrentWindow(win, () => authWindow, (next: any) => {
       authWindow = next;
     });
   });
 
-  const query = {
+  const query: any = {
     pending: pendingAuthRun ? '1' : '',
     reason: String(reason || ''),
   };
@@ -1498,7 +1507,7 @@ function closeHermesAuthWindow() {
   }
 }
 
-function setCatsVisible(visible) {
+function setCatsVisible(visible: any) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (visible) {
     openPetOverlay({ persist: true });
@@ -1548,7 +1557,7 @@ function openPetFolderMenuItem() {
   };
 }
 
-function newSessionMenuItem({ accelerator = undefined } = {}) {
+function newSessionMenuItem({ accelerator = undefined }: { accelerator?: string } = {}) {
   return {
     label: 'New Session…',
     accelerator,
@@ -1558,7 +1567,7 @@ function newSessionMenuItem({ accelerator = undefined } = {}) {
   };
 }
 
-function inputModeMenuItem(mode) {
+function inputModeMenuItem(mode: any) {
   const normalizedInputMode = normalizeInputMode(mode);
   return {
     label: normalizedInputMode === INPUT_MODE_VOICE ? 'Use Voice Input' : 'Use Text Input',
@@ -1597,7 +1606,7 @@ function appMenuItem() {
 }
 
 function petVisibilityMenuItem() {
-  const catsVisible = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible());
+  const catsVisible: any = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible());
   return {
     label: catsVisible ? 'Hide Pet' : 'Show Pet',
     click: () => {
@@ -1727,7 +1736,7 @@ function updateTrayTitle() {
   tray.setTitle(title);
 }
 
-function boundsPayload(bounds) {
+function boundsPayload(bounds: any) {
   if (!bounds || typeof bounds !== 'object') return null;
   const x = Number(bounds.x);
   const y = Number(bounds.y);
@@ -1742,7 +1751,7 @@ function boundsPayload(bounds) {
   };
 }
 
-function displayPayload(display) {
+function displayPayload(display: any) {
   if (!display || typeof display !== 'object') return null;
   return {
     id: display.id,
@@ -1753,7 +1762,7 @@ function displayPayload(display) {
   };
 }
 
-function isBrowserLikeWindow(win) {
+function isBrowserLikeWindow(win: any) {
   const owner = win && win.owner ? win.owner : {};
   const haystack = [
     owner.name,
@@ -1765,7 +1774,7 @@ function isBrowserLikeWindow(win) {
     .some((marker) => haystack.includes(marker));
 }
 
-function screenContextHintForWindow(win) {
+function screenContextHintForWindow(win: any) {
   const owner = win && win.owner ? win.owner : {};
   const appName = String(owner.name || '').trim();
   const title = String((win && win.title) || '').trim();
@@ -1774,7 +1783,7 @@ function screenContextHintForWindow(win) {
   return '';
 }
 
-function screenContextHintForContext(activeWindow, frontmostApp) {
+function screenContextHintForContext(activeWindow: any, frontmostApp: any) {
   const windowHint = screenContextHintForWindow(activeWindow);
   if (windowHint) return windowHint;
   const appName = String((frontmostApp && frontmostApp.name) || '').trim();
@@ -1790,7 +1799,7 @@ function buildLaunchContext({
   activeWindow,
   frontmostApp,
   pending = false,
-}) {
+}: any) {
   const displayInfo = displayPayload(display);
   const cursorInfo = cursor && Number.isFinite(cursor.x) && Number.isFinite(cursor.y)
     ? { x: Math.trunc(cursor.x), y: Math.trunc(cursor.y) }
@@ -1815,7 +1824,7 @@ function buildLaunchContext({
   };
 }
 
-function contextQuality(activeWindow, frontmostApp, display, cursor) {
+function contextQuality(activeWindow: any, frontmostApp: any, display: any, cursor: any) {
   const app = activeWindow && activeWindow.owner ? activeWindow.owner : frontmostApp;
   if (
     activeWindow &&
@@ -1833,7 +1842,7 @@ function contextQuality(activeWindow, frontmostApp, display, cursor) {
   return 'minimal';
 }
 
-function missingContextFields(activeWindow, frontmostApp, display, cursor) {
+function missingContextFields(activeWindow: any, frontmostApp: any, display: any, cursor: any) {
   const owner = activeWindow && activeWindow.owner ? activeWindow.owner : (frontmostApp || {});
   const missing = [];
   if (!activeWindow) missing.push('active_window');
@@ -1847,7 +1856,7 @@ function missingContextFields(activeWindow, frontmostApp, display, cursor) {
   return missing;
 }
 
-function normalizeActiveWindow(win) {
+function normalizeActiveWindow(win: any) {
   if (!win) return null;
   return {
     id: win.id || null,
@@ -1863,7 +1872,7 @@ function normalizeActiveWindow(win) {
   };
 }
 
-function isOwnActiveWindow(win) {
+function isOwnActiveWindow(win: any) {
   const owner = win && win.owner ? win.owner : {};
   return Number(owner.processId) === Number(process.pid);
 }
@@ -1874,7 +1883,7 @@ function usableRecentExternalWindow(maxAgeMs = 30000) {
   return lastExternalWindowSnapshot.window || null;
 }
 
-function initialLaunchContext(source, modalContextId) {
+function initialLaunchContext(source: any, modalContextId: any) {
   const capturedAt = new Date().toISOString();
   const cursor = screen.getCursorScreenPoint();
   const display = screen.getDisplayNearestPoint(cursor);
@@ -1899,7 +1908,7 @@ function initialLaunchContext(source, modalContextId) {
   return context;
 }
 
-function currentLaunchContext(modalContextId) {
+function currentLaunchContext(modalContextId: any) {
   if (!modalContextId) return null;
   const entry = modalContexts.get(modalContextId);
   if (!entry) return null;
@@ -1908,13 +1917,13 @@ function currentLaunchContext(modalContextId) {
   return null;
 }
 
-function modalContextPending(modalContextId) {
+function modalContextPending(modalContextId: any) {
   if (!modalContextId) return false;
   const entry = modalContexts.get(modalContextId);
   return !!(entry && entry.pending);
 }
 
-function setLaunchContext(modalContextId, launchContext, { pending = false } = {}) {
+function setLaunchContext(modalContextId: any, launchContext: any, { pending = false } = {}) {
   if (!modalContextId) return;
   modalContexts.set(modalContextId, {
     launchContext,
@@ -1922,7 +1931,7 @@ function setLaunchContext(modalContextId, launchContext, { pending = false } = {
   });
 }
 
-function frontmostAppFromAppleScriptOutput(stdout) {
+function frontmostAppFromAppleScriptOutput(stdout: any) {
   const lines = String(stdout || '').split(/\r?\n/).map((line) => line.trim());
   const [name, bundleId, pid] = lines;
   if (!name) return null;
@@ -2011,7 +2020,7 @@ async function activeWindowWithTimeout(timeoutMs = ACTIVE_WINDOW_LOOKUP_TIMEOUT_
   ]);
 }
 
-async function captureLaunchContext(source, modalContextId) {
+async function captureLaunchContext(source: any, modalContextId: any) {
   const startedAt = Date.now();
   telemetry.contextCaptureStarted({
     source,
@@ -2044,7 +2053,7 @@ async function captureLaunchContext(source, modalContextId) {
   return context;
 }
 
-function startLaunchContextCapture(source, modalContextId) {
+function startLaunchContextCapture(source: any, modalContextId: any) {
   if (!modalContextId || launchContextCaptures.has(modalContextId)) return null;
   const promise = captureLaunchContext(source, modalContextId)
     .then((context) => {
@@ -2141,7 +2150,7 @@ function getAgentUIConfigDir() {
 
 async function startCatRunFromPayload(payload: MutableJsonObject = {}, opts: MutableJsonObject = {}) {
   const catId = opts.catId ? normalizeCatId(opts.catId) : randomUUID();
-  const modalContextId =
+  const modalContextId: any =
     normalizeCatId(opts.modalContextId) ||
     normalizeCatId(payload && payload.modalContextId) ||
     activeModalContextId ||
@@ -2306,7 +2315,7 @@ trustedIpcOn('close-conversation-window', () => {
 trustedIpcOn('dismiss-cat', async (_e, { catId }: MutableJsonObject = {}) => {
   const id = normalizeCatId(catId);
   if (!id) return;
-  const result = await dismissAgent(id, { getMainWindow: () => mainWindow, log: console });
+  const result: any = await dismissAgent(id, { getMainWindow: () => mainWindow, log: console });
   if (!result || result.ok === false) return;
   if (conversationWindow && !conversationWindow.isDestroyed()) {
     conversationWindow.close();
@@ -2377,7 +2386,7 @@ trustedIpcHandle('hermes-auth-status', async () => {
   try {
     return await hermesAuth.getAuthStatus();
   } catch (error) {
-    return { ok: false, error: error && error.message ? error.message : String(error) };
+    return { ok: false, error: error instanceof Error && error.message ? error.message : String(error) };
   }
 });
 
@@ -2406,7 +2415,7 @@ trustedIpcHandle('hermes-auth-check-now', async () => {
 });
 
 trustedIpcHandle('hermes-auth-finish', () => {
-  const pending = pendingAuthRun;
+  const pending: any = pendingAuthRun;
   resetAuthFlow({ clearPending: true });
   closeHermesAuthWindow();
   if (pending) {
@@ -2436,7 +2445,7 @@ trustedIpcOn('hermes-auth-open', () => {
   openHermesAuthWindow({ reason: 'renderer' });
 });
 
-function evalWindowState(win) {
+function evalWindowState(win: any) {
   return {
     visible: !!(win && !win.isDestroyed() && win.isVisible()),
     bounds: win && !win.isDestroyed() ? win.getBounds() : null,
@@ -2487,8 +2496,8 @@ async function waitForEvalCat({ catId, timeoutMs = 180000 }: MutableJsonObject =
   while (Date.now() - started <= Number(timeoutMs || 180000)) {
     const conversations = listAgentConversations();
     const rec = id
-      ? conversations.find((c) => String(c.catId) === id)
-      : conversations.find((c) => ['completed', 'error', 'cancelled'].includes(String(c.runStatus || '').toLowerCase()));
+      ? conversations.find((c: any) => String(c.catId) === id)
+      : conversations.find((c: any) => ['completed', 'error', 'cancelled'].includes(String(c.runStatus || '').toLowerCase()));
     if (rec) {
       const status = String(rec.runStatus || '').toLowerCase();
       if (['completed', 'error', 'cancelled'].includes(status)) {
@@ -2516,7 +2525,7 @@ async function readDeterministicTranscript() {
   return '';
 }
 
-function textTraceMeta(value, maxPreview = 80) {
+function textTraceMeta(value: any, maxPreview = 80) {
   const text = String(value || '');
   const normalized = text.replace(/\s+/g, ' ').trim();
   return {
@@ -2527,7 +2536,7 @@ function textTraceMeta(value, maxPreview = 80) {
   };
 }
 
-async function captureVoicePromptTranscript(onStatus) {
+async function captureVoicePromptTranscript(onStatus: any) {
   telemetry.voiceStarted({});
   if (process.env.AGENT_UI_EVAL === '1') {
     const transcript = await readDeterministicTranscript();
@@ -2546,7 +2555,7 @@ async function captureVoicePromptTranscript(onStatus) {
   return result;
 }
 
-function sendVoiceInputStatus(win, modalContextId, payload: MutableJsonObject = {}) {
+function sendVoiceInputStatus(win: any, modalContextId: any, payload: MutableJsonObject = {}) {
   const state = String(payload.state || '').trim();
   if (!state || !isCurrentWindow(win, () => modalWindow)) return;
   win.webContents.send('voice-input-status', {
@@ -2558,12 +2567,12 @@ function sendVoiceInputStatus(win, modalContextId, payload: MutableJsonObject = 
   });
 }
 
-async function startVoiceSessionFromShortcut(win, modalContextId) {
+async function startVoiceSessionFromShortcut(win: any, modalContextId: any) {
   if (!isCurrentWindow(win, () => modalWindow)) return;
   const startedAt = Date.now();
   telemetry.voiceSessionRecordingRequested({ modalContextId: modalContextId || null });
   sendVoiceInputStatus(win, modalContextId, { state: 'recording' });
-  const result = await captureVoicePromptTranscript((state) => {
+  const result = await captureVoicePromptTranscript((state: any) => {
     sendVoiceInputStatus(win, modalContextId, { state });
   });
   if (!isCurrentWindow(win, () => modalWindow)) return;
@@ -2619,22 +2628,22 @@ trustedIpcOn('eval-ui-state', (_event, payload: MutableJsonObject = {}) => {
   });
 });
 
-app.whenReady().then(() => {
-  app.setName('agent-UI');
-  loadInputModeSetting();
-  installPetAssetProtocol();
-  installAttachmentProtocol();
-  refreshPetCharacterOptions();
-  void loadGetWindowsModule();
-  void prewarmGatewayReady({ log: console });
-  if (process.platform === 'darwin' && app.dock && process.env.AGENT_UI_EVAL !== '1') {
-    app.dock.hide();
-  }
-  createWindow();
-  createTray();
+function registerNewCatShortcut() {
+  if (newCatShortcutRegistered) return;
+  const newCatAccelerator =
+    process.platform === 'darwin' ? 'CommandOrControl+Shift+C' : 'Control+Shift+C';
+  const registered = globalShortcut.register(newCatAccelerator, () => {
+    void handleNewCatShortcut(newCatAccelerator);
+  });
+  newCatShortcutRegistered = true;
+  telemetry.shortcutRegistered({ accelerator: newCatAccelerator, registered });
+}
+
+function startEvalServerIfNeeded() {
+  if (closeEvalServer) return;
   closeEvalServer = startAgentUIEvalServer(
     {
-      getConversation: async (catId) => {
+      getConversation: async (catId: any) => {
         if (!catId) return { found: false, items: [] };
         return getAgentConversation(String(catId));
       },
@@ -2677,7 +2686,7 @@ app.whenReady().then(() => {
       closeModal: async () => closeEvalModal(),
       dismiss: async ({ catId }: MutableJsonObject = {}) => {
         if (!catId) return { ok: false, error: 'missing cat id' };
-        const result = await dismissAgent(String(catId), { getMainWindow: () => mainWindow, log: console });
+        const result: any = await dismissAgent(String(catId), { getMainWindow: () => mainWindow, log: console });
         telemetry.cleanupDismissCompleted({
           catId: String(catId),
           ok: !!(result && result.ok),
@@ -2689,15 +2698,32 @@ app.whenReady().then(() => {
     },
     console
   );
+}
+
+app.whenReady().then(() => {
+  app.setName('agent-UI');
+  loadInputModeSetting();
+  installPetAssetProtocol();
+  installAttachmentProtocol();
+  refreshPetCharacterOptions();
+  void loadGetWindowsModule();
+  if (process.platform === 'darwin' && app.dock && process.env.AGENT_UI_EVAL !== '1') {
+    app.dock.hide();
+  }
+  createWindow();
+  createTray();
+  registerNewCatShortcut();
+  startEvalServerIfNeeded();
   telemetry.appReady({
     uptimeMs: Math.round(process.uptime() * 1000),
     evalServer: !!closeEvalServer,
   });
+  const startupGatewayPrewarm = prewarmGatewayReady({ log: console });
 
   /** Throttle overlay speech bubbles so streaming tokens do not flood IPC. */
   const streamBubbleThrottle = new Map();
 
-  function sendStreamBubbleThrottled(catId, text) {
+  function sendStreamBubbleThrottled(catId: any, text: any) {
     const id = String(catId);
     const msg = String(text || '').trim();
     if (!msg) return;
@@ -2722,7 +2748,7 @@ app.whenReady().then(() => {
     }, 120);
   }
 
-  setOnConversationPushed(({ catId, streamBubble }) => {
+  setOnConversationPushed(({ catId, streamBubble }: any) => {
     const _id = String(catId);
     sendConversationToOverlay(_id);
     if (conversationWindow && !conversationWindow.isDestroyed()) {
@@ -2731,9 +2757,13 @@ app.whenReady().then(() => {
     if (streamBubble) sendStreamBubbleThrottled(_id, streamBubble);
   });
 
-  void hydrateGatewayConversations({ getMainWindow: () => mainWindow, log: console });
+  void startupGatewayPrewarm
+    .then(() => hydrateGatewayConversations({ getMainWindow: () => mainWindow, log: console }))
+    .catch((error: any) => {
+      console.warn('[agent-ui] startup gateway hydration failed:', error && error.message ? error.message : error);
+    });
 
-  const reclampPetOverlay = () => {
+  const reclampPetOverlay: any = () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     cancelPetWindowMovePersist();
     if (petDragState) {
@@ -2747,13 +2777,6 @@ app.whenReady().then(() => {
   screen.on('display-added', reclampPetOverlay);
   screen.on('display-removed', reclampPetOverlay);
   screen.on('display-metrics-changed', reclampPetOverlay);
-
-  const newCatAccelerator =
-    process.platform === 'darwin' ? 'CommandOrControl+Shift+C' : 'Control+Shift+C';
-  const registered = globalShortcut.register(newCatAccelerator, () => {
-    void handleNewCatShortcut(newCatAccelerator);
-  });
-  telemetry.shortcutRegistered({ accelerator: newCatAccelerator, registered });
 });
 
 app.on('will-quit', () => {

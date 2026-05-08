@@ -82,8 +82,8 @@ const LOCAL_DESKTOP_ENV_KEYS = [
   'LOCAL_DESKTOP_HOME_CHANNEL_NAME',
 ];
 
-let gatewayProcess = null;
-let gatewayStartPromise = null;
+let gatewayProcess: any = null;
+let gatewayStartPromise: any = null;
 
 function pythonNoBytecodeEnv(extra = {}) {
   return {
@@ -94,7 +94,7 @@ function pythonNoBytecodeEnv(extra = {}) {
   };
 }
 
-function envFlag(name, defaultValue = false, falseValues = ['0', 'false', 'off']) {
+function envFlag(name: any, defaultValue = false, falseValues = ['0', 'false', 'off']) {
   const raw = String(process.env[name] || '').trim().toLowerCase();
   if (!raw) return defaultValue;
   if (['1', 'true', 'yes', 'on'].includes(raw)) return true;
@@ -102,7 +102,7 @@ function envFlag(name, defaultValue = false, falseValues = ['0', 'false', 'off']
   return defaultValue;
 }
 
-function executableExists(filePath) {
+function executableExists(filePath: any) {
   try {
     const st = fs.statSync(filePath);
     if (!st.isFile()) return false;
@@ -113,9 +113,9 @@ function executableExists(filePath) {
   }
 }
 
-function execFileText(command, args, opts: ExecTextOptions = { encoding: 'utf8' }) {
+function execFileText(command: any, args: any, opts: ExecTextOptions = { encoding: 'utf8' }) {
   return new Promise((resolve, reject) => {
-    execFile(command, args, { encoding: 'utf8', timeout: 5000, ...opts }, (err, stdout, stderr) => {
+    execFile(command, args, { encoding: 'utf8', timeout: 5000, ...opts }, (err: any, stdout: any, stderr: any) => {
       if (err) {
         const commandError = err as CommandError;
         commandError.stdout = stdout;
@@ -128,7 +128,7 @@ function execFileText(command, args, opts: ExecTextOptions = { encoding: 'utf8' 
   });
 }
 
-function execFileTextWithJsonEvents(command, args, opts: JsonEventOptions = {}, onJsonLine) {
+function execFileTextWithJsonEvents(command: any, args: any, opts: JsonEventOptions = {}, onJsonLine: any) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: opts.cwd,
@@ -146,7 +146,7 @@ function execFileTextWithJsonEvents(command, args, opts: JsonEventOptions = {}, 
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
 
-    child.stdout.on('data', (chunk) => {
+    child.stdout.on('data', (chunk: any) => {
       stdout += chunk;
       stdoutBuffer += chunk;
       const lines = stdoutBuffer.split(/\r?\n/);
@@ -164,17 +164,17 @@ function execFileTextWithJsonEvents(command, args, opts: JsonEventOptions = {}, 
         }
       }
     });
-    child.stderr.on('data', (chunk) => {
+    child.stderr.on('data', (chunk: any) => {
       stderr += chunk;
     });
-    child.on('error', (err) => {
+    child.on('error', (err: any) => {
       if (timer) clearTimeout(timer);
       const commandError = err as CommandError;
       commandError.stdout = stdout;
       commandError.stderr = stderr;
       reject(commandError);
     });
-    child.on('close', (code, signal) => {
+    child.on('close', (code: any, signal: any) => {
       if (timer) clearTimeout(timer);
       if (stdoutBuffer.trim()) {
         try {
@@ -198,7 +198,7 @@ function execFileTextWithJsonEvents(command, args, opts: JsonEventOptions = {}, 
   });
 }
 
-function ensureDir(dir) {
+function ensureDir(dir: any) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
@@ -206,20 +206,25 @@ function packageRootFromMainDir(mainDir = __dirname) {
   return path.resolve(mainDir, '..', '..');
 }
 
-function bundledHermesCommand() {
+function bundledHermesCandidates() {
   const candidates = [];
   const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
   if (resourcesPath) {
     candidates.push(path.join(resourcesPath, 'hermes-runtime', 'bin', 'hermes'));
   }
   candidates.push(path.join(packageRootFromMainDir(), 'build', 'hermes-runtime', 'bin', 'hermes'));
-  for (const candidate of candidates) {
-    if (executableExists(candidate)) return candidate;
-  }
-  return '';
+  return candidates;
 }
 
-function absoluteCommandPath(value) {
+function bundledHermesCommand() {
+  return bundledHermesCandidates().find(executableExists) || '';
+}
+
+function expectedBundledHermesCommand() {
+  return bundledHermesCandidates()[0] || '';
+}
+
+function absoluteCommandPath(value: any) {
   const command = String(value || '').trim();
   if (!command) return '';
   return path.isAbsolute(command) ? command : path.resolve(process.cwd(), command);
@@ -303,7 +308,7 @@ function resolveHermesCommand() {
   };
 }
 
-function hermesCwd(command) {
+function hermesCwd(command: any) {
   const bundled = bundledHermesCommand();
   if (bundled && command === bundled) return path.dirname(path.dirname(bundled));
   const connector = connectorHermesRuntimeForCommand(command);
@@ -311,7 +316,7 @@ function hermesCwd(command) {
   return process.cwd();
 }
 
-function bundledHermesRootForCommand(command) {
+function bundledHermesRootForCommand(command: any) {
   const resolved = path.resolve(String(command || ''));
   const binDir = path.dirname(resolved);
   const root = path.dirname(binDir);
@@ -321,7 +326,7 @@ function bundledHermesRootForCommand(command) {
   return root;
 }
 
-function connectorHermesRuntimeForCommand(command) {
+function connectorHermesRuntimeForCommand(command: any) {
   const resolved = path.resolve(String(command || ''));
   const candidates = [];
 
@@ -351,7 +356,7 @@ function connectorHermesRuntimeForCommand(command) {
   return null;
 }
 
-async function bundledHermesRuntimeForCommand(command) {
+async function bundledHermesRuntimeForCommand(command: any) {
   const root = bundledHermesRootForCommand(command);
   if (!root) return null;
   const python = await bundledHermesPython(command);
@@ -365,7 +370,7 @@ async function bundledHermesRuntimeForCommand(command) {
   };
 }
 
-async function hermesPythonRuntimeForCommand(command) {
+async function hermesPythonRuntimeForCommand(command: any) {
   const bundled = await bundledHermesRuntimeForCommand(command);
   if (bundled) return bundled;
   const connector = connectorHermesRuntimeForCommand(command);
@@ -373,7 +378,7 @@ async function hermesPythonRuntimeForCommand(command) {
   return connector;
 }
 
-function parseTranscriptionJson(stdout) {
+function parseTranscriptionJson(stdout: any) {
   const lines = String(stdout || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     try {
@@ -386,7 +391,7 @@ function parseTranscriptionJson(stdout) {
   return null;
 }
 
-async function bundledHermesPython(command) {
+async function bundledHermesPython(command: any) {
   const root = bundledHermesRootForCommand(command);
   if (!root) return '';
   const python = path.join(root, 'python', 'bin', 'python3');
@@ -394,7 +399,7 @@ async function bundledHermesPython(command) {
   return '';
 }
 
-async function bundledVoiceDependenciesAvailable(python) {
+async function bundledVoiceDependenciesAvailable(python: any) {
   if (!executableExists(python)) return false;
   try {
     const stdout = await execFileText(python, ['-c', [
@@ -409,7 +414,7 @@ async function bundledVoiceDependenciesAvailable(python) {
   }
 }
 
-function formatVoiceCaptureErrorForUser(value) {
+function formatVoiceCaptureErrorForUser(value: any) {
   const raw = String(value && value.message ? value.message : value || 'Could not capture voice input.').trim();
   const lower = raw.toLowerCase();
   if (/permission|denied|microphone|inputstream|portaudio|input device|no default input/.test(lower)) {
@@ -540,29 +545,29 @@ function defaultGatewayConfigYaml() {
   ].join('\n');
 }
 
-function lineIndent(line) {
+function lineIndent(line: any) {
   const match = String(line || '').match(/^ */);
   return match ? match[0].length : 0;
 }
 
-function isStructuralLine(line) {
+function isStructuralLine(line: any) {
   const trimmed = String(line || '').trim();
   return !!trimmed && !trimmed.startsWith('#');
 }
 
-function topLevelKeyIndex(lines, key) {
+function topLevelKeyIndex(lines: any, key: any) {
   const re = new RegExp(`^${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:`);
-  return lines.findIndex((line) => re.test(line));
+  return lines.findIndex((line: any) => re.test(line));
 }
 
-function blockEndIndex(lines, start, parentIndent) {
+function blockEndIndex(lines: any, start: any, parentIndent: any) {
   for (let i = start + 1; i < lines.length; i += 1) {
     if (isStructuralLine(lines[i]) && lineIndent(lines[i]) <= parentIndent) return i;
   }
   return lines.length;
 }
 
-function childKeyIndex(lines, start, end, key, minIndent) {
+function childKeyIndex(lines: any, start: any, end: any, key: any, minIndent: any) {
   const re = new RegExp(`^\\s{${minIndent},}${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:`);
   for (let i = start; i < end; i += 1) {
     if (re.test(lines[i])) return i;
@@ -570,7 +575,7 @@ function childKeyIndex(lines, start, end, key, minIndent) {
   return -1;
 }
 
-function enabledLineIndex(lines, start, end, minIndent) {
+function enabledLineIndex(lines: any, start: any, end: any, minIndent: any) {
   const re = new RegExp(`^\\s{${minIndent},}enabled\\s*:`);
   for (let i = start; i < end; i += 1) {
     if (re.test(lines[i])) return i;
@@ -578,7 +583,7 @@ function enabledLineIndex(lines, start, end, minIndent) {
   return -1;
 }
 
-function localDesktopEnabledInYaml(text) {
+function localDesktopEnabledInYaml(text: any) {
   const lines = String(text || '').split(/\r?\n/);
   const platformsIdx = topLevelKeyIndex(lines, 'platforms');
   if (platformsIdx < 0) return false;
@@ -592,7 +597,7 @@ function localDesktopEnabledInYaml(text) {
   return /^\s*enabled\s*:\s*(true|1|yes|on)\s*(?:#.*)?$/i.test(lines[enabledIdx]);
 }
 
-function ensureLocalDesktopInYaml(text) {
+function ensureLocalDesktopInYaml(text: any) {
   const original = String(text || '');
   if (localDesktopEnabledInYaml(original)) return original;
   const lines = original.split(/\r?\n/);
@@ -667,12 +672,12 @@ function ensureGatewayConfigFile(hermesHome = effectiveGatewayHermesHome()) {
   };
 }
 
-function gatewayEnvLineKey(line) {
+function gatewayEnvLineKey(line: any) {
   const match = String(line || '').trim().match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=/);
   return match ? match[1] : '';
 }
 
-function upsertGatewayEnvText(current, gatewayEnv) {
+function upsertGatewayEnvText(current: any, gatewayEnv: any) {
   const values = new Map(LOCAL_DESKTOP_ENV_KEYS.map((key) => [key, String(gatewayEnv[key] || '')]));
   const seen = new Set();
   const input = String(current || '');
@@ -753,7 +758,7 @@ function syncGatewayEnvToProcess(gatewayEnv: GatewayEnv) {
   return baseUrl;
 }
 
-async function healthOk(baseUrl, timeoutMs = 900) {
+async function healthOk(baseUrl: any, timeoutMs = 900) {
   if (!global.fetch) return false;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -767,7 +772,7 @@ async function healthOk(baseUrl, timeoutMs = 900) {
   }
 }
 
-async function gatewayAuthOk(baseUrl, key, timeoutMs = 900) {
+async function gatewayAuthOk(baseUrl: any, key: any, timeoutMs = 900) {
   const secret = String(key || '').trim();
   if (!global.fetch || !secret) return false;
   const controller = new AbortController();
@@ -803,7 +808,7 @@ async function gatewayAuthOk(baseUrl, key, timeoutMs = 900) {
   }
 }
 
-async function gatewayEventsOk(baseUrl, key, timeoutMs = 900) {
+async function gatewayEventsOk(baseUrl: any, key: any, timeoutMs = 900) {
   const secret = String(key || '').trim();
   if (!global.fetch || !secret) return false;
   const controller = new AbortController();
@@ -843,13 +848,13 @@ async function gatewayEventsOk(baseUrl, key, timeoutMs = 900) {
   }
 }
 
-async function gatewayReadyOk(baseUrl, key, timeoutMs = 900) {
+async function gatewayReadyOk(baseUrl: any, key: any, timeoutMs = 900) {
   return await healthOk(baseUrl, timeoutMs) &&
     await gatewayAuthOk(baseUrl, key, timeoutMs) &&
     await gatewayEventsOk(baseUrl, key, timeoutMs);
 }
 
-function parseGatewayBaseUrl(baseUrl) {
+function parseGatewayBaseUrl(baseUrl: any) {
   try {
     const parsed = new URL(String(baseUrl || ''));
     return {
@@ -861,11 +866,11 @@ function parseGatewayBaseUrl(baseUrl) {
   }
 }
 
-function portAvailable(host, port, timeoutMs = 300) {
+function portAvailable(host: any, port: any, timeoutMs = 300) {
   return new Promise((resolve) => {
     const server = net.createServer();
     let settled = false;
-    const done = (ok) => {
+    const done = (ok: any) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -882,7 +887,7 @@ function portAvailable(host, port, timeoutMs = 300) {
   });
 }
 
-async function nextAvailableGatewayPort(host, preferredPort) {
+async function nextAvailableGatewayPort(host: any, preferredPort: any) {
   const start = Math.max(1024, Math.min(65535, Math.trunc(Number(preferredPort) || 8766)));
   for (let port = start; port <= Math.min(65535, start + 100); port += 1) {
     if (await portAvailable(host, port)) return port;
@@ -906,7 +911,7 @@ function gatewayStartupWaitBudgetMs() {
   return GATEWAY_READY_ATTEMPTS * GATEWAY_READY_INTERVAL_MS;
 }
 
-function childIsAlive(child) {
+function childIsAlive(child: any) {
   return !!(child && child.exitCode == null && child.signalCode == null);
 }
 
@@ -928,7 +933,7 @@ function waitForChildExit(child: ChildProcess, timeoutMs = 1000) {
   });
 }
 
-async function terminateGatewayChild(child, log = console, reason = 'replace') {
+async function terminateGatewayChild(child: any, log = console, reason = 'replace') {
   if (!childIsAlive(child)) return;
   if (gatewayProcess === child) gatewayProcess = null;
   log.warn('[agent-ui] stopping Hermes gateway process', { pid: child.pid || null, reason });
@@ -940,11 +945,11 @@ async function terminateGatewayChild(child, log = console, reason = 'replace') {
   await waitForChildExit(child);
 }
 
-function appendOutputTail(current, chunk) {
+function appendOutputTail(current: any, chunk: any) {
   return `${current}${String(chunk || '')}`.slice(-GATEWAY_OUTPUT_TAIL_CHARS);
 }
 
-function gatewayStartupFailureMessage(baseUrl, childExit, stdoutTail, stderrTail) {
+function gatewayStartupFailureMessage(baseUrl: any, childExit: any, stdoutTail: any, stderrTail: any) {
   const parts = [`Hermes gateway did not become ready at ${baseUrl}.`];
   if (childExit) {
     parts.push(`Process exited with code ${childExit.code == null ? 'unknown' : childExit.code}${childExit.signal ? ` (${childExit.signal})` : ''}.`);
@@ -956,6 +961,16 @@ function gatewayStartupFailureMessage(baseUrl, childExit, stdoutTail, stderrTail
   return parts.join(' ');
 }
 
+function missingHermesExecutableMessage(resolved: MutableJsonObject = {}) {
+  const command = String(resolved.command || '').trim();
+  if (resolved.releaseMode === 'standalone' && !resolved.configured) {
+    const expected = command || expectedBundledHermesCommand();
+    return `Bundled Hermes runtime is missing or damaged${expected ? ` at ${expected}` : ''}. Run npm run bundle:hermes before building or launching the standalone app.`;
+  }
+  if (command) return `Hermes executable is missing or not executable at ${command}. Check AGENT_UI_HERMES_BIN or rebuild Hermes.`;
+  return 'Hermes executable is missing. Bundle Hermes with npm run bundle:hermes or set AGENT_UI_HERMES_BIN.';
+}
+
 async function ensureGatewayProcess(log = console, opts: GatewayReadyOptions = {}) {
   const readyAttempts = Math.max(1, Math.trunc(Number(opts.readyAttempts) || GATEWAY_READY_ATTEMPTS));
   const readyIntervalMs = Math.max(1, Math.trunc(Number(opts.readyIntervalMs) || GATEWAY_READY_INTERVAL_MS));
@@ -963,6 +978,7 @@ async function ensureGatewayProcess(log = console, opts: GatewayReadyOptions = {
   if (!gatewayAutostartEnabled()) return { ok: false, skipped: true, reason: 'autostart disabled' };
   let { env: gatewayEnv } = ensureGatewayEnvFile(gatewayEnvOverridesFromProcess());
   let baseUrl = syncGatewayEnvToProcess(gatewayEnv);
+  let portRotation: MutableJsonObject = {};
   const hermesHome = effectiveGatewayHermesHome();
   if (await gatewayReadyOk(baseUrl, gatewayEnv.LOCAL_DESKTOP_GATEWAY_KEY)) {
     return { ok: true, alreadyRunning: true, baseUrl };
@@ -984,28 +1000,36 @@ async function ensureGatewayProcess(log = console, opts: GatewayReadyOptions = {
 
   const endpoint = parseGatewayBaseUrl(baseUrl);
   if (!await portAvailable(endpoint.host, endpoint.port)) {
+    const previousBaseUrl = baseUrl;
     const replacementPort = await nextAvailableGatewayPort(endpoint.host, endpoint.port + 1);
     ({ env: gatewayEnv } = ensureGatewayEnvFile({
       LOCAL_DESKTOP_HOST: endpoint.host,
       LOCAL_DESKTOP_PORT: String(replacementPort),
     }));
     baseUrl = syncGatewayEnvToProcess(gatewayEnv);
-    log.warn('[agent-ui] Hermes gateway port was occupied; using', baseUrl);
+    portRotation = {
+      portRotated: true,
+      previousBaseUrl,
+      baseUrl,
+      reason: 'preferred-port-occupied',
+    };
+    log.warn('[agent-ui] Hermes gateway port was occupied; using dedicated Agent UI gateway', portRotation);
   }
 
   ensureGatewayConfigFile(hermesHome);
   if (gatewayStartPromise) return gatewayStartPromise;
   if (childIsAlive(gatewayProcess)) {
     if (await gatewayReadyOk(baseUrl, gatewayEnv.LOCAL_DESKTOP_GATEWAY_KEY, readyRequestTimeoutMs)) {
-      return { ok: true, alreadyRunning: true, baseUrl, pid: gatewayProcess.pid || null };
+      return { ok: true, alreadyRunning: true, baseUrl, pid: gatewayProcess.pid || null, ...portRotation };
     }
     await terminateGatewayChild(gatewayProcess, log, 'unready');
   }
 
   gatewayStartPromise = (async () => {
-    const { command } = resolveHermesCommand();
+    const resolved = resolveHermesCommand();
+    const { command } = resolved;
     if (!command || !executableExists(command)) {
-      return { ok: false, error: 'Hermes executable is missing. Bundle Hermes with npm run bundle:hermes or set AGENT_UI_HERMES_BIN.' };
+      return { ok: false, error: missingHermesExecutableMessage(resolved), ...portRotation };
     }
     ensureDir(hermesHome);
     const env = {
@@ -1027,27 +1051,27 @@ async function ensureGatewayProcess(log = console, opts: GatewayReadyOptions = {
     let stdoutTail = '';
     let stderrTail = '';
     let childExit = null;
-    child.stdout.on('data', (chunk) => {
+    child.stdout.on('data', (chunk: any) => {
       stdoutTail = appendOutputTail(stdoutTail, chunk);
       log.log('[agent-ui] Hermes gateway:', String(chunk).trim());
     });
-    child.stderr.on('data', (chunk) => {
+    child.stderr.on('data', (chunk: any) => {
       stderrTail = appendOutputTail(stderrTail, chunk);
       log.warn('[agent-ui] Hermes gateway:', String(chunk).trim());
     });
-    child.once('exit', (code, signal) => {
+    child.once('exit', (code: any, signal: any) => {
       childExit = { code, signal };
       if (gatewayProcess === child) gatewayProcess = null;
       log.warn('[agent-ui] Hermes gateway exited', { code, signal });
     });
-    child.once('error', (error) => {
+    child.once('error', (error: any) => {
       if (gatewayProcess === child) gatewayProcess = null;
       log.warn('[agent-ui] Hermes gateway launch failed', error && error.message ? error.message : error);
     });
 
     for (let i = 0; i < readyAttempts; i += 1) {
       if (await gatewayReadyOk(baseUrl, gatewayEnv.LOCAL_DESKTOP_GATEWAY_KEY, readyRequestTimeoutMs)) {
-        return { ok: true, started: true, baseUrl, pid: child.pid || null };
+        return { ok: true, started: true, baseUrl, pid: child.pid || null, ...portRotation };
       }
       if (childExit) break;
       await new Promise((resolve) => setTimeout(resolve, readyIntervalMs));
@@ -1059,6 +1083,7 @@ async function ensureGatewayProcess(log = console, opts: GatewayReadyOptions = {
       ok: false,
       error: gatewayStartupFailureMessage(baseUrl, childExit, stdoutTail, stderrTail),
       pid: child.pid || null,
+      ...portRotation,
     };
   })();
   try {
@@ -1069,7 +1094,7 @@ async function ensureGatewayProcess(log = console, opts: GatewayReadyOptions = {
 }
 
 function stopGatewayProcess() {
-  const child = gatewayProcess;
+  const child: any = gatewayProcess;
   gatewayProcess = null;
   if (!childIsAlive(child)) return;
   try {

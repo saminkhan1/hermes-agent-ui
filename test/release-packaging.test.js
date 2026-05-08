@@ -175,6 +175,9 @@ test('manual customer pass documents bootstrap Gatekeeper expectations', () => {
   assert.match(checklist, /right-click Open approval/);
   assert.match(checklist, /expected only for future Developer ID-notarized artifacts/);
   assert.match(checklist, /spctl.*stapler rejection is expected evidence/);
+  assert.match(checklist, /FaceTime display sharing/);
+  assert.match(checklist, /Zoom display sharing/);
+  assert.match(checklist, /Discord display sharing/);
   assert.doesNotMatch(checklist, /without override steps/);
 });
 

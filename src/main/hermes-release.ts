@@ -32,7 +32,7 @@ function readPackageJson() {
   }
 }
 
-function normalizeReleaseMode(value, fallback = RELEASE_MODE_STANDALONE) {
+function normalizeReleaseMode(value: any, fallback = RELEASE_MODE_STANDALONE) {
   const mode = String(value || '').trim().toLowerCase();
   return RELEASE_MODES.has(mode) ? mode : fallback;
 }
@@ -82,7 +82,7 @@ function connectorRuntimeStatePath() {
   return path.join(getAgentUIConfigDir(), 'connector-runtime.json');
 }
 
-function readJsonFile(file, fallback = {}) {
+function readJsonFile(file: any, fallback = {}) {
   try {
     if (!fs.existsSync(file)) return fallback;
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -92,7 +92,7 @@ function readJsonFile(file, fallback = {}) {
   }
 }
 
-function writeJsonFile(file, value) {
+function writeJsonFile(file: any, value: any) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
 }
@@ -101,7 +101,7 @@ function readConnectorRuntimeState() {
   return readJsonFile(connectorRuntimeStatePath(), {});
 }
 
-function rememberConnectorHermesCommand(command) {
+function rememberConnectorHermesCommand(command: any) {
   const value = String(command || '').trim();
   if (!value) return;
   writeJsonFile(connectorRuntimeStatePath(), {

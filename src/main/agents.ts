@@ -73,6 +73,7 @@ const MAX_METADATA_BYTES = 16384;
 const DISMISSED_RETENTION_MS = 8 * 24 * 60 * 60 * 1000;
 const DEFAULT_GATEWAY_STREAM_DISCONNECT_GRACE_MS = 15000;
 const GATEWAY_READY_REUSE_MS = 3000;
+const TYPING_STARTED_PUSH_INTERVAL_MS = 5000;
 
 let gatewayClient: any = null;
 let gatewayNotify: (payload: NotifyPayload) => void = () => {};
@@ -82,11 +83,11 @@ let dismissedGatewayConversations: Record<string, number> | null = null;
 let gatewayReadyPromise: Promise<any> | null = null;
 let gatewayReadySnapshot: { checkedAt: number; result: MutableJsonObject } | null = null;
 
-function setOnConversationPushed(fn) {
+function setOnConversationPushed(fn: any) {
   onConversationPushed = typeof fn === 'function' ? fn : () => {};
 }
 
-function setOnAuthRequired(fn) {
+function setOnAuthRequired(fn: any) {
   onAuthRequired = typeof fn === 'function' ? fn : () => {};
 }
 
@@ -145,19 +146,19 @@ function pruneDismissedGatewayConversations() {
   if (changed) writeDismissedGatewayConversations();
 }
 
-function isDismissedGatewayConversation(catId) {
+function isDismissedGatewayConversation(catId: any) {
   const id = String(catId || '').trim();
   if (!id) return false;
   const state = readDismissedGatewayConversations();
-  const ts = Number(state[id] || 0);
+  const ts = Number(state![id] || 0);
   return Number.isFinite(ts) && ts > 0 && now() - ts <= DISMISSED_RETENTION_MS;
 }
 
-function rememberDismissedGatewayConversation(catId) {
+function rememberDismissedGatewayConversation(catId: any) {
   const id = String(catId || '').trim();
   if (!id) return;
   const state = readDismissedGatewayConversations();
-  state[id] = now();
+  state![id] = now();
   writeDismissedGatewayConversations();
 }
 
@@ -166,11 +167,11 @@ function clearGatewayDisconnectTimer() {
   gatewayDisconnectTimer = null;
 }
 
-function sha256(value) {
+function sha256(value: any) {
   return crypto.createHash('sha256').update(String(value || '')).digest('hex');
 }
 
-function preview(value, max = 180) {
+function preview(value: any, max = 180) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   return text.length > max ? `${text.slice(0, max - 1)}...` : text;
 }
@@ -184,7 +185,7 @@ function packageVersion() {
   }
 }
 
-function textMeta(value, max = 180) {
+function textMeta(value: any, max = 180) {
   const text = String(value || '');
   return {
     bytes: Buffer.byteLength(text),
@@ -194,7 +195,7 @@ function textMeta(value, max = 180) {
   };
 }
 
-function jsonClone(value, fallback: any = null) {
+function jsonClone(value: any, fallback: any = null) {
   try {
     const cloned = JSON.parse(JSON.stringify(value));
     return cloned == null ? fallback : cloned;
@@ -203,7 +204,7 @@ function jsonClone(value, fallback: any = null) {
   }
 }
 
-function sanitizeMetadata(value): JsonObject {
+function sanitizeMetadata(value: any): JsonObject {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   const cloned = jsonClone(value, {});
   try {
@@ -223,7 +224,7 @@ function eventTimeMs(event: MutableJsonObject = {}) {
   return now();
 }
 
-function safeText(value, max = 200000) {
+function safeText(value: any, max = 200000) {
   const out = value == null ? '' : String(value);
   return out.length > max ? out.slice(0, max) : out;
 }
@@ -259,12 +260,14 @@ function publicItem(item: AgentConversationItem | MutableJsonObject = {}) {
   return out;
 }
 
-function conversationSnapshot(catId, rec: ConversationRecord = { items: [] }): AgentConversationSnapshot {
+function conversationSnapshot(catId: any, rec: ConversationRecord = { items: [] }): AgentConversationSnapshot {
   return {
     catId: String(catId),
     prompt: safeText(rec.prompt),
     pointerContext: jsonClone(rec.pointerContext || null, null),
-    items: Array.isArray(rec.items) ? rec.items.map(normalizeConversationItem).filter(Boolean) : [],
+    items: Array.isArray(rec.items)
+      ? rec.items.map(normalizeConversationItem).filter((item): item is AgentConversationItem => Boolean(item))
+      : [],
     runStatus: rec.runStatus || 'running',
     endResult: rec.endResult,
     durationMs: rec.durationMs,
@@ -284,7 +287,7 @@ function conversationSnapshot(catId, rec: ConversationRecord = { items: [] }): A
   };
 }
 
-function writeJsonSafe(catId, relPath, value) {
+function writeJsonSafe(catId: any, relPath: any, value: any) {
   try {
     return writeArtifactJson(catId, relPath, value);
   } catch {
@@ -292,12 +295,12 @@ function writeJsonSafe(catId, relPath, value) {
   }
 }
 
-function getConversationLocationLabel(rec) {
+function getConversationLocationLabel(rec: any) {
   const context = rec && rec.pointerContext && typeof rec.pointerContext === 'object' ? rec.pointerContext : null;
   return context && context.screenContextHint ? String(context.screenContextHint) : '';
 }
 
-function leadAssistantBubbleText(fullText) {
+function leadAssistantBubbleText(fullText: any) {
   const raw = String(fullText || '').trim();
   if (!raw) return null;
   const para = raw.indexOf('\n\n');
@@ -307,7 +310,7 @@ function leadAssistantBubbleText(fullText) {
   return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
 }
 
-function finishAssistantBubbleText(fullText) {
+function finishAssistantBubbleText(fullText: any) {
   const lines = String(fullText || '')
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -317,7 +320,7 @@ function finishAssistantBubbleText(fullText) {
   return lastLine.length > 120 ? `${lastLine.slice(0, 117)}...` : lastLine;
 }
 
-function finishBubbleLineFromConversation(rec) {
+function finishBubbleLineFromConversation(rec: any) {
   if (!rec || !Array.isArray(rec.items)) return undefined;
   for (let i = rec.items.length - 1; i >= 0; i--) {
     const it = rec.items[i];
@@ -333,7 +336,7 @@ function finishBubbleLineFromConversation(rec) {
   return undefined;
 }
 
-function latestUserRetry(rec) {
+function latestUserRetry(rec: any) {
   if (!rec || !Array.isArray(rec.items)) return { text: rec && rec.prompt ? String(rec.prompt) : '', kind: 'initial' };
   for (let i = rec.items.length - 1; i >= 0; i--) {
     const item = rec.items[i];
@@ -349,7 +352,7 @@ function latestUserRetry(rec) {
   return { text: rec && rec.prompt ? String(rec.prompt) : '', kind: 'initial' };
 }
 
-function appendConversationError(rec, message) {
+function appendConversationError(rec: any, message: any) {
   if (!rec || !Array.isArray(rec.items)) return;
   const text = String(message || '').trim();
   if (!text) return;
@@ -358,7 +361,7 @@ function appendConversationError(rec, message) {
   rec.items.push({ kind: 'error', text, at: now() });
 }
 
-function terminalizeGatewayConversation(catId, rec: ConversationRecord, message, reason) {
+function terminalizeGatewayConversation(catId: any, rec: ConversationRecord, message: any, reason: any) {
   if (!rec) return false;
   const wasRunning = String(rec.runStatus || '').toLowerCase() === 'running' ||
     !!(rec.typing && rec.typing.active);
@@ -394,7 +397,7 @@ function terminalizeGatewayConversation(catId, rec: ConversationRecord, message,
   return true;
 }
 
-function terminalizeRunningGatewayConversations(message, reason) {
+function terminalizeRunningGatewayConversations(message: any, reason: any) {
   let count = 0;
   for (const [catId, rec] of conversations.entries()) {
     if (!rec) continue;
@@ -438,14 +441,32 @@ function getNotify(getMainWindow?: () => any) {
   };
 }
 
-function statusFromGatewayOutcome(outcome) {
+function statusFromGatewayOutcome(outcome: any) {
   const value = String(outcome || '').toLowerCase();
   if (value === 'failure' || value === 'failed' || value === 'error') return 'error';
   if (value === 'cancelled' || value === 'canceled') return 'cancelled';
   return 'completed';
 }
 
-function ensureConversationForGatewayEvent(catId, event: MutableJsonObject = {}) {
+function metadataSignature(value: any) {
+  return JSON.stringify(sanitizeMetadata(value));
+}
+
+function shouldPushTypingStarted(rec: ConversationRecord, typing: AgentTypingState, receivedAt: number) {
+  const previous = rec.typing || { active: false };
+  const previousMessageId = previous.messageId == null ? null : String(previous.messageId);
+  const nextMessageId = typing.messageId == null ? null : String(typing.messageId);
+  const previousMetadataSignature = metadataSignature(previous.metadata);
+  const nextMetadataSignature = metadataSignature(typing.metadata);
+  const lastPushAt = Number(rec.lastTypingStartedPushAt || 0);
+  return !previous.active ||
+    previousMessageId !== nextMessageId ||
+    previousMetadataSignature !== nextMetadataSignature ||
+    !lastPushAt ||
+    receivedAt - lastPushAt >= TYPING_STARTED_PUSH_INTERVAL_MS;
+}
+
+function ensureConversationForGatewayEvent(catId: any, event: MutableJsonObject = {}) {
   const id = String(catId);
   let rec = conversations.get(id);
   if (rec) return rec;
@@ -501,18 +522,23 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
   }
   if (type === 'typing.started') {
     const typingEvent = event as LocalDesktopTypingEvent | MutableJsonObject;
-    rec.runStatus = 'running';
-    rec.endResult = undefined;
-    rec.durationMs = undefined;
-    rec.typing = {
+    const typing = {
       active: true,
       startedAt: eventTimeMs(typingEvent),
       messageId: typingEvent.message_id == null ? null : String(typingEvent.message_id),
       seq: Number(typingEvent.seq || 0) || undefined,
       metadata: sanitizeMetadata(typingEvent.metadata),
     };
-    persistConversation(catId);
-    onConversationPushed({ catId });
+    const shouldPush = shouldPushTypingStarted(rec, typing, receivedAt);
+    rec.runStatus = 'running';
+    rec.endResult = undefined;
+    rec.durationMs = undefined;
+    rec.typing = typing;
+    if (shouldPush) {
+      rec.lastTypingStartedPushAt = receivedAt;
+      persistConversation(catId);
+      onConversationPushed({ catId });
+    }
     return;
   }
   if (type === 'typing.stopped') {
@@ -585,7 +611,7 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
   }
 }
 
-function handleGatewayReplayExpired(error) {
+function handleGatewayReplayExpired(error: any) {
   const message = 'Hermes event replay window expired; reconnected live, but older missed updates may be unavailable.';
   let affected = 0;
   for (const [catId, rec] of conversations.entries()) {
@@ -648,6 +674,9 @@ async function ensureGatewayReady(log = console, opts: GatewayReadyRequest = {})
       alreadyRunning: !!(result && result.alreadyRunning),
       started: !!(result && result.started),
       skipped: !!(result && result.skipped),
+      portRotated: !!(result && result.portRotated),
+      previousBaseUrl: result && result.previousBaseUrl ? result.previousBaseUrl : null,
+      baseUrl: result && result.baseUrl ? result.baseUrl : null,
       durationMs: now() - startedAt,
       reason,
       error: result && result.error ? result.error : null,
@@ -737,14 +766,14 @@ async function hydrateGatewayConversations(opts: AgentOptions = {}) {
   }
 }
 
-function notifyRestarted(getMainWindow, catId) {
+function notifyRestarted(getMainWindow: any, catId: any) {
   const win = getMainWindow && getMainWindow();
   if (win && !win.isDestroyed()) {
     win.webContents.send('agent-restarted', { catId: String(catId) });
   }
 }
 
-function persistConversation(catId) {
+function persistConversation(catId: any) {
   const id = String(catId);
   const rec = conversations.get(id);
   if (!rec) return;
@@ -753,7 +782,7 @@ function persistConversation(catId) {
   }
 }
 
-function upsertGatewayAssistantMessage(catId, event: LocalDesktopMessageEvent | MutableJsonObject = {}) {
+function upsertGatewayAssistantMessage(catId: any, event: LocalDesktopMessageEvent | MutableJsonObject = {}) {
   const id = String(catId);
   const rec = conversations.get(id);
   if (!rec) return;
@@ -787,7 +816,7 @@ function upsertGatewayAssistantMessage(catId, event: LocalDesktopMessageEvent | 
   onConversationPushed({ catId: id, streamBubble: leadAssistantBubbleText(text) });
 }
 
-function deleteGatewayMessage(catId, event: LocalDesktopMessageDeletedEvent | MutableJsonObject = {}) {
+function deleteGatewayMessage(catId: any, event: LocalDesktopMessageDeletedEvent | MutableJsonObject = {}) {
   const id = String(catId);
   const rec = conversations.get(id);
   if (!rec) return;
@@ -801,7 +830,7 @@ function deleteGatewayMessage(catId, event: LocalDesktopMessageDeletedEvent | Mu
   }
 }
 
-function appendGatewayAttachment(catId, event: LocalDesktopAttachmentEvent | MutableJsonObject = {}) {
+function appendGatewayAttachment(catId: any, event: LocalDesktopAttachmentEvent | MutableJsonObject = {}) {
   const id = String(catId);
   const rec = conversations.get(id);
   if (!rec) return;
@@ -827,7 +856,7 @@ function appendGatewayAttachment(catId, event: LocalDesktopAttachmentEvent | Mut
   onConversationPushed({ catId: id, streamBubble: leadAssistantBubbleText(text) });
 }
 
-function initConversationState(catId, { prompt, pointerContext }) {
+function initConversationState(catId: any, { prompt, pointerContext }: any) {
   const id = String(catId);
   conversations.set(id, {
     prompt: String(prompt || ''),
@@ -844,7 +873,7 @@ function initConversationState(catId, { prompt, pointerContext }) {
   onConversationPushed({ catId: id });
 }
 
-function getAgentConversation(catId) {
+function getAgentConversation(catId: any) {
   const c = conversations.get(String(catId));
   if (!c) return { found: false, items: [] };
   return {
@@ -878,11 +907,11 @@ function listAgentConversations() {
   }));
 }
 
-function deleteConversationState(catId) {
+function deleteConversationState(catId: any) {
   conversations.delete(String(catId));
 }
 
-async function dismissAgent(catId, opts: AgentOptions = {}) {
+async function dismissAgent(catId: any, opts: AgentOptions = {}) {
   const { getMainWindow } = opts;
   const id = String(catId);
   const rec = conversations.get(id);
@@ -904,7 +933,7 @@ async function dismissAgent(catId, opts: AgentOptions = {}) {
   return { ok: true };
 }
 
-function xmlEscaped(value) {
+function xmlEscaped(value: any) {
   return String(value || '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -913,12 +942,12 @@ function xmlEscaped(value) {
     .replace(/'/g, '&apos;');
 }
 
-function safeInteger(value) {
+function safeInteger(value: any) {
   const n = Number(value);
   return Number.isFinite(n) ? Math.trunc(n) : null;
 }
 
-function boundsMetadata(bounds) {
+function boundsMetadata(bounds: any) {
   if (!bounds || typeof bounds !== 'object') return null;
   const x = safeInteger(bounds.x);
   const y = safeInteger(bounds.y);
@@ -928,20 +957,20 @@ function boundsMetadata(bounds) {
   return { x, y, width, height };
 }
 
-function addIfPresent(target, key, value) {
+function addIfPresent(target: any, key: any, value: any) {
   if (value == null) return;
   if (typeof value === 'string' && !value.trim()) return;
   target[key] = value;
 }
 
-function safeMetadataJson(metadata) {
+function safeMetadataJson(metadata: any) {
   return JSON.stringify(metadata, null, 2)
     .replace(/&/g, '\\u0026')
     .replace(/</g, '\\u003C')
     .replace(/>/g, '\\u003E');
 }
 
-function hermesMetadataFromContext(context) {
+function hermesMetadataFromContext(context: any) {
   const c = context && typeof context === 'object' ? context : {};
   const activeWindow = c.activeWindow && typeof c.activeWindow === 'object' ? c.activeWindow : null;
   const owner = activeWindow && activeWindow.owner && typeof activeWindow.owner === 'object'
@@ -987,7 +1016,7 @@ function hermesMetadataFromContext(context) {
   return metadata;
 }
 
-function buildLocalRunPrompt(prompt, launchContext) {
+function buildLocalRunPrompt(prompt: any, launchContext: any) {
   const userMessage = `<user_message source="${HERMES_SOURCE}">${xmlEscaped(prompt)}</user_message>`;
   if (!launchContext) return userMessage;
   const metadataJson = safeMetadataJson(hermesMetadataFromContext(launchContext));
@@ -997,11 +1026,11 @@ function buildLocalRunPrompt(prompt, launchContext) {
   ].join('\n');
 }
 
-function isHermesSlashCommandPrompt(prompt) {
+function isHermesSlashCommandPrompt(prompt: any) {
   return String(prompt || '').trimStart().startsWith('/');
 }
 
-function getAgentArtifacts(catId) {
+function getAgentArtifacts(catId: any) {
   const id = String(catId);
   const dir = evalTraceEnabled ? getCatArtifactDir(id) : null;
   if (!dir) return null;
@@ -1011,7 +1040,7 @@ function getAgentArtifacts(catId) {
   };
 }
 
-async function runOnGateway(catId, notify, log, prompt, opts: AgentOptions = {}) {
+async function runOnGateway(catId: any, notify: any, log: any, prompt: any, opts: AgentOptions = {}) {
   const id = String(catId);
   const rec = conversations.get(id);
   await ensureGatewayReady(log, { reason: 'message' });
@@ -1072,7 +1101,7 @@ async function runOnGateway(catId, notify, log, prompt, opts: AgentOptions = {})
   gatewayNotify = notify || gatewayNotify;
 }
 
-function markGatewayError(catId, error: any, notify, opts: MutableJsonObject = {}) {
+function markGatewayError(catId: any, error: any, notify: any, opts: MutableJsonObject = {}) {
   const id = String(catId);
   const rec = conversations.get(id);
   const message = error && error.message ? error.message : String(error || 'Hermes gateway is unavailable.');
@@ -1114,7 +1143,7 @@ function markGatewayError(catId, error: any, notify, opts: MutableJsonObject = {
   }
 }
 
-async function runAgentLifecycle({ catId, prompt, pointerContext, notify, log, getMainWindow }) {
+async function runAgentLifecycle({ catId, prompt, pointerContext, notify, log, getMainWindow }: any) {
   const id = String(catId);
   const resetGatewayReplay = !gatewayClient && conversations.size === 0;
   initConversationState(id, {
@@ -1133,7 +1162,7 @@ async function runAgentLifecycle({ catId, prompt, pointerContext, notify, log, g
   }
 }
 
-function startAgentForCat({ catId, prompt, pointerContext }, { getMainWindow, log = console }: AgentOptions = {}) {
+function startAgentForCat({ catId, prompt, pointerContext }: any, { getMainWindow, log = console }: AgentOptions = {}) {
   const notify = getNotify(getMainWindow);
   void runAgentLifecycle({
     catId: String(catId),
@@ -1145,7 +1174,7 @@ function startAgentForCat({ catId, prompt, pointerContext }, { getMainWindow, lo
   });
 }
 
-async function sendFollowup(catId, text, opts: AgentOptions = {}) {
+async function sendFollowup(catId: any, text: any, opts: AgentOptions = {}) {
   const { getMainWindow, log = console } = opts;
   const id = String(catId);
   const t = String(text || '');
@@ -1178,7 +1207,7 @@ async function sendFollowup(catId, text, opts: AgentOptions = {}) {
   }
 }
 
-async function cancelAgent(catId, opts: AgentOptions = {}) {
+async function cancelAgent(catId: any, opts: AgentOptions = {}) {
   const { getMainWindow, log = console } = opts;
   const id = String(catId);
   const rec = conversations.get(id);

@@ -11,31 +11,31 @@ const PET_DEFAULT_SPRITESHEET = 'spritesheet.webp';
 const PET_SPRITESHEET_WIDTH = 1536;
 const PET_SPRITESHEET_HEIGHT = 1872;
 
-function ensureDir(dir) {
+function ensureDir(dir: any) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-function readJsonFile(file) {
+function readJsonFile(file: any) {
   const data = JSON.parse(fs.readFileSync(file, 'utf8'));
   return data && typeof data === 'object' ? data : {};
 }
 
-function safeManifestString(value) {
+function safeManifestString(value: any) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function pathInsideDirectory(file, dir) {
+function pathInsideDirectory(file: any, dir: any) {
   const relative = path.relative(dir, file);
   return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-function resolvePetSpritesheetPath(packageDir, manifest) {
+function resolvePetSpritesheetPath(packageDir: any, manifest: any) {
   const rel = safeManifestString(manifest.spritesheetPath) || PET_DEFAULT_SPRITESHEET;
   const resolved = path.resolve(packageDir, rel);
   return pathInsideDirectory(resolved, packageDir) ? resolved : null;
 }
 
-function readPngDimensions(buffer) {
+function readPngDimensions(buffer: any) {
   if (
     buffer.length < 24 ||
     buffer[0] !== 0x89 ||
@@ -48,11 +48,11 @@ function readPngDimensions(buffer) {
   };
 }
 
-function readUint24LE(buffer, offset) {
+function readUint24LE(buffer: any, offset: any) {
   return buffer[offset] | (buffer[offset + 1] << 8) | (buffer[offset + 2] << 16);
 }
 
-function readWebpDimensions(buffer) {
+function readWebpDimensions(buffer: any) {
   if (
     buffer.length < 16 ||
     buffer.toString('ascii', 0, 4) !== 'RIFF' ||
@@ -97,25 +97,25 @@ function readWebpDimensions(buffer) {
   return null;
 }
 
-function spritesheetMimeType(file) {
+function spritesheetMimeType(file: any) {
   const ext = path.extname(file).toLowerCase();
   if (ext === '.png') return 'image/png';
   if (ext === '.webp') return 'image/webp';
   return '';
 }
 
-function readSpritesheetDimensions(file, buffer) {
+function readSpritesheetDimensions(file: any, buffer: any) {
   const mimeType = spritesheetMimeType(file);
   if (mimeType === 'image/png') return readPngDimensions(buffer);
   if (mimeType === 'image/webp') return readWebpDimensions(buffer);
   return null;
 }
 
-function petSpriteUrl(id) {
+function petSpriteUrl(id: any) {
   return `${PET_ASSET_SCHEME}://sprite/${encodeURIComponent(String(id || ''))}`;
 }
 
-function petMetadata(pet, { includeSprite = false } = {}) {
+function petMetadata(pet: any, { includeSprite = false } = {}) {
   if (!pet) return null;
   const out: any = {
     assetRef: pet.assetRef,
@@ -128,7 +128,7 @@ function petMetadata(pet, { includeSprite = false } = {}) {
   return out;
 }
 
-function loadPetPackage(packageDir, manifestFile) {
+function loadPetPackage(packageDir: any, manifestFile: any) {
   const manifestPath = path.join(packageDir, manifestFile);
   if (!fs.existsSync(manifestPath)) return null;
   const manifest = readJsonFile(manifestPath);
@@ -157,13 +157,13 @@ function loadPetPackage(packageDir, manifestFile) {
   };
 }
 
-function scanPetPackageRoot(rootDir, manifestFile, { create = false } = {}) {
+function scanPetPackageRoot(rootDir: any, manifestFile: any, { create = false } = {}) {
   try {
     if (create) ensureDir(rootDir);
     if (!fs.existsSync(rootDir)) return [];
     return fs.readdirSync(rootDir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => {
+      .filter((entry: any) => entry.isDirectory())
+      .map((entry: any) => {
         try {
           return loadPetPackage(path.join(rootDir, entry.name), manifestFile);
         } catch {
@@ -172,12 +172,12 @@ function scanPetPackageRoot(rootDir, manifestFile, { create = false } = {}) {
       })
       .filter(Boolean);
   } catch (e) {
-    console.warn('[agent-ui] pet package scan failed', rootDir, e && e.message ? e.message : e);
+    console.warn('[agent-ui] pet package scan failed', rootDir, e instanceof Error && e.message ? e.message : e);
     return [];
   }
 }
 
-function loadPetCharacterOptions({ codexHome, packageRoot }) {
+function loadPetCharacterOptions({ codexHome, packageRoot }: any) {
   const byId = new Map();
   const roots = [
     { dir: path.join(packageRoot, 'assets', 'pets'), manifestFile: PET_MANIFEST_FILE, create: false },
@@ -192,12 +192,12 @@ function loadPetCharacterOptions({ codexHome, packageRoot }) {
   return [...byId.values()].sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
-function petCharactersPayload({ options, selectedId }) {
-  const selected = options.find((pet) => pet.id === selectedId) || options[0] || null;
+function petCharactersPayload({ options, selectedId }: any) {
+  const selected = options.find((pet: any) => pet.id === selectedId) || options[0] || null;
   const id = selected ? selected.id : selectedId;
   return {
     id,
-    options: options.map((pet) => petMetadata(pet)),
+    options: options.map((pet: any) => petMetadata(pet)),
     selected: petMetadata(selected, { includeSprite: true }),
     selectedSpriteUrl: selected ? petSpriteUrl(selected.id) : '',
   };
