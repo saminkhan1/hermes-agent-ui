@@ -170,7 +170,7 @@ test('Tart clean-room smoke uses vanilla images and password SSH isolation', () 
 });
 
 test('manual customer pass documents bootstrap Gatekeeper expectations', () => {
-  const checklist = read('docs/release/MANUAL_CUSTOMER_PASS.md');
+  const checklist = read('docs/RELEASE.md');
 
   assert.match(checklist, /right-click Open approval/);
   assert.match(checklist, /expected only for future Developer ID-notarized artifacts/);
@@ -184,7 +184,7 @@ test('installed app release smoke is a committed repeatable gate', () => {
   const gatewaySmoke = read('scripts/local-gateway-smoke.js');
   const guiSmoke = read('scripts/tart-gui-manual.sh');
   const readme = read('README.md');
-  const evidenceTemplate = read('docs/release/evidence-template.md');
+  const evidenceTemplate = read('docs/RELEASE.md');
 
   assert.equal(pkg.scripts['smoke:installed-release'], 'node scripts/installed-app-release-smoke.js');
   assert.equal(pkg.scripts['smoke:installed-release:lmstudio'], 'AGENT_UI_INSTALLED_SMOKE_PROVIDER=lmstudio node scripts/installed-app-release-smoke.js');

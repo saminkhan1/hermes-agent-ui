@@ -10,7 +10,7 @@ const mainEntry = path.join(pkgRoot, 'out', 'main', 'index.js');
 
 if (!fs.existsSync(mainEntry)) {
   console.error(
-    `[agent-ui] Missing built main process at ${mainEntry}. Run "npm run build" in the package root (or reinstall so the "prepare" script can run).`
+    `[agent-ui] Missing built main process at ${mainEntry}. Run "npm run build" in the package root.`
   );
   process.exit(1);
 }

@@ -8,14 +8,10 @@ It captures lightweight app/window/display context when the global shortcut fire
   <img src="assets/readme_pic.png" alt="agent-UI desktop interface preview" width="760">
 </p>
 
-## Documentation Map
+## Documentation
 
-- New contributors: [Developer Onboarding](docs/DEVELOPER_ONBOARDING.md)
-- Contribution workflow: [Contributing](CONTRIBUTING.md)
-- Test and release gates: [Testing And Verification](docs/TESTING_AND_VERIFICATION.md)
-- Private bootstrap release: [Private Bootstrap Release](docs/release/PRIVATE_BOOTSTRAP_RELEASE.md)
-- Manual customer release pass: [Manual Customer Pass](docs/release/MANUAL_CUSTOMER_PASS.md)
-- Release evidence notes: [Release Evidence Template](docs/release/evidence-template.md)
+- Contributor workflow: [Contributing](CONTRIBUTING.md)
+- Release gates and evidence: [Release Guide](docs/RELEASE.md)
 
 ## Manual Testing Goal
 
@@ -149,7 +145,7 @@ npm install
 npm run verify
 ```
 
-For the full setup path, see [Developer Onboarding](docs/DEVELOPER_ONBOARDING.md).
+For contributor workflow and local checks, see [Contributing](CONTRIBUTING.md).
 
 ## Run From Source
 
@@ -229,9 +225,7 @@ npm run release:verify
 
 This writes `dist/release-manifest.json` with app mode, app version, git SHA, app source dirty status, connector Hermes baseline or standalone bundled Hermes provenance, whether Hermes runtime is included, signing identity, notarization status, and SHA-256 hashes for every DMG/zip artifact. For standalone, provenance includes the Hermes source path, source policy, git SHA, release-tag SHA when available, dirty state, dirty file list, and bundled tree hash. In bootstrap signing mode, `notarizationStatus` is recorded as `not_applicable_bootstrap`; `spctl` and stapler results are still captured as evidence but are not required to pass.
 
-For the full command-by-command release verification path, see [Testing And Verification](docs/TESTING_AND_VERIFICATION.md).
-
-For the no-paid-Apple-Developer-account release path, use [Private Bootstrap Release](docs/release/PRIVATE_BOOTSTRAP_RELEASE.md). The customer-facing download link should be the GitHub Release page, not a GitHub Actions artifact link.
+For release verification, private bootstrap distribution, manual customer checks, and evidence notes, see [Release Guide](docs/RELEASE.md). The customer-facing download link should be the GitHub Release page, not a GitHub Actions artifact link.
 
 ## Verify
 

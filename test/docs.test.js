@@ -11,14 +11,13 @@ function read(relPath) {
   return fs.readFileSync(path.join(root, relPath), 'utf8');
 }
 
-test('README points contributors to onboarding, contribution, and verification docs', () => {
+test('README points contributors to the lean docs set', () => {
   const readme = read('README.md');
 
-  assert.match(readme, /docs\/DEVELOPER_ONBOARDING\.md/);
   assert.match(readme, /CONTRIBUTING\.md/);
-  assert.match(readme, /docs\/TESTING_AND_VERIFICATION\.md/);
-  assert.match(readme, /docs\/release\/MANUAL_CUSTOMER_PASS\.md/);
-  assert.match(readme, /docs\/release\/evidence-template\.md/);
+  assert.match(readme, /docs\/RELEASE\.md/);
+  assert.doesNotMatch(readme, /docs\/DEVELOPER_ONBOARDING\.md/);
+  assert.doesNotMatch(readme, /docs\/release\//);
 });
 
 test('contribution docs preserve branch and release gate expectations', () => {
@@ -31,18 +30,17 @@ test('contribution docs preserve branch and release gate expectations', () => {
   assert.match(contributing, /Bootstrap releases are ad-hoc signed and are not notarized/);
 });
 
-test('onboarding docs separate gateway transport from provider auth', () => {
-  const onboarding = read('docs/DEVELOPER_ONBOARDING.md');
+test('contribution docs separate gateway transport from provider auth', () => {
+  const contributing = read('CONTRIBUTING.md');
 
-  assert.match(onboarding, /~\/\.agent-ui\/hermes-home\/\.env/);
-  assert.match(onboarding, /~\/\.agent-ui\/connector-runtime\.json/);
-  assert.match(onboarding, /No inference provider configured/);
-  assert.match(onboarding, /A healthy gateway does not prove provider auth is configured/);
-  assert.match(onboarding, /agent-UI Standalone\.app\/Contents\/Resources\/hermes-runtime\/bin\/hermes/);
+  assert.match(contributing, /gateway secret is not the same as Hermes provider auth/);
+  assert.match(contributing, /agent-UI gateway config lives under `~\/\.agent-ui\/`/);
+  assert.match(contributing, /Hermes provider credentials live in Hermes' own auth\/config state/);
+  assert.match(contributing, /reachable gateway can still return provider setup errors/);
 });
 
-test('testing docs include the full release verification path', () => {
-  const testing = read('docs/TESTING_AND_VERIFICATION.md');
+test('release guide includes the full release verification path', () => {
+  const testing = read('docs/RELEASE.md');
 
   assert.match(testing, /Ring 0 - Local Fast Checks/);
   assert.match(testing, /Ring 1 - GitHub Actions Build Gate/);

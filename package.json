@@ -43,8 +43,7 @@
     "report:stages": "node scripts/eval-stage-report.js",
     "tart:manual-gui": "bash scripts/tart-gui-manual.sh",
     "start": "electron-vite preview",
-    "test": "node --import tsx --test test/*.test.js",
-    "prepare": "electron-vite build"
+    "test": "node --import tsx --test test/*.test.js"
   },
   "keywords": [
     "electron",

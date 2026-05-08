@@ -4,15 +4,14 @@ This project is a macOS Electron app that packages a pinned Hermes runtime. Trea
 
 ## Start Here
 
-1. Read [Developer Onboarding](docs/DEVELOPER_ONBOARDING.md).
-2. Read [Testing And Verification](docs/TESTING_AND_VERIFICATION.md).
-3. Install dependencies:
+1. Read the project overview in [README](README.md).
+2. Install dependencies:
 
 ```bash
 npm install
 ```
 
-4. Prove the checkout is healthy before editing:
+3. Prove the checkout is healthy before editing:
 
 ```bash
 npm run verify
@@ -26,7 +25,7 @@ npm run verify
 - `main` should stay aligned with `gateway` for the current repo shape.
 - `deployment` is the GitHub Actions release branch. The mac bootstrap release workflow runs against this branch.
 
-When preparing a release candidate, align all three branches to the same commit and run the release gates in [Testing And Verification](docs/TESTING_AND_VERIFICATION.md).
+When preparing a release candidate, align all three branches to the same commit and run the release gates in [Release Guide](docs/RELEASE.md).
 
 ## Local Development
 
@@ -79,11 +78,7 @@ The installed-release smoke expects a built app already installed or extracted. 
 
 ## Release Contributions
 
-Release changes must keep these documents current:
-
-- [Testing And Verification](docs/TESTING_AND_VERIFICATION.md)
-- [Manual Customer Pass](docs/release/MANUAL_CUSTOMER_PASS.md)
-- [Release Evidence Template](docs/release/evidence-template.md)
+Release changes must keep [Release Guide](docs/RELEASE.md) current.
 
 For a release candidate, do not stop at CI. Run the four rings:
 
