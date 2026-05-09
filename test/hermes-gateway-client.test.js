@@ -396,3 +396,41 @@ test('clean event stream EOF reports disconnected', async () => {
 
   assert.deepEqual(states.slice(0, 2), ['connected', 'disconnected']);
 });
+
+test('event stream parses CRLF-delimited SSE frames across chunks', async () => {
+  const encoder = new TextEncoder();
+  const events = [];
+  const states = [];
+  const fetchImpl = async () => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode('id: 3\r\nevent: message.created\r\n'));
+      controller.enqueue(encoder.encode('data: {"conversation_id":"cat-crlf","text":"ok"}\r\n\r\n'));
+      controller.close();
+    },
+  }), {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' },
+  });
+  const client = new HermesGatewayClient({
+    baseUrl: 'http://127.0.0.1:8766',
+    key: 'secret',
+    statePath: tempStatePath(),
+    fetchImpl,
+    onEvent: (event) => events.push(event),
+    onConnectionChange: (state) => states.push(state.state),
+    log: { warn() {} },
+  });
+
+  client.start();
+  try {
+    await waitFor(() => events.length === 1);
+  } finally {
+    client.stop();
+  }
+
+  assert.deepEqual(states.slice(0, 1), ['connected']);
+  assert.equal(events[0].seq, 3);
+  assert.equal(events[0].type, 'message.created');
+  assert.equal(events[0].conversation_id, 'cat-crlf');
+  assert.equal(events[0].text, 'ok');
+});

@@ -13,7 +13,7 @@ It captures lightweight app/window/display context when the global shortcut fire
 - Contributor workflow: [Contributing](CONTRIBUTING.md)
 - Release gates and evidence: [Release Guide](docs/RELEASE.md)
 
-## Manual Testing Goal
+## Product Shape
 
 For manual testers, ship two macOS app variants with the same launcher, voice, pet stack, detail, follow-up, cancel, and thin Hermes auth/model flow:
 
@@ -77,7 +77,7 @@ To bundle a different Hermes checkout:
 HERMES_BUNDLE_SOURCE=/path/to/hermes-agent npm run dist:mac
 ```
 
-The default standalone build intentionally accepts local Hermes modifications. To force the older clean upstream-release policy for a reproducible baseline build, use:
+Local standalone builds use the selected Hermes checkout. To require an exact released Hermes checkout for a reproducible baseline build, use:
 
 ```bash
 HERMES_BUNDLE_SOURCE_POLICY=release npm run dist:mac:standalone:bootstrap
@@ -135,7 +135,7 @@ Gateway mode behavior:
 - Sends follow-ups as plain text while Hermes owns same-session busy behavior.
 - Sends conversation-window cancel as `/stop` through the same Hermes gateway conversation.
 - Reconnects SSE from the last recorded sequence; if the replay window expired, it reconnects live and adds a local sync-gap error item.
-- Leaves Hermes session finalization in Hermes core. Follow-up there: decide whether `local_desktop` completion should finalize sessions earlier than idle expiry.
+- Leaves Hermes session finalization in Hermes core.
 
 ## Clone And Install
 
@@ -185,13 +185,13 @@ If the built app is missing, run `npm run build` from the repo root.
 2. Drag the app to `/Applications`.
 3. Launch from Finder, using right-click Open for the bootstrap Gatekeeper approval if macOS requires it.
 4. Confirm the app starts without requiring a terminal.
-5. In the app or tray menu, choose `Settings > Input Mode > Text`.
+5. In the app, tray, or pet context menu, choose `Use Text Input`.
 6. Press `Cmd+Shift+C`.
 7. Enter a short prompt and submit.
 8. Confirm a pet/session appears and streams Hermes output.
 9. Open details, send a follow-up, then press Cancel and confirm Hermes stops the active run.
 10. Start one `/background ...` task and confirm Hermes accepts it as a slash command.
-11. In the app or tray menu, choose `Settings > Input Mode > Voice`.
+11. In the app, tray, or pet context menu, choose `Use Voice Input`.
 12. Press `Cmd+Shift+C`, grant macOS microphone permission if prompted, and confirm the prompt window shows voice recording/transcribing state.
 13. Confirm the transcribed prompt appears in the text box, edit it if needed, then submit it to start a new session.
 14. While the pet overlay is visible, share the active display from FaceTime, Zoom, and Discord, then confirm the share starts and the overlay remains visible in the shared display.

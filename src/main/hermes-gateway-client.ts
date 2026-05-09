@@ -466,13 +466,13 @@ class HermesGatewayClient {
         break;
       }
       buffer += decoder.decode(value, { stream: true });
-      let idx = buffer.indexOf('\n\n');
-      while (idx >= 0) {
-        const frame = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + 2);
+      let frameBoundary = /\r\n\r\n|\n\n/.exec(buffer);
+      while (frameBoundary) {
+        const frame = buffer.slice(0, frameBoundary.index);
+        buffer = buffer.slice(frameBoundary.index + frameBoundary[0].length);
         const event = parseSseFrame(frame);
         if (event) this.handleEvent(event);
-        idx = buffer.indexOf('\n\n');
+        frameBoundary = /\r\n\r\n|\n\n/.exec(buffer);
       }
     }
     if (streamEnded && this.running) {

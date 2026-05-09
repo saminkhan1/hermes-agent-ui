@@ -1,9 +1,9 @@
-export type JsonPrimitive = string | number | boolean | null;
-export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
+type JsonPrimitive = string | number | boolean | null;
+type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export type JsonObject = { [key: string]: JsonValue };
 export type MutableJsonObject = Record<string, any>;
 
-export type LocalDesktopGatewayEventType =
+type LocalDesktopGatewayEventType =
   | 'message.created'
   | 'message.updated'
   | 'message.deleted'
@@ -11,12 +11,12 @@ export type LocalDesktopGatewayEventType =
   | 'typing.started'
   | 'typing.stopped';
 
-export type LocalDesktopProcessingOutcome =
+type LocalDesktopProcessingOutcome =
   | 'success'
   | 'failure'
   | 'cancelled';
 
-export type LocalDesktopGatewayEventBase = {
+type LocalDesktopGatewayEventBase = {
   seq: number;
   type: LocalDesktopGatewayEventType;
   conversation_id: string;
@@ -94,7 +94,7 @@ export type LocalDesktopErrorResponse = {
   message: string;
 };
 
-export type AttachmentDescriptor = {
+type AttachmentDescriptor = {
   status?: 'ready' | 'blocked' | string;
   source?: 'local' | 'remote' | string;
   url?: string;

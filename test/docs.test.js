@@ -18,6 +18,9 @@ test('README points contributors to the lean docs set', () => {
   assert.match(readme, /docs\/RELEASE\.md/);
   assert.doesNotMatch(readme, /docs\/DEVELOPER_ONBOARDING\.md/);
   assert.doesNotMatch(readme, /docs\/release\//);
+  assert.doesNotMatch(readme, /Settings > Input Mode/);
+  assert.doesNotMatch(readme, /Follow-up there:/);
+  assert.doesNotMatch(readme, /older clean upstream-release policy/);
 });
 
 test('contribution docs preserve branch and release gate expectations', () => {
