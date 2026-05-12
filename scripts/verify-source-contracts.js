@@ -196,6 +196,7 @@ function verifyEvalSurface() {
   requireText('src/main/eval-server.ts', 'AGENT_UI_EVAL_TOKEN', 'eval token gate');
   requireText('src/main/index.ts', "import './eval-config'", 'early eval config import');
   requireText('src/main/eval-config.ts', '--agent-ui-eval-config=', 'installed-app eval config handoff');
+  requireText('src/main/eval-config.ts', "getSwitchValue('agent-ui-eval-config')", 'Electron eval config switch');
   requireText('src/main/eval-config.ts', 'EVAL_CONFIG_ENV_KEYS', 'eval config env allowlist');
   requireText('src/main/eval-server.ts', 'timingSafeEqual', 'constant-time eval auth compare');
   requireText('src/main/eval-server.ts', "server.listen(port, '127.0.0.1'", 'loopback-only eval server');

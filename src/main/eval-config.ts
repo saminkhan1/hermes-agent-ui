@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { app } from 'electron';
 
 const EVAL_CONFIG_ARG_PREFIX = '--agent-ui-eval-config=';
 const EVAL_CONFIG_ENV_KEYS = new Set([
@@ -15,7 +16,9 @@ const EVAL_CONFIG_ENV_KEYS = new Set([
 
 function applyEvalConfigArgv() {
   const arg = process.argv.find((value) => String(value || '').startsWith(EVAL_CONFIG_ARG_PREFIX));
-  const file = arg ? String(arg).slice(EVAL_CONFIG_ARG_PREFIX.length).trim() : '';
+  const file = arg
+    ? String(arg).slice(EVAL_CONFIG_ARG_PREFIX.length).trim()
+    : String(app.commandLine.getSwitchValue('agent-ui-eval-config') || '').trim();
   if (!file) return;
   try {
     const config = JSON.parse(fs.readFileSync(path.resolve(file), 'utf8'));
