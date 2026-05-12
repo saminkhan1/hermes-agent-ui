@@ -223,7 +223,7 @@ const pendingSpawnCats: LooseBoundaryValue[] = [];
 let activeModalContextId: LooseBoundaryValue = null;
 const modalContexts = new Map();
 const launchContextCaptures = new Map();
-let pendingAuthRun: LooseBoundaryValue = null;
+const pendingAuthRuns = new Map<string, PreparedCatRun>();
 let authMonitorTimer: LooseBoundaryValue = null;
 let authFlow = idleAuthFlow();
 const ignoredAuthSessionIds = new Set();
@@ -286,7 +286,7 @@ function idleAuthFlow() {
 }
 
 function authFlowIsRecoverable() {
-  return !!pendingAuthRun || !!authFlow.sessionId || authFlow.state !== 'idle';
+  return pendingAuthRuns.size > 0 || !!authFlow.sessionId || authFlow.state !== 'idle';
 }
 
 function authFlowIsWaiting() {
@@ -295,7 +295,8 @@ function authFlowIsWaiting() {
 
 function authContextPayload(reason = '') {
   return {
-    hasPendingRun: !!pendingAuthRun,
+    hasPendingRun: pendingAuthRuns.size > 0,
+    pendingRunCount: pendingAuthRuns.size,
     reason: String(reason || ''),
     authFlow: { ...authFlow },
   };
@@ -311,7 +312,8 @@ function sendHermesAuthEvent(payload: MutableJsonObject = {}) {
   authWindow.webContents.send('hermes-auth-event', {
     ...payload,
     authFlow: { ...authFlow },
-    hasPendingRun: !!pendingAuthRun,
+    hasPendingRun: pendingAuthRuns.size > 0,
+    pendingRunCount: pendingAuthRuns.size,
   });
 }
 
@@ -349,9 +351,32 @@ function markAuthFlow(state: string, patch: MutableJsonObject = {}) {
 function resetAuthFlow({ clearPending = false } = {}) {
   stopAuthMonitor();
   authFlow = idleAuthFlow();
-  if (clearPending) pendingAuthRun = null;
+  if (clearPending) pendingAuthRuns.clear();
   rebuildAppMenus();
   sendHermesAuthContext('auth-reset');
+}
+
+function pendingAuthRunList() {
+  return Array.from(pendingAuthRuns.values());
+}
+
+function primaryPendingAuthRun() {
+  return pendingAuthRunList()[0] || null;
+}
+
+function rememberPendingAuthRun(pendingRun: LooseBoundaryValue) {
+  if (!pendingRun || typeof pendingRun !== 'object') return null;
+  const catId = normalizeCatId(pendingRun.catId);
+  if (!catId) return null;
+  const run = { ...pendingRun, catId } as PreparedCatRun;
+  pendingAuthRuns.set(catId, run);
+  return run;
+}
+
+function drainPendingAuthRuns() {
+  const runs = pendingAuthRunList();
+  pendingAuthRuns.clear();
+  return runs;
 }
 
 function showHermesAuthWindowForState(reason = '') {
@@ -429,7 +454,7 @@ function startHermesOAuthFlow(payload: MutableJsonObject = {}) {
   rebuildAppMenus();
   startAuthMonitor();
   sendHermesAuthContext('auth-started');
-  return { ...result, authFlow: { ...authFlow }, hasPendingRun: !!pendingAuthRun };
+  return { ...result, authFlow: { ...authFlow }, hasPendingRun: pendingAuthRuns.size > 0 };
 }
 
 function cancelHermesOAuthFlow(payload: MutableJsonObject = {}, { clearPending = true } = {}) {
@@ -1347,18 +1372,21 @@ function openConversationWindow(catId: LooseBoundaryValue) {
 }
 
 function displayForAuthWindow(pendingRun: LooseBoundaryValue = null) {
-  const launchContext = pendingRun && pendingRun.launchContext ? pendingRun.launchContext : null;
+  const placementRun = pendingRun || primaryPendingAuthRun();
+  const launchContext = placementRun && placementRun.launchContext ? placementRun.launchContext : null;
   if (launchContext && launchContext.display) return launchContext.display;
   if (launchContext && launchContext.cursor) return screen.getDisplayNearestPoint(launchContext.cursor);
   return displayForPetOrCursor();
 }
 
 function openHermesAuthWindow({ pendingRun = null, reason = '' }: LooseBoundaryValue = {}) {
-  if (pendingRun) pendingAuthRun = pendingRun;
+  if (pendingRun) rememberPendingAuthRun(pendingRun);
+  const primaryPending = primaryPendingAuthRun();
   telemetry.authWindowRequested({
     reason: String(reason || ''),
-    hasPendingRun: !!pendingAuthRun,
-    catId: pendingAuthRun && pendingAuthRun.catId ? String(pendingAuthRun.catId) : null,
+    hasPendingRun: pendingAuthRuns.size > 0,
+    pendingRunCount: pendingAuthRuns.size,
+    catId: primaryPending && primaryPending.catId ? String(primaryPending.catId) : null,
   });
   if (authWindow && !authWindow.isDestroyed()) {
     authFlow.hidden = false;
@@ -1383,8 +1411,9 @@ function openHermesAuthWindow({ pendingRun = null, reason = '' }: LooseBoundaryV
     if (!isCurrentWindow(win, () => authWindow)) return;
     telemetry.authWindowDomLoaded({
       reason: String(reason || ''),
-      hasPendingRun: !!pendingAuthRun,
-      catId: pendingAuthRun && pendingAuthRun.catId ? String(pendingAuthRun.catId) : null,
+      hasPendingRun: pendingAuthRuns.size > 0,
+      pendingRunCount: pendingAuthRuns.size,
+      catId: primaryPending && primaryPending.catId ? String(primaryPending.catId) : null,
     });
     sendHermesAuthContext(reason);
   });
@@ -1400,8 +1429,9 @@ function openHermesAuthWindow({ pendingRun = null, reason = '' }: LooseBoundaryV
         currentWindow.webContents.focus();
         telemetry.authWindowShownAndFocused({
           reason: String(reason || ''),
-          hasPendingRun: !!pendingAuthRun,
-          catId: pendingAuthRun && pendingAuthRun.catId ? String(pendingAuthRun.catId) : null,
+          hasPendingRun: pendingAuthRuns.size > 0,
+          pendingRunCount: pendingAuthRuns.size,
+          catId: primaryPending && primaryPending.catId ? String(primaryPending.catId) : null,
           bounds: currentWindow.getBounds(),
         });
       },
@@ -1419,7 +1449,7 @@ function openHermesAuthWindow({ pendingRun = null, reason = '' }: LooseBoundaryV
   });
 
   const query: LooseBoundaryValue = {
-    pending: pendingAuthRun ? '1' : '',
+    pending: pendingAuthRuns.size > 0 ? '1' : '',
     reason: String(reason || ''),
   };
   void loadTrustedRendererPage(win, 'auth.html', query);
@@ -2326,10 +2356,10 @@ trustedIpcHandle('hermes-auth-check-now', async () => {
 });
 
 trustedIpcHandle('hermes-auth-finish', () => {
-  const pending: LooseBoundaryValue = pendingAuthRun;
+  const pendingRuns = drainPendingAuthRuns();
   resetAuthFlow({ clearPending: true });
   closeHermesAuthWindow();
-  if (pending) {
+  for (const pending of pendingRuns) {
     if (String(pending.retryKind || '') === 'followup') {
       void sendFollowup(pending.catId, boundedText(pending.prompt), {
         getMainWindow: () => mainWindow,
@@ -2339,9 +2369,13 @@ trustedIpcHandle('hermes-auth-finish', () => {
     } else {
       launchPreparedCatRun(pending, { closeModal: false });
     }
-    return { ok: true, started: true, catId: pending.catId || null };
   }
-  return { ok: true, started: false };
+  return {
+    ok: true,
+    started: pendingRuns.length > 0,
+    catId: pendingRuns.length === 1 ? pendingRuns[0].catId || null : null,
+    catIds: pendingRuns.map((pending) => pending.catId).filter(Boolean),
+  };
 });
 
 trustedIpcOn('hermes-auth-close', () => {

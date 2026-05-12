@@ -341,24 +341,116 @@ if not provider:
 if not model:
     raise SystemExit("model is required")
 
-from hermes_cli.config import load_config, save_config, get_config_path
+from hermes_cli.config import load_config, save_config, get_config_path, read_raw_config
+from hermes_cli.model_normalize import normalize_model_for_provider
+from hermes_cli.providers import custom_provider_slug, resolve_provider_full
+from hermes_cli.runtime_provider import resolve_runtime_provider
 
 cfg = load_config()
-model_cfg = cfg.get("model", {})
-if not isinstance(model_cfg, dict):
-    model_cfg = {}
-model_cfg["provider"] = provider
-model_cfg["default"] = model
-if "base_url" in model_cfg:
-    model_cfg["base_url"] = ""
-model_cfg.pop("context_length", None)
+try:
+    raw_cfg = read_raw_config()
+except Exception:
+    raw_cfg = cfg
+
+def as_dict(value):
+    return value if isinstance(value, dict) else {}
+
+def as_list(value):
+    return value if isinstance(value, list) else []
+
+def text(value):
+    return str(value or "").strip()
+
+def clean_base_url(value):
+    return text(value).rstrip("/")
+
+model_cfg = as_dict(cfg.get("model")).copy()
+raw_model_cfg = as_dict(raw_cfg.get("model"))
+user_providers = as_dict(cfg.get("providers"))
+custom_providers = as_list(cfg.get("custom_providers"))
+
+pdef = resolve_provider_full(provider, user_providers, custom_providers)
+if pdef is None:
+    raise SystemExit(f"unknown provider: {provider}")
+
+target_provider = text(getattr(pdef, "id", "")) or provider
+normalized_model = normalize_model_for_provider(model, target_provider)
+runtime = resolve_runtime_provider(requested=provider, target_model=normalized_model)
+runtime_provider = text(runtime.get("provider")) or target_provider
+runtime_base_url = clean_base_url(runtime.get("base_url") or getattr(pdef, "base_url", ""))
+
+def find_raw_custom_provider(requested_provider, base_url):
+    requested = text(requested_provider).lower()
+    wanted_url = clean_base_url(base_url).lower()
+    for entry in as_list(raw_cfg.get("custom_providers")):
+        if not isinstance(entry, dict):
+            continue
+        name = text(entry.get("name"))
+        provider_key = text(entry.get("provider_key"))
+        entry_url = clean_base_url(entry.get("base_url") or entry.get("url") or entry.get("api"))
+        identities = {name.lower(), custom_provider_slug(name).lower()} if name else set()
+        if provider_key:
+            identities.add(provider_key.lower())
+            identities.add(custom_provider_slug(provider_key).lower())
+        if requested in identities:
+            return entry
+        if wanted_url and entry_url.lower() == wanted_url:
+            return entry
+    return {}
+
+def custom_api_key_config_value(entry, base_url):
+    raw_api_key = text(entry.get("api_key")) if isinstance(entry, dict) else ""
+    if raw_api_key:
+        return raw_api_key
+    key_env = text(entry.get("key_env")) if isinstance(entry, dict) else ""
+    if key_env:
+        return "$" + "{" + key_env + "}"
+    previous_provider = text(raw_model_cfg.get("provider")).lower()
+    previous_base_url = clean_base_url(raw_model_cfg.get("base_url")).lower()
+    if previous_provider == "custom" and previous_base_url == clean_base_url(base_url).lower():
+        return text(raw_model_cfg.get("api_key"))
+    return ""
+
+is_named_custom = target_provider.startswith("custom:")
+is_user_provider = (
+    text(getattr(pdef, "source", "")) == "user-config"
+    and not is_named_custom
+    and target_provider in user_providers
+)
+persist_provider = target_provider if is_user_provider else runtime_provider
+if is_named_custom or (runtime_provider == "custom" and not is_user_provider):
+    persist_provider = "custom"
+
+model_cfg["provider"] = persist_provider
+model_cfg["default"] = normalized_model
+for key in ("base_url", "api_key", "api_mode", "context_length"):
+    model_cfg.pop(key, None)
+
+if runtime_base_url and not is_user_provider:
+    model_cfg["base_url"] = runtime_base_url
+
+api_mode = text(runtime.get("api_mode"))
+if api_mode and (
+    persist_provider == "custom"
+    or target_provider in {"opencode-zen", "opencode-go", "azure-foundry"}
+):
+    model_cfg["api_mode"] = api_mode
+
+if persist_provider == "custom":
+    custom_entry = find_raw_custom_provider(provider, runtime_base_url)
+    api_key_config = custom_api_key_config_value(custom_entry, runtime_base_url)
+    if api_key_config:
+        model_cfg["api_key"] = api_key_config
+
 cfg["model"] = model_cfg
 save_config(cfg)
 
 print(json.dumps({
     "ok": True,
-    "provider": provider,
-    "model": model,
+    "provider": persist_provider,
+    "model": normalized_model,
+    "base_url": model_cfg.get("base_url", ""),
+    "api_mode": model_cfg.get("api_mode", ""),
     "config_path": str(get_config_path()),
 }, separators=(",", ":"), sort_keys=True))
 `;

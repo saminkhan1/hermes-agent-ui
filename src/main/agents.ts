@@ -16,7 +16,7 @@ import type {
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { HermesGatewayClient } from './hermes-gateway-client';
+import { HermesGatewayClient, gatewayBaseUrlFromEnv, gatewayKeyFromEnv } from './hermes-gateway-client';
 import { attachmentDescriptor, normalizeAttachmentType } from './hermes-attachments';
 import { isAuthErrorText } from './hermes-auth';
 import { ensureGatewayEnvFile, ensureGatewayProcess, stopGatewayProcess } from './hermes-runtime';
@@ -372,12 +372,8 @@ function terminalizeGatewayConversation(
 ) {
   if (!rec) return false;
   const wasRunning = String(rec.runStatus || '').toLowerCase() === 'running' || !!(rec.typing && rec.typing.active);
+  if (!wasRunning) return false;
   appendConversationError(rec, message);
-  if (!wasRunning) {
-    persistConversation(catId);
-    onConversationPushed({ catId });
-    return false;
-  }
   rec.runStatus = 'error';
   rec.endResult = message;
   rec.durationMs = rec.startedAt ? now() - rec.startedAt : 0;
@@ -635,27 +631,36 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
 
 function handleGatewayReplayExpired(error: LooseBoundaryValue) {
   const message = 'Hermes event replay window expired; reconnected live, but older missed updates may be unavailable.';
-  let affected = 0;
-  for (const [catId, rec] of conversations.entries()) {
-    if (rec) {
-      if (terminalizeGatewayConversation(catId, rec, message, 'gateway-replay-expired')) affected += 1;
-    }
-  }
+  const affected = terminalizeRunningGatewayConversations(message, 'gateway-replay-expired');
   telemetry.gatewayReplayExpired({
     error: error && error.message ? error.message : String(error || ''),
     terminalized: affected,
   });
 }
 
+function gatewayClientEnvChanged(client: LooseBoundaryValue) {
+  if (!client) return false;
+  return String(client.baseUrl || '') !== gatewayBaseUrlFromEnv() || String(client.key || '') !== gatewayKeyFromEnv();
+}
+
 function ensureGatewayClient(opts: AgentOptions = {}) {
   const { getMainWindow, log = console, resetLastSeq = false } = opts;
   ensureGatewayEnvFile();
   gatewayNotify = getNotify(getMainWindow);
+  const endpointChanged = gatewayClientEnvChanged(gatewayClient);
+  if (endpointChanged) {
+    log.warn('[agent-ui] Hermes gateway endpoint changed; recreating client', {
+      previousBaseUrl: gatewayClient.baseUrl || null,
+      baseUrl: gatewayBaseUrlFromEnv(),
+    });
+    gatewayClient.stop();
+    gatewayClient = null;
+  }
   if (!gatewayClient) {
     gatewayClient = new HermesGatewayClient({
       log,
       clientVersion: packageVersion(),
-      resetLastSeq,
+      resetLastSeq: resetLastSeq || endpointChanged,
       onEvent: handleGatewayEvent,
       onConnectionChange: handleGatewayConnectionState,
       onReplayExpired: handleGatewayReplayExpired,
