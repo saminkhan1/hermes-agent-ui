@@ -37,6 +37,10 @@ const tmpRoot = fs.existsSync('/private/tmp') ? '/private/tmp' : os.tmpdir();
 const runDir = process.env.AGENT_UI_INSTALLED_SMOKE_DIR
   ? path.resolve(process.env.AGENT_UI_INSTALLED_SMOKE_DIR)
   : fs.mkdtempSync(path.join(tmpRoot, 'agent-ui-installed-release-smoke-'));
+const tmpEvalConfigFile = path.join(
+  fs.existsSync('/private/tmp') ? '/private/tmp' : os.tmpdir(),
+  `agent-ui-eval-config-${typeof process.getuid === 'function' ? process.getuid() : 'user'}.json`,
+);
 const configDir = path.join(runDir, 'config');
 const hermesHome = path.join(runDir, 'hermes-home');
 const evalDir = path.join(runDir, 'eval');
@@ -446,7 +450,9 @@ async function startApp(label) {
     AGENT_UI_HERMES_HOME: hermesHome,
     LM_BASE_URL: lmStudioBaseUrl,
   });
+  fs.copyFileSync(evalConfigFile, tmpEvalConfigFile);
   evidence.files[`eval-config-${label}.json`] = evalConfigFile;
+  evidence.files[`tmp-eval-config-${label}.json`] = tmpEvalConfigFile;
   const out = fs.openSync(logFile, 'a');
   const child = spawn(appExecutable, [`--agent-ui-eval-config=${evalConfigFile}`], {
     cwd: runDir,
@@ -799,6 +805,11 @@ async function runConcurrencyChecks() {
 
 async function cleanup() {
   await stopApp();
+  try {
+    fs.rmSync(tmpEvalConfigFile, { force: true });
+  } catch {
+    // ignore temp eval config cleanup failures
+  }
   if (portBlocker && portBlocker.server) {
     try {
       portBlocker.server.close();

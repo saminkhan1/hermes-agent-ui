@@ -4,6 +4,10 @@ import { app } from 'electron';
 
 const EVAL_CONFIG_ARG_PREFIX = '--agent-ui-eval-config=';
 const EVAL_CONFIG_CWD_FILE = 'agent-ui-eval-config.json';
+const EVAL_CONFIG_TMP_FILE = path.join(
+  fs.existsSync('/private/tmp') ? '/private/tmp' : process.env.TMPDIR || '/tmp',
+  `agent-ui-eval-config-${typeof process.getuid === 'function' ? process.getuid() : 'user'}.json`,
+);
 const EVAL_CONFIG_ENV_KEYS = new Set([
   'AGENT_UI_EVAL',
   'AGENT_UI_EVAL_RUN_ID',
@@ -22,7 +26,9 @@ function applyEvalConfigArgv() {
     : String(app.commandLine.getSwitchValue('agent-ui-eval-config') || '').trim() ||
       (fs.existsSync(path.join(process.cwd(), EVAL_CONFIG_CWD_FILE))
         ? path.join(process.cwd(), EVAL_CONFIG_CWD_FILE)
-        : '');
+        : fs.existsSync(EVAL_CONFIG_TMP_FILE)
+          ? EVAL_CONFIG_TMP_FILE
+          : '');
   if (!file) return;
   try {
     const config = JSON.parse(fs.readFileSync(path.resolve(file), 'utf8'));
