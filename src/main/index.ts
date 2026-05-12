@@ -33,7 +33,7 @@ type PreparedCatRun = MutableJsonObject & {
   closeModal?: boolean;
 };
 
-import './eval-config';
+import { applyEvalConfigArgv } from './eval-config';
 import { getTrace, runDir as evalRunDir, runId as evalRunId, enabled as evalTraceEnabled } from './eval-trace';
 import { telemetry } from './reliability-telemetry';
 import {
@@ -2707,6 +2707,7 @@ function startEvalServerIfNeeded() {
 
 app.whenReady().then(() => {
   app.setName('agent-UI');
+  applyEvalConfigArgv();
   loadInputModeSetting();
   installPetAssetProtocol();
   installAttachmentProtocol();

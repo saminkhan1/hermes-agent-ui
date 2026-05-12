@@ -34,3 +34,5 @@ function applyEvalConfigArgv() {
 }
 
 applyEvalConfigArgv();
+
+export { applyEvalConfigArgv };
