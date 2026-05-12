@@ -434,7 +434,7 @@ function createPortBlocker() {
 
 async function startApp(label) {
   const portFile = path.join(runDir, `eval-port-${label}.txt`);
-  const evalConfigFile = path.join(runDir, `eval-config-${label}.json`);
+  const evalConfigFile = path.join(runDir, 'agent-ui-eval-config.json');
   const logFile = path.join(runDir, `app-${label}.log`);
   writeJson(evalConfigFile, {
     AGENT_UI_EVAL: '1',
@@ -449,6 +449,7 @@ async function startApp(label) {
   evidence.files[`eval-config-${label}.json`] = evalConfigFile;
   const out = fs.openSync(logFile, 'a');
   const child = spawn(appExecutable, [`--agent-ui-eval-config=${evalConfigFile}`], {
+    cwd: runDir,
     env: {
       ...process.env,
       AGENT_UI_EVAL: '1',

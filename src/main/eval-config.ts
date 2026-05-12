@@ -3,6 +3,7 @@ import path from 'node:path';
 import { app } from 'electron';
 
 const EVAL_CONFIG_ARG_PREFIX = '--agent-ui-eval-config=';
+const EVAL_CONFIG_CWD_FILE = 'agent-ui-eval-config.json';
 const EVAL_CONFIG_ENV_KEYS = new Set([
   'AGENT_UI_EVAL',
   'AGENT_UI_EVAL_RUN_ID',
@@ -18,7 +19,10 @@ function applyEvalConfigArgv() {
   const arg = process.argv.find((value) => String(value || '').startsWith(EVAL_CONFIG_ARG_PREFIX));
   const file = arg
     ? String(arg).slice(EVAL_CONFIG_ARG_PREFIX.length).trim()
-    : String(app.commandLine.getSwitchValue('agent-ui-eval-config') || '').trim();
+    : String(app.commandLine.getSwitchValue('agent-ui-eval-config') || '').trim() ||
+      (fs.existsSync(path.join(process.cwd(), EVAL_CONFIG_CWD_FILE))
+        ? path.join(process.cwd(), EVAL_CONFIG_CWD_FILE)
+        : '');
   if (!file) return;
   try {
     const config = JSON.parse(fs.readFileSync(path.resolve(file), 'utf8'));
