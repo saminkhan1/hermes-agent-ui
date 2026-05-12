@@ -10,24 +10,24 @@ const PET_PLACEMENT_STICKINESS = 96;
 const PET_DEFAULT_MASCOT_SIZE = { width: 112, height: 121 };
 const PET_DEFAULT_TRAY_SIZE = { width: 276, height: 131 };
 
-function rectCenterX(rect: any) {
+function rectCenterX(rect: LooseBoundaryValue) {
   return rect.x + rect.width / 2;
 }
 
-function rectCenterY(rect: any) {
+function rectCenterY(rect: LooseBoundaryValue) {
   return rect.y + rect.height / 2;
 }
 
-function pointForRectCenter(rect: any) {
+function pointForRectCenter(rect: LooseBoundaryValue) {
   return { x: rectCenterX(rect), y: rectCenterY(rect) };
 }
 
-function clampNumber(value: any, min: any, max: any) {
+function clampNumber(value: LooseBoundaryValue, min: LooseBoundaryValue, max: LooseBoundaryValue) {
   if (min > max) return Math.round((min + max) / 2);
   return Math.min(Math.max(Math.round(value), min), max);
 }
 
-function clampRectToDisplay(rect: any, displayBounds: any, { bottomPadding = 0 } = {}) {
+function clampRectToDisplay(rect: LooseBoundaryValue, displayBounds: LooseBoundaryValue, { bottomPadding = 0 } = {}) {
   return {
     ...rect,
     x: clampNumber(rect.x, displayBounds.x, displayBounds.x + displayBounds.width - rect.width),
@@ -35,7 +35,7 @@ function clampRectToDisplay(rect: any, displayBounds: any, { bottomPadding = 0 }
   };
 }
 
-function expandedMascotBounds(mascotBounds: any) {
+function expandedMascotBounds(mascotBounds: LooseBoundaryValue) {
   return {
     x: mascotBounds.x - PET_LAYOUT_PADDING.left,
     y: mascotBounds.y - PET_LAYOUT_PADDING.top,
@@ -44,7 +44,11 @@ function expandedMascotBounds(mascotBounds: any) {
   };
 }
 
-function trayBoundsForPlacement(anchor: any, traySize: any, placement: any) {
+function trayBoundsForPlacement(
+  anchor: LooseBoundaryValue,
+  traySize: LooseBoundaryValue,
+  placement: LooseBoundaryValue,
+) {
   const isTop = placement.startsWith('top');
   return {
     x: placement.endsWith('end') ? anchor.x + anchor.width - traySize.width : anchor.x,
@@ -54,7 +58,7 @@ function trayBoundsForPlacement(anchor: any, traySize: any, placement: any) {
   };
 }
 
-function overflowScore(rect: any, displayBounds: any) {
+function overflowScore(rect: LooseBoundaryValue, displayBounds: LooseBoundaryValue) {
   const left = Math.max(0, displayBounds.x - rect.x);
   const top = Math.max(0, displayBounds.y - rect.y);
   const right = Math.max(0, rect.x + rect.width - displayBounds.x - displayBounds.width);
@@ -62,15 +66,15 @@ function overflowScore(rect: any, displayBounds: any) {
   return left + top + bottom + right + (left + right) * rect.height + (top + bottom) * rect.width;
 }
 
-function unionRects(rects: any) {
-  const x = Math.min(...rects.map((rect: any) => rect.x));
-  const y = Math.min(...rects.map((rect: any) => rect.y));
-  const right = Math.max(...rects.map((rect: any) => rect.x + rect.width));
-  const bottom = Math.max(...rects.map((rect: any) => rect.y + rect.height));
+function unionRects(rects: LooseBoundaryValue) {
+  const x = Math.min(...rects.map((rect: LooseBoundaryValue) => rect.x));
+  const y = Math.min(...rects.map((rect: LooseBoundaryValue) => rect.y));
+  const right = Math.max(...rects.map((rect: LooseBoundaryValue) => rect.x + rect.width));
+  const bottom = Math.max(...rects.map((rect: LooseBoundaryValue) => rect.y + rect.height));
   return { x, y, width: right - x, height: bottom - y };
 }
 
-function localRect(rect: any, viewportBounds: any) {
+function localRect(rect: LooseBoundaryValue, viewportBounds: LooseBoundaryValue) {
   return {
     left: Math.round(rect.x - viewportBounds.x),
     top: Math.round(rect.y - viewportBounds.y),
@@ -79,13 +83,13 @@ function localRect(rect: any, viewportBounds: any) {
   };
 }
 
-function preferredPlacement(anchor: any, displayBounds: any) {
+function preferredPlacement(anchor: LooseBoundaryValue, displayBounds: LooseBoundaryValue) {
   const vertical = rectCenterY(anchor) < rectCenterY(displayBounds) ? 'bottom' : 'top';
   const horizontal = rectCenterX(anchor) < rectCenterX(displayBounds) ? 'start' : 'end';
   return `${vertical}-${horizontal}`;
 }
 
-function choosePlacement({ anchor, displayBounds, previousPlacement, traySize }: any) {
+function choosePlacement({ anchor, displayBounds, previousPlacement, traySize }: LooseBoundaryValue) {
   const preferred = preferredPlacement(anchor, displayBounds);
   const placements = ['top-start', 'top-end', 'bottom-start', 'bottom-end']
     .map((placement) => ({
@@ -99,10 +103,18 @@ function choosePlacement({ anchor, displayBounds, previousPlacement, traySize }:
   return placements[0] ? placements[0].placement : preferred;
 }
 
-function contentViewportBounds({ contentBounds, displayBounds, viewportSize }: any) {
+function contentViewportBounds({ contentBounds, displayBounds, viewportSize }: LooseBoundaryValue) {
   return {
-    x: clampNumber(contentBounds.x + contentBounds.width - viewportSize.width, displayBounds.x, displayBounds.x + displayBounds.width - viewportSize.width),
-    y: clampNumber(contentBounds.y + contentBounds.height - viewportSize.height, displayBounds.y, displayBounds.y + displayBounds.height - viewportSize.height),
+    x: clampNumber(
+      contentBounds.x + contentBounds.width - viewportSize.width,
+      displayBounds.x,
+      displayBounds.x + displayBounds.width - viewportSize.width,
+    ),
+    y: clampNumber(
+      contentBounds.y + contentBounds.height - viewportSize.height,
+      displayBounds.y,
+      displayBounds.y + displayBounds.height - viewportSize.height,
+    ),
     width: viewportSize.width,
     height: viewportSize.height,
   };
@@ -115,38 +127,44 @@ function computePetLayout({
   previousPlacement,
   traySize,
   viewportSize = PET_VIEWPORT_SIZE,
-}: any) {
+}: LooseBoundaryValue) {
   const viewport = {
     width: Math.min(viewportSize.width, displayBounds.width),
     height: Math.min(viewportSize.height, displayBounds.height),
   };
-  const safeAnchor = clampRectToDisplay({
-    ...anchor,
-    width: Math.min(mascotSize.width, displayBounds.width),
-    height: Math.min(mascotSize.height, displayBounds.height),
-  }, displayBounds, { bottomPadding: PET_LAYOUT_PADDING.bottom });
+  const safeAnchor = clampRectToDisplay(
+    {
+      ...anchor,
+      width: Math.min(mascotSize.width, displayBounds.width),
+      height: Math.min(mascotSize.height, displayBounds.height),
+    },
+    displayBounds,
+    { bottomPadding: PET_LAYOUT_PADDING.bottom },
+  );
   const maxTrayWidth = Math.max(0, viewport.width - PET_LAYOUT_PADDING.left - PET_LAYOUT_PADDING.right);
   const maxTrayHeight = Math.max(0, viewport.height - safeAnchor.height - PET_LAYOUT_PADDING.bottom - PET_TRAY_GAP);
-  const clampedTraySize = traySize == null ? null : {
-    width: Math.min(traySize.width, maxTrayWidth),
-    height: Math.min(traySize.height, maxTrayHeight),
-  };
-  const placement = clampedTraySize == null
-    ? previousPlacement
-    : choosePlacement({
-      anchor: safeAnchor,
-      displayBounds,
-      previousPlacement,
-      traySize: clampedTraySize,
-    });
-  const trayBounds = clampedTraySize == null
-    ? null
-    : clampRectToDisplay(trayBoundsForPlacement(safeAnchor, clampedTraySize, placement), displayBounds);
+  const clampedTraySize =
+    traySize == null
+      ? null
+      : {
+          width: Math.min(traySize.width, maxTrayWidth),
+          height: Math.min(traySize.height, maxTrayHeight),
+        };
+  const placement =
+    clampedTraySize == null
+      ? previousPlacement
+      : choosePlacement({
+          anchor: safeAnchor,
+          displayBounds,
+          previousPlacement,
+          traySize: clampedTraySize,
+        });
+  const trayBounds =
+    clampedTraySize == null
+      ? null
+      : clampRectToDisplay(trayBoundsForPlacement(safeAnchor, clampedTraySize, placement), displayBounds);
   const viewportBounds = contentViewportBounds({
-    contentBounds: unionRects([
-      expandedMascotBounds(safeAnchor),
-      ...(trayBounds == null ? [] : [trayBounds]),
-    ]),
+    contentBounds: unionRects([expandedMascotBounds(safeAnchor), ...(trayBounds == null ? [] : [trayBounds])]),
     displayBounds,
     viewportSize: viewport,
   });
@@ -160,7 +178,7 @@ function computePetLayout({
   };
 }
 
-function defaultPetAnchor(displayBounds: any, mascotSize = PET_DEFAULT_MASCOT_SIZE) {
+function defaultPetAnchor(displayBounds: LooseBoundaryValue, mascotSize = PET_DEFAULT_MASCOT_SIZE) {
   return {
     x: displayBounds.x + displayBounds.width - mascotSize.width - PET_DEFAULT_MARGIN,
     y: displayBounds.y + displayBounds.height - mascotSize.height - PET_DEFAULT_MARGIN,
@@ -169,7 +187,7 @@ function defaultPetAnchor(displayBounds: any, mascotSize = PET_DEFAULT_MASCOT_SI
   };
 }
 
-module.exports = {
+export {
   PET_DEFAULT_MASCOT_SIZE,
   PET_DEFAULT_TRAY_SIZE,
   PET_WINDOW_HEIGHT,

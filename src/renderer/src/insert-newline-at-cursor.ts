@@ -1,5 +1,5 @@
 /** Insert `\n` at the caret and fire `input` (for autosize listeners). */
-export function insertNewlineAtCursor(textarea: any) {
+export function insertNewlineAtCursor(textarea: HTMLTextAreaElement) {
   const start = textarea.selectionStart;
   const end = textarea.selectionEnd;
   textarea.setRangeText('\n', start, end, 'end');

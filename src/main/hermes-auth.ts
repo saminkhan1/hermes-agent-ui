@@ -1,23 +1,23 @@
 'use strict';
 
-import type { ChildProcessWithoutNullStreams } from 'child_process';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { AgentUIPayload, MutableJsonObject } from '../shared/contracts.ts';
 
-const { EventEmitter } = require('events');
-const fs = require('fs');
-const path = require('path');
-const { randomUUID } = require('crypto');
-const { spawn } = require('child_process');
-const { stripVTControlCharacters } = require('util');
-const {
+import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { stripVTControlCharacters } from 'node:util';
+import {
   defaultHermesHome,
   executableExists,
   hermesCwd,
   parseTranscriptionJson,
   resolveHermesCommand,
   safeRuntimePath,
-} = require('./hermes-runtime');
-const { realUserHomeDir } = require('./hermes-gateway-client');
+} from './hermes-runtime';
+import { realUserHomeDir } from './hermes-release';
 
 const MAX_PROVIDER_CHARS = 96;
 const MAX_LABEL_CHARS = 80;
@@ -50,35 +50,35 @@ type ReadinessSnapshot = {
 
 const sessions = new Map<string, OAuthSession>();
 
-function boundedText(value: any, max = 4096) {
+function boundedText(value: LooseBoundaryValue, max = 4096) {
   const out = value == null ? '' : String(value);
   return out.length > max ? out.slice(0, max) : out;
 }
 
-function normalizeProvider(value: any) {
+function normalizeProvider(value: LooseBoundaryValue) {
   const provider = boundedText(value, MAX_PROVIDER_CHARS).trim().toLowerCase();
   if (!provider) return '';
   if (!/^[a-z0-9_.:-]+$/.test(provider)) return '';
   return provider;
 }
 
-function normalizeLabel(value: any) {
+function normalizeLabel(value: LooseBoundaryValue) {
   return boundedText(value, MAX_LABEL_CHARS).trim();
 }
 
-function normalizeModel(value: any) {
+function normalizeModel(value: LooseBoundaryValue) {
   return boundedText(value, MAX_MODEL_CHARS).trim();
 }
 
-function appendOutput(current: any, chunk: any) {
+function appendOutput(current: LooseBoundaryValue, chunk: LooseBoundaryValue) {
   return `${current}${String(chunk || '')}`.slice(-MAX_OUTPUT_CHARS);
 }
 
-function cleanHermesOutput(value: any) {
+function cleanHermesOutput(value: LooseBoundaryValue) {
   return stripVTControlCharacters(String(value || '')).replace(/\r/g, '');
 }
 
-function pythonRuntimeForHermes(command: any) {
+function pythonRuntimeForHermes(command: LooseBoundaryValue) {
   const resolved = path.resolve(String(command || ''));
   const candidates = [];
   const parts = resolved.split(path.sep);
@@ -121,7 +121,9 @@ function hermesEnv(extra: Record<string, string> = {}) {
 function hermesCommandOrThrow() {
   const { command } = resolveHermesCommand();
   if (!command || !executableExists(command)) {
-    throw new Error('Hermes executable is missing. Set AGENT_UI_HERMES_BIN or install Hermes in ~/Documents/hermes/hermes-agent.');
+    throw new Error(
+      'Hermes executable is missing. Set AGENT_UI_HERMES_BIN or install Hermes in ~/Documents/hermes/hermes-agent.',
+    );
   }
   return command;
 }
@@ -135,13 +137,17 @@ function pythonRuntimeOrThrow() {
   return { command, ...runtime };
 }
 
-function redact(value: any) {
+function redact(value: LooseBoundaryValue) {
   return cleanHermesOutput(value)
     .replace(/(sk-[A-Za-z0-9_-]{8})[A-Za-z0-9_-]+/g, '$1...')
     .replace(/([A-Za-z0-9_-]{12})[A-Za-z0-9_-]{28,}/g, '$1...');
 }
 
-function runHermesPythonJson(code: string, payload: AgentUIPayload = {}, opts: RunHermesOptions = {}): Promise<MutableJsonObject> {
+function runHermesPythonJson(
+  code: string,
+  payload: AgentUIPayload = {},
+  opts: RunHermesOptions = {},
+): Promise<MutableJsonObject> {
   return new Promise((resolve, reject) => {
     let runtime;
     try {
@@ -159,26 +165,33 @@ function runHermesPythonJson(code: string, payload: AgentUIPayload = {}, opts: R
     let stdout = '';
     let stderr = '';
     const timeoutMs = Number(opts.timeoutMs || 15000);
-    const timer = timeoutMs > 0 ? setTimeout(() => {
-      child.kill('SIGTERM');
-    }, timeoutMs) : null;
+    const timer =
+      timeoutMs > 0
+        ? setTimeout(() => {
+            child.kill('SIGTERM');
+          }, timeoutMs)
+        : null;
 
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk: any) => {
+    child.stdout.on('data', (chunk: LooseBoundaryValue) => {
       stdout = appendOutput(stdout, chunk);
     });
-    child.stderr.on('data', (chunk: any) => {
+    child.stderr.on('data', (chunk: LooseBoundaryValue) => {
       stderr = appendOutput(stderr, chunk);
     });
-    child.on('error', (error: any) => {
+    child.on('error', (error: LooseBoundaryValue) => {
       if (timer) clearTimeout(timer);
       reject(error);
     });
-    child.on('close', (codeNum: any, signal: any) => {
+    child.on('close', (codeNum: LooseBoundaryValue, signal: LooseBoundaryValue) => {
       if (timer) clearTimeout(timer);
       if (codeNum !== 0) {
-        const err: HermesCommandError = new Error(redact(stderr.trim() || stdout.trim() || `Hermes exited with code ${codeNum}${signal ? ` (${signal})` : ''}.`));
+        const err: HermesCommandError = new Error(
+          redact(
+            stderr.trim() || stdout.trim() || `Hermes exited with code ${codeNum}${signal ? ` (${signal})` : ''}.`,
+          ),
+        );
         err.stdout = redact(stdout);
         err.stderr = redact(stderr);
         reject(err);
@@ -358,7 +371,7 @@ function readinessFromSnapshot(snapshot: ReadinessSnapshot = {}) {
   return { ready: false, reason: 'not_configured' };
 }
 
-function isAuthErrorText(value: any) {
+function isAuthErrorText(value: LooseBoundaryValue) {
   const text = String(value || '').toLowerCase();
   return [
     'provider authentication failed',
@@ -373,12 +386,14 @@ function isAuthErrorText(value: any) {
   ].some((marker) => text.includes(marker));
 }
 
-function extractUrls(value: any) {
+function extractUrls(value: LooseBoundaryValue) {
   const text = cleanHermesOutput(value);
-  return Array.from(new Set((text.match(/https?:\/\/[^\s)>"']+/g) || []).map((url: string) => url.replace(/[.,;]+$/, ''))));
+  return Array.from(
+    new Set((text.match(/https?:\/\/[^\s)>"']+/g) || []).map((url: string) => url.replace(/[.,;]+$/, ''))),
+  );
 }
 
-function extractUserCode(value: any) {
+function extractUserCode(value: LooseBoundaryValue) {
   const text = cleanHermesOutput(value);
   const explicit = text.match(/enter (?:this )?code:\s*\n\s*([A-Z0-9][A-Z0-9-]{3,})/i);
   if (explicit) return explicit[1].trim();
@@ -394,9 +409,17 @@ async function getAuthStatus() {
 async function ensureReadyForRun() {
   try {
     const status = await getAuthStatus();
-    return { ok: !!(status.readiness && status.readiness.ready), status, reason: status.readiness ? status.readiness.reason : 'unknown' };
+    return {
+      ok: !!(status.readiness && status.readiness.ready),
+      status,
+      reason: status.readiness ? status.readiness.reason : 'unknown',
+    };
   } catch (error) {
-    return { ok: false, reason: 'status_error', error: error instanceof Error && error.message ? error.message : String(error) };
+    return {
+      ok: false,
+      reason: 'status_error',
+      error: error instanceof Error && error.message ? error.message : String(error),
+    };
   }
 }
 
@@ -425,7 +448,7 @@ async function saveModelSelection(payload: AgentUIPayload = {}) {
   }
 }
 
-function emitSessionEvent(event: any) {
+function emitSessionEvent(event: LooseBoundaryValue) {
   events.emit('event', event);
 }
 
@@ -448,7 +471,7 @@ function startOAuthSession(payload: AgentUIPayload = {}) {
     windowsHide: true,
   });
   const rec: {
-    child: any;
+    child: LooseBoundaryValue;
     provider: string;
     stdout: string;
     stderr: string;
@@ -456,7 +479,7 @@ function startOAuthSession(payload: AgentUIPayload = {}) {
   } = { child, provider, stdout: '', stderr: '', startedAt: Date.now() };
   sessions.set(sessionId, rec);
 
-  const onOutput = (stream: 'stdout' | 'stderr') => (chunk: any) => {
+  const onOutput = (stream: 'stdout' | 'stderr') => (chunk: LooseBoundaryValue) => {
     const rawText = String(chunk || '');
     const text = cleanHermesOutput(rawText);
     rec[stream] = appendOutput(rec[stream], text);
@@ -475,7 +498,7 @@ function startOAuthSession(payload: AgentUIPayload = {}) {
   child.stderr.setEncoding('utf8');
   child.stdout.on('data', onOutput('stdout'));
   child.stderr.on('data', onOutput('stderr'));
-  child.once('error', (error: any) => {
+  child.once('error', (error: LooseBoundaryValue) => {
     sessions.delete(sessionId);
     emitSessionEvent({
       sessionId,
@@ -484,7 +507,7 @@ function startOAuthSession(payload: AgentUIPayload = {}) {
       error: error instanceof Error && error.message ? error.message : String(error),
     });
   });
-  child.once('close', (code: any, signal: any) => {
+  child.once('close', (code: LooseBoundaryValue, signal: LooseBoundaryValue) => {
     sessions.delete(sessionId);
     emitSessionEvent({
       sessionId,
@@ -519,12 +542,12 @@ function cancelOAuthSession(payload: AgentUIPayload = {}) {
   return { ok: true };
 }
 
-function onSessionEvent(listener: any) {
+function onSessionEvent(listener: LooseBoundaryValue) {
   events.on('event', listener);
   return () => events.off('event', listener);
 }
 
-module.exports = {
+export {
   addApiKeyCredential,
   cancelOAuthSession,
   ensureReadyForRun,

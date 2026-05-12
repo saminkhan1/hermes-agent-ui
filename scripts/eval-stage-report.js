@@ -38,7 +38,10 @@ function percentile(sortedValues, p) {
 }
 
 function summarizeValues(values) {
-  const clean = values.map(numberOrNull).filter((value) => value != null).sort((a, b) => a - b);
+  const clean = values
+    .map(numberOrNull)
+    .filter((value) => value != null)
+    .sort((a, b) => a - b);
   if (!clean.length) {
     return { count: 0, minMs: null, p50Ms: null, p95Ms: null, maxMs: null };
   }
@@ -60,7 +63,9 @@ function readTraceFile(file) {
       const parsed = JSON.parse(line);
       if (parsed && typeof parsed === 'object') events.push(parsed);
     } catch (error) {
-      throw new Error(`${file}:${idx + 1}: invalid trace JSON: ${error && error.message ? error.message : error}`);
+      throw new Error(`${file}:${idx + 1}: invalid trace JSON: ${error && error.message ? error.message : error}`, {
+        cause: error,
+      });
     }
   }
   return events;
@@ -86,7 +91,9 @@ function walkTraceFiles(dir, out) {
 
 function discoverTraceFiles(inputs = []) {
   const out = [];
-  const targets = inputs.length ? inputs : [process.env.AGENT_UI_EVAL_DIR || path.join(process.cwd(), '.agent-ui-eval')];
+  const targets = inputs.length
+    ? inputs
+    : [process.env.AGENT_UI_EVAL_DIR || path.join(process.cwd(), '.agent-ui-eval')];
   for (const target of targets) {
     walkTraceFiles(path.resolve(String(target)), out);
   }
@@ -152,29 +159,86 @@ function collectSamples(runs) {
   const samples = [];
   for (const run of runs) {
     for (const event of run.events) {
-      if (event.type === EVENTS.APP_READY) addSample(samples, 'app_ready_ms', run, numberOrNull(event.uptimeMs) ?? eventTimeMs(event));
-      if (event.type === EVENTS.CONTEXT_CAPTURE_COMPLETED) addSample(samples, 'context_capture_ms', run, event.durationMs, { modalContextId: event.modalContextId || null });
-      if (event.type === EVENTS.GATEWAY_READY_CHECK_COMPLETED) addSample(samples, 'gateway_ready_ms', run, event.durationMs, { ok: event.ok !== false });
+      if (event.type === EVENTS.APP_READY)
+        addSample(samples, 'app_ready_ms', run, numberOrNull(event.uptimeMs) ?? eventTimeMs(event));
+      if (event.type === EVENTS.CONTEXT_CAPTURE_COMPLETED)
+        addSample(samples, 'context_capture_ms', run, event.durationMs, {
+          modalContextId: event.modalContextId || null,
+        });
+      if (event.type === EVENTS.GATEWAY_READY_CHECK_COMPLETED)
+        addSample(samples, 'gateway_ready_ms', run, event.durationMs, { ok: event.ok !== false });
       if (event.type === EVENTS.GATEWAY_MESSAGE_POST_ACCEPTED) {
         addSample(samples, 'gateway_post_ms', run, event.durationMs, { catId: event.catId || null });
       }
       if (event.type === EVENTS.GATEWAY_FIRST_EVENT) {
-        addSample(samples, 'first_gateway_event_ms', run, event.msSincePostAccepted, { catId: event.catId || null, gatewayEventType: event.gatewayEventType || null });
+        addSample(samples, 'first_gateway_event_ms', run, event.msSincePostAccepted, {
+          catId: event.catId || null,
+          gatewayEventType: event.gatewayEventType || null,
+        });
       }
       if (event.type === EVENTS.VOICE_SESSION_TRANSCRIPT_READY) {
-        addSample(samples, 'voice_recording_ms', run, event.recordingMs, { modalContextId: event.modalContextId || null });
-        addSample(samples, 'voice_transcribing_ms', run, event.transcribingMs, { modalContextId: event.modalContextId || null });
-        addSample(samples, 'voice_transcript_ms', run, event.durationMs, { modalContextId: event.modalContextId || null });
+        addSample(samples, 'voice_recording_ms', run, event.recordingMs, {
+          modalContextId: event.modalContextId || null,
+        });
+        addSample(samples, 'voice_transcribing_ms', run, event.transcribingMs, {
+          modalContextId: event.modalContextId || null,
+        });
+        addSample(samples, 'voice_transcript_ms', run, event.durationMs, {
+          modalContextId: event.modalContextId || null,
+        });
       }
-      if (event.type === EVENTS.TERMINAL_STATE_RENDERED) addSample(samples, 'conversation_terminal_ms', run, event.durationMs, { catId: event.catId || null, status: event.status || null });
-      if (event.type === EVENTS.GATEWAY_HYDRATION_COMPLETED) addSample(samples, 'quit_reopen_hydration_ms', run, event.durationMs, { ok: event.ok !== false, resetLastSeq: !!event.resetLastSeq });
+      if (event.type === EVENTS.TERMINAL_STATE_RENDERED)
+        addSample(samples, 'conversation_terminal_ms', run, event.durationMs, {
+          catId: event.catId || null,
+          status: event.status || null,
+        });
+      if (event.type === EVENTS.GATEWAY_HYDRATION_COMPLETED)
+        addSample(samples, 'quit_reopen_hydration_ms', run, event.durationMs, {
+          ok: event.ok !== false,
+          resetLastSeq: !!event.resetLastSeq,
+        });
     }
-    addPairedSamples(samples, run, 'modal_visible_ms', EVENTS.MODAL_SHOW_REQUESTED, EVENTS.MODAL_SHOWN_AND_FOCUSED, 'modalContextId');
-    addPairedSamples(samples, run, 'shortcut_to_modal_visible_ms', EVENTS.SHORTCUT_INVOKED, EVENTS.MODAL_SHOWN_AND_FOCUSED, 'modalContextId');
+    addPairedSamples(
+      samples,
+      run,
+      'modal_visible_ms',
+      EVENTS.MODAL_SHOW_REQUESTED,
+      EVENTS.MODAL_SHOWN_AND_FOCUSED,
+      'modalContextId',
+    );
+    addPairedSamples(
+      samples,
+      run,
+      'shortcut_to_modal_visible_ms',
+      EVENTS.SHORTCUT_INVOKED,
+      EVENTS.MODAL_SHOWN_AND_FOCUSED,
+      'modalContextId',
+    );
     addPairedSamples(samples, run, 'submit_to_pet_ms', EVENTS.SUBMIT_REQUESTED, EVENTS.CAT_SPAWN_RENDERED, 'catId');
-    addPairedSamples(samples, run, 'submit_to_gateway_accepted_ms', EVENTS.SUBMIT_REQUESTED, EVENTS.GATEWAY_MESSAGE_POST_ACCEPTED, 'catId');
-    addPairedSamples(samples, run, 'auth_window_visible_ms', EVENTS.AUTH_WINDOW_REQUESTED, EVENTS.AUTH_WINDOW_SHOWN_AND_FOCUSED, 'catId');
-    addPairedSamples(samples, run, 'auth_handoff_ms', EVENTS.GATEWAY_MESSAGE_POST_FAILED, EVENTS.AUTH_HANDOFF_REQUESTED, 'catId');
+    addPairedSamples(
+      samples,
+      run,
+      'submit_to_gateway_accepted_ms',
+      EVENTS.SUBMIT_REQUESTED,
+      EVENTS.GATEWAY_MESSAGE_POST_ACCEPTED,
+      'catId',
+    );
+    addPairedSamples(
+      samples,
+      run,
+      'auth_window_visible_ms',
+      EVENTS.AUTH_WINDOW_REQUESTED,
+      EVENTS.AUTH_WINDOW_SHOWN_AND_FOCUSED,
+      'catId',
+    );
+    addPairedSamples(
+      samples,
+      run,
+      'auth_handoff_ms',
+      EVENTS.GATEWAY_MESSAGE_POST_FAILED,
+      EVENTS.AUTH_HANDOFF_REQUESTED,
+      'catId',
+    );
   }
   return samples;
 }
@@ -217,12 +281,24 @@ function buildStageReportFromRuns(inputRuns, opts = {}) {
     if (stage.status === 'missing') {
       findings.push({ severity: 'info', stageId: stage.id, message: `${stage.label} has no samples.` });
     } else if (stage.status === 'slow_p50') {
-      findings.push({ severity: 'warning', stageId: stage.id, message: `${stage.label} app-owned p50 is ${stage.p50Ms}ms.` });
+      findings.push({
+        severity: 'warning',
+        stageId: stage.id,
+        message: `${stage.label} app-owned p50 is ${stage.p50Ms}ms.`,
+      });
     } else if (stage.status === 'slow_p95') {
-      findings.push({ severity: 'warning', stageId: stage.id, message: `${stage.label} app-owned p95 is ${stage.p95Ms}ms.` });
+      findings.push({
+        severity: 'warning',
+        stageId: stage.id,
+        message: `${stage.label} app-owned p95 is ${stage.p95Ms}ms.`,
+      });
     }
     if (stage.count > 0 && stage.count < options.minRuns) {
-      findings.push({ severity: 'info', stageId: stage.id, message: `${stage.label} has ${stage.count} sample(s); target is ${options.minRuns}.` });
+      findings.push({
+        severity: 'info',
+        stageId: stage.id,
+        message: `${stage.label} has ${stage.count} sample(s); target is ${options.minRuns}.`,
+      });
     }
   }
   return {
@@ -252,7 +328,9 @@ function markdownReport(report) {
     '| --- | --- | ---: | ---: | ---: | --- |',
   ];
   for (const stage of report.stages) {
-    lines.push(`| ${stage.label} | ${stage.owner} | ${stage.count} | ${stage.p50Ms ?? ''} | ${stage.p95Ms ?? ''} | ${stage.status} |`);
+    lines.push(
+      `| ${stage.label} | ${stage.owner} | ${stage.count} | ${stage.p50Ms ?? ''} | ${stage.p95Ms ?? ''} | ${stage.status} |`,
+    );
   }
   if (report.findings.length) {
     lines.push('', '## Findings');

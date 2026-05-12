@@ -1,5 +1,3 @@
-/* global agentUI */
-
 import { activeElementForEval, rectForEvalElement, visibleTextForEval } from './eval-ui-state.ts';
 import { insertNewlineAtCursor } from './insert-newline-at-cursor.ts';
 import type {
@@ -23,13 +21,13 @@ const composerError = document.getElementById('composer-error');
 type ConversationData = Partial<AgentConversationSnapshot> & {
   found?: boolean;
   locationLabel?: string;
-  launchContext?: unknown;
+  launchContext?: LooseBoundaryValue;
   items?: ConversationItem[];
   typing?: AgentTypingState;
 };
 
 type ConversationUpdatedEvent = {
-  catId?: unknown;
+  catId?: LooseBoundaryValue;
 };
 
 let unsubUpdated: null | (() => void) = null;
@@ -38,14 +36,16 @@ let lastData: ConversationData | null = null;
 function reportEvalUiState() {
   if (!window.agentUI || typeof window.agentUI.reportEvalUiState !== 'function') return;
   const visibleText = visibleTextForEval();
-  const lineEntries = Array.from(document.querySelectorAll('.line')).slice(0, 20).map((line) => {
-    const label = line.querySelector('.line-label');
-    const text = line.querySelector('.line-text');
-    return {
-      label: label && typeof label.textContent === 'string' ? label.textContent : '',
-      text: text && typeof text.textContent === 'string' ? text.textContent : '',
-    };
-  });
+  const lineEntries = Array.from(document.querySelectorAll('.line'))
+    .slice(0, 20)
+    .map((line) => {
+      const label = line.querySelector('.line-label');
+      const text = line.querySelector('.line-text');
+      return {
+        label: label && typeof label.textContent === 'string' ? label.textContent : '',
+        text: text && typeof text.textContent === 'string' ? text.textContent : '',
+      };
+    });
   window.agentUI.reportEvalUiState('conversation', {
     catId: catId || null,
     logRect: rectForEvalElement(logEl, { includeHidden: true }),
@@ -59,7 +59,9 @@ function reportEvalUiState() {
 
 function kindToLabel(k: string, item: Partial<ConversationItem> = {}) {
   if (k === 'attachment') {
-    const type = String(item.attachmentType || '').trim().toLowerCase();
+    const type = String(item.attachmentType || '')
+      .trim()
+      .toLowerCase();
     if (type === 'image') return 'Image';
     if (type === 'video') return 'Video';
     if (type === 'voice') return 'Audio';
@@ -79,7 +81,7 @@ function kindClass(k: string) {
   return `line--${safe}`;
 }
 
-function attachmentStateText(reason: unknown) {
+function attachmentStateText(reason: LooseBoundaryValue) {
   return (
     {
       missing: 'Attachment unavailable',
@@ -174,7 +176,7 @@ function renderAttachmentContent(item: Partial<ConversationItem> = {}) {
   return wrap;
 }
 
-function isAuthErrorText(value: unknown) {
+function isAuthErrorText(value: LooseBoundaryValue) {
   const text = String(value || '').toLowerCase();
   return [
     'provider authentication failed',
@@ -235,7 +237,13 @@ function renderLogItems(items: ConversationItem[] = []) {
 
 function isDismissibleConversation(data: ConversationData | null) {
   const status = String((data && data.runStatus) || '').toLowerCase();
-  return status === 'completed' || status === 'error' || status === 'failed' || status === 'cancelled' || status === 'canceled';
+  return (
+    status === 'completed' ||
+    status === 'error' ||
+    status === 'failed' ||
+    status === 'cancelled' ||
+    status === 'canceled'
+  );
 }
 
 function isCancelableConversation(data: ConversationData | null) {
@@ -286,7 +294,7 @@ function updateStatusFromData(data: ConversationData | null) {
   statusEl.textContent = label;
 }
 
-function setComposerError(message: unknown) {
+function setComposerError(message: LooseBoundaryValue) {
   if (!composerError) return;
   const text = String(message || '').trim();
   composerError.hidden = !text;
@@ -301,7 +309,7 @@ async function render() {
     reportEvalUiState();
     return;
   }
-  const data = await window.agentUI.getAgentConversation(catId) as ConversationData | null;
+  const data = (await window.agentUI.getAgentConversation(catId)) as ConversationData | null;
   lastData = data;
   if (!data || !data.found) {
     logEl!.textContent = 'This conversation is not available yet, or the agent was not started.';

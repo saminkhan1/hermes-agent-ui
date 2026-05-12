@@ -10,27 +10,19 @@ import type {
   LocalDesktopGatewayEvent,
   LocalDesktopMessageDeletedEvent,
   LocalDesktopMessageEvent,
-  LocalDesktopTypingEvent,
   MutableJsonObject,
 } from '../shared/contracts.ts';
 
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const { HermesGatewayClient, getAgentUIConfigDir } = require('./hermes-gateway-client');
-const { attachmentDescriptor, normalizeAttachmentType } = require('./hermes-attachments');
-const { isAuthErrorText } = require('./hermes-auth');
-const {
-  ensureGatewayEnvFile,
-  ensureGatewayProcess,
-  stopGatewayProcess,
-} = require('./hermes-runtime');
-const {
-  enabled: evalTraceEnabled,
-  getCatArtifactDir,
-  writeArtifactJson,
-} = require('./eval-trace');
-const { telemetry } = require('./reliability-telemetry');
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { HermesGatewayClient } from './hermes-gateway-client';
+import { attachmentDescriptor, normalizeAttachmentType } from './hermes-attachments';
+import { isAuthErrorText } from './hermes-auth';
+import { ensureGatewayEnvFile, ensureGatewayProcess, stopGatewayProcess } from './hermes-runtime';
+import { getAgentUIConfigDir } from './hermes-release';
+import { enabled as evalTraceEnabled, getCatArtifactDir, writeArtifactJson } from './eval-trace';
+import { telemetry } from './reliability-telemetry';
 
 type ConversationRecord = MutableJsonObject & {
   gatewayConversationId?: string;
@@ -53,7 +45,7 @@ type ConversationPushInfo = {
   streamBubble?: string | null;
 };
 type AgentOptions = {
-  getMainWindow?: () => any;
+  getMainWindow?: () => LooseBoundaryValue;
   log?: Console;
   resetLastSeq?: boolean;
   resetGatewayReplay?: boolean;
@@ -75,19 +67,19 @@ const DEFAULT_GATEWAY_STREAM_DISCONNECT_GRACE_MS = 15000;
 const GATEWAY_READY_REUSE_MS = 3000;
 const TYPING_STARTED_PUSH_INTERVAL_MS = 5000;
 
-let gatewayClient: any = null;
+let gatewayClient: LooseBoundaryValue = null;
 let gatewayNotify: (payload: NotifyPayload) => void = () => {};
 let onAuthRequired: (payload: JsonObject) => void = () => {};
 let gatewayDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let dismissedGatewayConversations: Record<string, number> | null = null;
-let gatewayReadyPromise: Promise<any> | null = null;
+let gatewayReadyPromise: Promise<LooseBoundaryValue> | null = null;
 let gatewayReadySnapshot: { checkedAt: number; result: MutableJsonObject } | null = null;
 
-function setOnConversationPushed(fn: any) {
+function setOnConversationPushed(fn: LooseBoundaryValue) {
   onConversationPushed = typeof fn === 'function' ? fn : () => {};
 }
 
-function setOnAuthRequired(fn: any) {
+function setOnAuthRequired(fn: LooseBoundaryValue) {
   onAuthRequired = typeof fn === 'function' ? fn : () => {};
 }
 
@@ -146,7 +138,7 @@ function pruneDismissedGatewayConversations() {
   if (changed) writeDismissedGatewayConversations();
 }
 
-function isDismissedGatewayConversation(catId: any) {
+function isDismissedGatewayConversation(catId: LooseBoundaryValue) {
   const id = String(catId || '').trim();
   if (!id) return false;
   const state = readDismissedGatewayConversations();
@@ -154,7 +146,7 @@ function isDismissedGatewayConversation(catId: any) {
   return Number.isFinite(ts) && ts > 0 && now() - ts <= DISMISSED_RETENTION_MS;
 }
 
-function rememberDismissedGatewayConversation(catId: any) {
+function rememberDismissedGatewayConversation(catId: LooseBoundaryValue) {
   const id = String(catId || '').trim();
   if (!id) return;
   const state = readDismissedGatewayConversations();
@@ -167,12 +159,17 @@ function clearGatewayDisconnectTimer() {
   gatewayDisconnectTimer = null;
 }
 
-function sha256(value: any) {
-  return crypto.createHash('sha256').update(String(value || '')).digest('hex');
+function sha256(value: LooseBoundaryValue) {
+  return crypto
+    .createHash('sha256')
+    .update(String(value || ''))
+    .digest('hex');
 }
 
-function preview(value: any, max = 180) {
-  const text = String(value || '').replace(/\s+/g, ' ').trim();
+function preview(value: LooseBoundaryValue, max = 180) {
+  const text = String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
   return text.length > max ? `${text.slice(0, max - 1)}...` : text;
 }
 
@@ -185,7 +182,7 @@ function packageVersion() {
   }
 }
 
-function textMeta(value: any, max = 180) {
+function textMeta(value: LooseBoundaryValue, max = 180) {
   const text = String(value || '');
   return {
     bytes: Buffer.byteLength(text),
@@ -195,7 +192,7 @@ function textMeta(value: any, max = 180) {
   };
 }
 
-function jsonClone(value: any, fallback: any = null) {
+function jsonClone(value: LooseBoundaryValue, fallback: LooseBoundaryValue = null) {
   try {
     const cloned = JSON.parse(JSON.stringify(value));
     return cloned == null ? fallback : cloned;
@@ -204,7 +201,7 @@ function jsonClone(value: any, fallback: any = null) {
   }
 }
 
-function sanitizeMetadata(value: any): JsonObject {
+function sanitizeMetadata(value: LooseBoundaryValue): JsonObject {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   const cloned = jsonClone(value, {});
   try {
@@ -224,7 +221,7 @@ function eventTimeMs(event: MutableJsonObject = {}) {
   return now();
 }
 
-function safeText(value: any, max = 200000) {
+function safeText(value: LooseBoundaryValue, max = 200000) {
   const out = value == null ? '' : String(value);
   return out.length > max ? out.slice(0, max) : out;
 }
@@ -260,7 +257,10 @@ function publicItem(item: AgentConversationItem | MutableJsonObject = {}) {
   return out;
 }
 
-function conversationSnapshot(catId: any, rec: ConversationRecord = { items: [] }): AgentConversationSnapshot {
+function conversationSnapshot(
+  catId: LooseBoundaryValue,
+  rec: ConversationRecord = { items: [] },
+): AgentConversationSnapshot {
   return {
     catId: String(catId),
     prompt: safeText(rec.prompt),
@@ -274,20 +274,23 @@ function conversationSnapshot(catId: any, rec: ConversationRecord = { items: [] 
     gatewayConversationId: rec.gatewayConversationId || String(catId),
     startedAt: Number(rec.startedAt || 0) || now(),
     lastGatewayStopSeq: Number(rec.lastGatewayStopSeq || 0) || undefined,
-    typing: rec.typing && typeof rec.typing === 'object' ? {
-      active: !!rec.typing.active,
-      startedAt: Number(rec.typing.startedAt || 0) || undefined,
-      stoppedAt: Number(rec.typing.stoppedAt || 0) || undefined,
-      messageId: rec.typing.messageId || null,
-      seq: Number(rec.typing.seq || 0) || undefined,
-      metadata: sanitizeMetadata(rec.typing.metadata),
-    } : { active: false },
+    typing:
+      rec.typing && typeof rec.typing === 'object'
+        ? {
+            active: !!rec.typing.active,
+            startedAt: Number(rec.typing.startedAt || 0) || undefined,
+            stoppedAt: Number(rec.typing.stoppedAt || 0) || undefined,
+            messageId: rec.typing.messageId || null,
+            seq: Number(rec.typing.seq || 0) || undefined,
+            metadata: sanitizeMetadata(rec.typing.metadata),
+          }
+        : { active: false },
     activeAssistantBubble: !!rec.activeAssistantBubble,
     hydratedFromGateway: !!rec.hydratedFromGateway,
   };
 }
 
-function writeJsonSafe(catId: any, relPath: any, value: any) {
+function writeJsonSafe(catId: LooseBoundaryValue, relPath: LooseBoundaryValue, value: LooseBoundaryValue) {
   try {
     return writeArtifactJson(catId, relPath, value);
   } catch {
@@ -295,12 +298,12 @@ function writeJsonSafe(catId: any, relPath: any, value: any) {
   }
 }
 
-function getConversationLocationLabel(rec: any) {
+function getConversationLocationLabel(rec: LooseBoundaryValue) {
   const context = rec && rec.pointerContext && typeof rec.pointerContext === 'object' ? rec.pointerContext : null;
   return context && context.screenContextHint ? String(context.screenContextHint) : '';
 }
 
-function leadAssistantBubbleText(fullText: any) {
+function leadAssistantBubbleText(fullText: LooseBoundaryValue) {
   const raw = String(fullText || '').trim();
   if (!raw) return null;
   const para = raw.indexOf('\n\n');
@@ -310,7 +313,7 @@ function leadAssistantBubbleText(fullText: any) {
   return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
 }
 
-function finishAssistantBubbleText(fullText: any) {
+function finishAssistantBubbleText(fullText: LooseBoundaryValue) {
   const lines = String(fullText || '')
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -320,7 +323,7 @@ function finishAssistantBubbleText(fullText: any) {
   return lastLine.length > 120 ? `${lastLine.slice(0, 117)}...` : lastLine;
 }
 
-function finishBubbleLineFromConversation(rec: any) {
+function finishBubbleLineFromConversation(rec: LooseBoundaryValue) {
   if (!rec || !Array.isArray(rec.items)) return undefined;
   for (let i = rec.items.length - 1; i >= 0; i--) {
     const it = rec.items[i];
@@ -336,7 +339,7 @@ function finishBubbleLineFromConversation(rec: any) {
   return undefined;
 }
 
-function latestUserRetry(rec: any) {
+function latestUserRetry(rec: LooseBoundaryValue) {
   if (!rec || !Array.isArray(rec.items)) return { text: rec && rec.prompt ? String(rec.prompt) : '', kind: 'initial' };
   for (let i = rec.items.length - 1; i >= 0; i--) {
     const item = rec.items[i];
@@ -352,7 +355,7 @@ function latestUserRetry(rec: any) {
   return { text: rec && rec.prompt ? String(rec.prompt) : '', kind: 'initial' };
 }
 
-function appendConversationError(rec: any, message: any) {
+function appendConversationError(rec: LooseBoundaryValue, message: LooseBoundaryValue) {
   if (!rec || !Array.isArray(rec.items)) return;
   const text = String(message || '').trim();
   if (!text) return;
@@ -361,10 +364,14 @@ function appendConversationError(rec: any, message: any) {
   rec.items.push({ kind: 'error', text, at: now() });
 }
 
-function terminalizeGatewayConversation(catId: any, rec: ConversationRecord, message: any, reason: any) {
+function terminalizeGatewayConversation(
+  catId: LooseBoundaryValue,
+  rec: ConversationRecord,
+  message: LooseBoundaryValue,
+  reason: LooseBoundaryValue,
+) {
   if (!rec) return false;
-  const wasRunning = String(rec.runStatus || '').toLowerCase() === 'running' ||
-    !!(rec.typing && rec.typing.active);
+  const wasRunning = String(rec.runStatus || '').toLowerCase() === 'running' || !!(rec.typing && rec.typing.active);
   appendConversationError(rec, message);
   if (!wasRunning) {
     persistConversation(catId);
@@ -397,12 +404,11 @@ function terminalizeGatewayConversation(catId: any, rec: ConversationRecord, mes
   return true;
 }
 
-function terminalizeRunningGatewayConversations(message: any, reason: any) {
+function terminalizeRunningGatewayConversations(message: LooseBoundaryValue, reason: LooseBoundaryValue) {
   let count = 0;
   for (const [catId, rec] of conversations.entries()) {
     if (!rec) continue;
-    const running = String(rec.runStatus || '').toLowerCase() === 'running' ||
-      !!(rec.typing && rec.typing.active);
+    const running = String(rec.runStatus || '').toLowerCase() === 'running' || !!(rec.typing && rec.typing.active);
     if (!running) continue;
     if (terminalizeGatewayConversation(catId, rec, message, reason)) count += 1;
   }
@@ -418,21 +424,22 @@ function handleGatewayConnectionState(state: MutableJsonObject = {}) {
   if (status !== 'disconnected') return;
   gatewayReadySnapshot = null;
   const hasRunningGatewayConversation = [...conversations.values()].some((rec) => {
-    return rec &&
-      (String(rec.runStatus || '').toLowerCase() === 'running' || !!(rec.typing && rec.typing.active));
+    return rec && (String(rec.runStatus || '').toLowerCase() === 'running' || !!(rec.typing && rec.typing.active));
   });
   if (!hasRunningGatewayConversation || gatewayDisconnectTimer) return;
   const message = [
     'Hermes event stream disconnected; the run may still be active in Hermes, but agent-UI cannot receive updates.',
     state.error ? `Last error: ${state.error}` : '',
-  ].filter(Boolean).join(' ');
+  ]
+    .filter(Boolean)
+    .join(' ');
   gatewayDisconnectTimer = setTimeout(() => {
     gatewayDisconnectTimer = null;
     terminalizeRunningGatewayConversations(message, 'gateway-event-stream-disconnected');
   }, gatewayStreamDisconnectGraceMs());
 }
 
-function getNotify(getMainWindow?: () => any) {
+function getNotify(getMainWindow?: () => LooseBoundaryValue) {
   return (payload: NotifyPayload) => {
     const win = getMainWindow && getMainWindow();
     if (win && !win.isDestroyed()) {
@@ -441,14 +448,14 @@ function getNotify(getMainWindow?: () => any) {
   };
 }
 
-function statusFromGatewayOutcome(outcome: any) {
+function statusFromGatewayOutcome(outcome: LooseBoundaryValue) {
   const value = String(outcome || '').toLowerCase();
   if (value === 'failure' || value === 'failed' || value === 'error') return 'error';
   if (value === 'cancelled' || value === 'canceled') return 'cancelled';
   return 'completed';
 }
 
-function metadataSignature(value: any) {
+function metadataSignature(value: LooseBoundaryValue) {
   return JSON.stringify(sanitizeMetadata(value));
 }
 
@@ -459,14 +466,16 @@ function shouldPushTypingStarted(rec: ConversationRecord, typing: AgentTypingSta
   const previousMetadataSignature = metadataSignature(previous.metadata);
   const nextMetadataSignature = metadataSignature(typing.metadata);
   const lastPushAt = Number(rec.lastTypingStartedPushAt || 0);
-  return !previous.active ||
+  return (
+    !previous.active ||
     previousMessageId !== nextMessageId ||
     previousMetadataSignature !== nextMetadataSignature ||
     !lastPushAt ||
-    receivedAt - lastPushAt >= TYPING_STARTED_PUSH_INTERVAL_MS;
+    receivedAt - lastPushAt >= TYPING_STARTED_PUSH_INTERVAL_MS
+  );
 }
 
-function ensureConversationForGatewayEvent(catId: any, event: MutableJsonObject = {}) {
+function ensureConversationForGatewayEvent(catId: LooseBoundaryValue, event: MutableJsonObject = {}) {
   const id = String(catId);
   let rec = conversations.get(id);
   if (rec) return rec;
@@ -492,7 +501,17 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
   const catId = String(event.conversation_id || '').trim();
   if (!catId) return;
   const type = String(event.type || '').trim();
-  if (!['message.created', 'message.updated', 'message.deleted', 'attachment.created', 'typing.started', 'typing.stopped'].includes(type)) return;
+  if (
+    ![
+      'message.created',
+      'message.updated',
+      'message.deleted',
+      'attachment.created',
+      'typing.started',
+      'typing.stopped',
+    ].includes(type)
+  )
+    return;
   const rec = ensureConversationForGatewayEvent(catId, event);
   if (!rec) return;
   const receivedAt = now();
@@ -509,19 +528,19 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
   }
 
   if (type === 'message.created' || type === 'message.updated') {
-    upsertGatewayAssistantMessage(catId, event as LocalDesktopMessageEvent | MutableJsonObject);
+    upsertGatewayAssistantMessage(catId, event);
     return;
   }
   if (type === 'message.deleted') {
-    deleteGatewayMessage(catId, event as LocalDesktopMessageDeletedEvent | MutableJsonObject);
+    deleteGatewayMessage(catId, event);
     return;
   }
   if (type === 'attachment.created') {
-    appendGatewayAttachment(catId, event as LocalDesktopAttachmentEvent | MutableJsonObject);
+    appendGatewayAttachment(catId, event);
     return;
   }
   if (type === 'typing.started') {
-    const typingEvent = event as LocalDesktopTypingEvent | MutableJsonObject;
+    const typingEvent = event as MutableJsonObject;
     const typing = {
       active: true,
       startedAt: eventTimeMs(typingEvent),
@@ -542,7 +561,7 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
     return;
   }
   if (type === 'typing.stopped') {
-    const typingEvent = event as LocalDesktopTypingEvent | MutableJsonObject;
+    const typingEvent = event as MutableJsonObject;
     if (typingEvent.transient && !typingEvent.outcome) {
       rec.typing = {
         ...(rec.typing || {}),
@@ -566,7 +585,8 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
       ...(rec.typing || {}),
       active: false,
       stoppedAt: eventTimeMs(typingEvent),
-      messageId: typingEvent.message_id == null ? (rec.typing && rec.typing.messageId) || null : String(typingEvent.message_id),
+      messageId:
+        typingEvent.message_id == null ? (rec.typing && rec.typing.messageId) || null : String(typingEvent.message_id),
       seq: seq || (rec.typing && rec.typing.seq) || undefined,
     };
     persistConversation(catId);
@@ -581,7 +601,9 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
     const failureText = [
       typingEvent.metadata && typingEvent.metadata.error,
       typingEvent.metadata && typingEvent.metadata.message,
-    ].filter(Boolean).join('\n');
+    ]
+      .filter(Boolean)
+      .join('\n');
     if (status === 'error' && isAuthErrorText(failureText) && !rec.authPrompted) {
       const retry = latestUserRetry(rec);
       rec.authPrompted = true;
@@ -611,7 +633,7 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
   }
 }
 
-function handleGatewayReplayExpired(error: any) {
+function handleGatewayReplayExpired(error: LooseBoundaryValue) {
   const message = 'Hermes event replay window expired; reconnected live, but older missed updates may be unavailable.';
   let affected = 0;
   for (const [catId, rec] of conversations.entries()) {
@@ -685,7 +707,9 @@ async function ensureGatewayReady(log = console, opts: GatewayReadyRequest = {})
     telemetry.gatewayReadyCheckCompleted(payload);
     if (!result || !result.ok) {
       gatewayReadySnapshot = null;
-      const err = new Error((result && (result.error || result.reason)) || 'Hermes gateway did not become ready.') as MutableJsonObject & Error;
+      const err = new Error(
+        (result && (result.error || result.reason)) || 'Hermes gateway did not become ready.',
+      ) as MutableJsonObject & Error;
       err.gatewayReadyTraceRecorded = true;
       throw err;
     }
@@ -697,7 +721,7 @@ async function ensureGatewayReady(log = console, opts: GatewayReadyRequest = {})
   })();
   try {
     return await gatewayReadyPromise;
-  } catch (error: any) {
+  } catch (error: LooseBoundaryValue) {
     gatewayReadySnapshot = null;
     if (!error || !error.gatewayReadyTraceRecorded) {
       telemetry.gatewayReadyCheckCompleted({
@@ -753,7 +777,7 @@ async function hydrateGatewayConversations(opts: AgentOptions = {}) {
       durationMs: now() - startedAt,
     });
     return { ok: true, resetLastSeq };
-  } catch (e: any) {
+  } catch (e: LooseBoundaryValue) {
     const error = e && e.message ? e.message : String(e || 'Hermes gateway did not become ready.');
     log.warn('[agent-ui] gateway replay hydration skipped:', error);
     telemetry.gatewayHydrationCompleted({
@@ -766,14 +790,14 @@ async function hydrateGatewayConversations(opts: AgentOptions = {}) {
   }
 }
 
-function notifyRestarted(getMainWindow: any, catId: any) {
+function notifyRestarted(getMainWindow: LooseBoundaryValue, catId: LooseBoundaryValue) {
   const win = getMainWindow && getMainWindow();
   if (win && !win.isDestroyed()) {
     win.webContents.send('agent-restarted', { catId: String(catId) });
   }
 }
 
-function persistConversation(catId: any) {
+function persistConversation(catId: LooseBoundaryValue) {
   const id = String(catId);
   const rec = conversations.get(id);
   if (!rec) return;
@@ -782,14 +806,18 @@ function persistConversation(catId: any) {
   }
 }
 
-function upsertGatewayAssistantMessage(catId: any, event: LocalDesktopMessageEvent | MutableJsonObject = {}) {
+function upsertGatewayAssistantMessage(
+  catId: LooseBoundaryValue,
+  event: LocalDesktopMessageEvent | MutableJsonObject = {},
+) {
+  const wireEvent = event as MutableJsonObject;
   const id = String(catId);
   const rec = conversations.get(id);
   if (!rec) return;
-  const hasText = event.text != null;
-  const text = hasText ? String(event.text) : '';
-  const messageId = event.message_id == null ? '' : String(event.message_id);
-  if (!hasText && String(event.type || '') !== 'message.updated') return;
+  const hasText = wireEvent.text != null;
+  const text = hasText ? String(wireEvent.text) : '';
+  const messageId = wireEvent.message_id == null ? '' : String(wireEvent.message_id);
+  if (!hasText && String(wireEvent.type || '') !== 'message.updated') return;
 
   let target = null;
   if (messageId) {
@@ -797,40 +825,48 @@ function upsertGatewayAssistantMessage(catId: any, event: LocalDesktopMessageEve
   }
   if (!target) {
     if (!hasText) return;
-    target = { kind: 'assistant', text, at: eventTimeMs(event) } as AgentConversationItem;
+    target = { kind: 'assistant', text, at: eventTimeMs(wireEvent) } as AgentConversationItem;
     if (messageId) target.messageId = messageId;
     rec.items.push(target);
   } else if (hasText) {
     target.text = text;
-    target.at = eventTimeMs(event);
+    target.at = eventTimeMs(wireEvent);
   } else {
-    target.at = eventTimeMs(event);
+    target.at = eventTimeMs(wireEvent);
   }
-  target.seq = Number(event.seq || 0) || target.seq;
-  target.createdAt = event.created_at == null ? target.createdAt : event.created_at;
-  target.replyTo = event.reply_to == null ? target.replyTo : String(event.reply_to);
-  if (event.metadata != null) target.metadata = sanitizeMetadata(event.metadata);
-  if (event.finalize != null) target.finalize = !!event.finalize;
+  target.seq = Number(wireEvent.seq || 0) || target.seq;
+  target.createdAt = wireEvent.created_at == null ? target.createdAt : wireEvent.created_at;
+  target.replyTo = wireEvent.reply_to == null ? target.replyTo : String(wireEvent.reply_to);
+  if (wireEvent.metadata != null) target.metadata = sanitizeMetadata(wireEvent.metadata);
+  if (wireEvent.finalize != null) target.finalize = !!wireEvent.finalize;
   rec.activeAssistantBubble = !target.finalize;
   persistConversation(id);
   onConversationPushed({ catId: id, streamBubble: leadAssistantBubbleText(text) });
 }
 
-function deleteGatewayMessage(catId: any, event: LocalDesktopMessageDeletedEvent | MutableJsonObject = {}) {
+function deleteGatewayMessage(
+  catId: LooseBoundaryValue,
+  event: LocalDesktopMessageDeletedEvent | MutableJsonObject = {},
+) {
   const id = String(catId);
   const rec = conversations.get(id);
   if (!rec) return;
   const messageId = event.message_id == null ? '' : String(event.message_id);
   if (!messageId) return;
   const before = rec.items.length;
-  rec.items = rec.items.filter((it) => !(it && (it.kind === 'assistant' || it.kind === 'attachment') && it.messageId === messageId));
+  rec.items = rec.items.filter(
+    (it) => !(it && (it.kind === 'assistant' || it.kind === 'attachment') && it.messageId === messageId),
+  );
   if (rec.items.length !== before) {
     persistConversation(id);
     onConversationPushed({ catId: id });
   }
 }
 
-function appendGatewayAttachment(catId: any, event: LocalDesktopAttachmentEvent | MutableJsonObject = {}) {
+function appendGatewayAttachment(
+  catId: LooseBoundaryValue,
+  event: LocalDesktopAttachmentEvent | MutableJsonObject = {},
+) {
   const id = String(catId);
   const rec = conversations.get(id);
   if (!rec) return;
@@ -856,7 +892,7 @@ function appendGatewayAttachment(catId: any, event: LocalDesktopAttachmentEvent 
   onConversationPushed({ catId: id, streamBubble: leadAssistantBubbleText(text) });
 }
 
-function initConversationState(catId: any, { prompt, pointerContext }: any) {
+function initConversationState(catId: LooseBoundaryValue, { prompt, pointerContext }: LooseBoundaryValue) {
   const id = String(catId);
   conversations.set(id, {
     prompt: String(prompt || ''),
@@ -873,7 +909,7 @@ function initConversationState(catId: any, { prompt, pointerContext }: any) {
   onConversationPushed({ catId: id });
 }
 
-function getAgentConversation(catId: any) {
+function getAgentConversation(catId: LooseBoundaryValue) {
   const c = conversations.get(String(catId));
   if (!c) return { found: false, items: [] };
   return {
@@ -907,11 +943,11 @@ function listAgentConversations() {
   }));
 }
 
-function deleteConversationState(catId: any) {
+function deleteConversationState(catId: LooseBoundaryValue) {
   conversations.delete(String(catId));
 }
 
-async function dismissAgent(catId: any, opts: AgentOptions = {}) {
+async function dismissAgent(catId: LooseBoundaryValue, opts: AgentOptions = {}) {
   const { getMainWindow } = opts;
   const id = String(catId);
   const rec = conversations.get(id);
@@ -933,7 +969,7 @@ async function dismissAgent(catId: any, opts: AgentOptions = {}) {
   return { ok: true };
 }
 
-function xmlEscaped(value: any) {
+function xmlEscaped(value: LooseBoundaryValue) {
   return String(value || '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -942,12 +978,12 @@ function xmlEscaped(value: any) {
     .replace(/'/g, '&apos;');
 }
 
-function safeInteger(value: any) {
+function safeInteger(value: LooseBoundaryValue) {
   const n = Number(value);
   return Number.isFinite(n) ? Math.trunc(n) : null;
 }
 
-function boundsMetadata(bounds: any) {
+function boundsMetadata(bounds: LooseBoundaryValue) {
   if (!bounds || typeof bounds !== 'object') return null;
   const x = safeInteger(bounds.x);
   const y = safeInteger(bounds.y);
@@ -957,25 +993,25 @@ function boundsMetadata(bounds: any) {
   return { x, y, width, height };
 }
 
-function addIfPresent(target: any, key: any, value: any) {
+function addIfPresent(target: LooseBoundaryValue, key: LooseBoundaryValue, value: LooseBoundaryValue) {
   if (value == null) return;
   if (typeof value === 'string' && !value.trim()) return;
   target[key] = value;
 }
 
-function safeMetadataJson(metadata: any) {
-  return JSON.stringify(metadata, null, 2)
-    .replace(/&/g, '\\u0026')
-    .replace(/</g, '\\u003C')
-    .replace(/>/g, '\\u003E');
+function safeMetadataJson(metadata: LooseBoundaryValue) {
+  return JSON.stringify(metadata, null, 2).replace(/&/g, '\\u0026').replace(/</g, '\\u003C').replace(/>/g, '\\u003E');
 }
 
-function hermesMetadataFromContext(context: any) {
+function hermesMetadataFromContext(context: LooseBoundaryValue) {
   const c = context && typeof context === 'object' ? context : {};
   const activeWindow = c.activeWindow && typeof c.activeWindow === 'object' ? c.activeWindow : null;
-  const owner = activeWindow && activeWindow.owner && typeof activeWindow.owner === 'object'
-    ? activeWindow.owner
-    : (c.frontmostApp && typeof c.frontmostApp === 'object' ? c.frontmostApp : {});
+  const owner =
+    activeWindow && activeWindow.owner && typeof activeWindow.owner === 'object'
+      ? activeWindow.owner
+      : c.frontmostApp && typeof c.frontmostApp === 'object'
+        ? c.frontmostApp
+        : {};
   const cursor = c.cursor && typeof c.cursor === 'object' ? c.cursor : {};
   const display = c.display && typeof c.display === 'object' ? c.display : null;
   const missingContext = Array.isArray(c.missingContext) ? c.missingContext.map(String) : [];
@@ -1000,7 +1036,11 @@ function hermesMetadataFromContext(context: any) {
   addIfPresent(metadata, 'top_window_owner_name', activeWindow ? owner.name : null);
   addIfPresent(metadata, 'top_window_bounds', activeWindow ? boundsMetadata(activeWindow.bounds) : null);
   addIfPresent(metadata, 'top_window_url', activeWindow && activeWindow.url);
-  addIfPresent(metadata, 'top_window_is_browser_like', typeof c.topWindowIsBrowserLike === 'boolean' ? c.topWindowIsBrowserLike : null);
+  addIfPresent(
+    metadata,
+    'top_window_is_browser_like',
+    typeof c.topWindowIsBrowserLike === 'boolean' ? c.topWindowIsBrowserLike : null,
+  );
   addIfPresent(metadata, 'screen_context_hint', c.screenContextHint);
 
   if (display) {
@@ -1016,7 +1056,7 @@ function hermesMetadataFromContext(context: any) {
   return metadata;
 }
 
-function buildLocalRunPrompt(prompt: any, launchContext: any) {
+function buildLocalRunPrompt(prompt: LooseBoundaryValue, launchContext: LooseBoundaryValue) {
   const userMessage = `<user_message source="${HERMES_SOURCE}">${xmlEscaped(prompt)}</user_message>`;
   if (!launchContext) return userMessage;
   const metadataJson = safeMetadataJson(hermesMetadataFromContext(launchContext));
@@ -1026,11 +1066,13 @@ function buildLocalRunPrompt(prompt: any, launchContext: any) {
   ].join('\n');
 }
 
-function isHermesSlashCommandPrompt(prompt: any) {
-  return String(prompt || '').trimStart().startsWith('/');
+function isHermesSlashCommandPrompt(prompt: LooseBoundaryValue) {
+  return String(prompt || '')
+    .trimStart()
+    .startsWith('/');
 }
 
-function getAgentArtifacts(catId: any) {
+function getAgentArtifacts(catId: LooseBoundaryValue) {
   const id = String(catId);
   const dir = evalTraceEnabled ? getCatArtifactDir(id) : null;
   if (!dir) return null;
@@ -1040,7 +1082,13 @@ function getAgentArtifacts(catId: any) {
   };
 }
 
-async function runOnGateway(catId: any, notify: any, log: any, prompt: any, opts: AgentOptions = {}) {
+async function runOnGateway(
+  catId: LooseBoundaryValue,
+  notify: LooseBoundaryValue,
+  log: LooseBoundaryValue,
+  prompt: LooseBoundaryValue,
+  opts: AgentOptions = {},
+) {
   const id = String(catId);
   const rec = conversations.get(id);
   await ensureGatewayReady(log, { reason: 'message' });
@@ -1101,7 +1149,12 @@ async function runOnGateway(catId: any, notify: any, log: any, prompt: any, opts
   gatewayNotify = notify || gatewayNotify;
 }
 
-function markGatewayError(catId: any, error: any, notify: any, opts: MutableJsonObject = {}) {
+function markGatewayError(
+  catId: LooseBoundaryValue,
+  error: LooseBoundaryValue,
+  notify: LooseBoundaryValue,
+  opts: MutableJsonObject = {},
+) {
   const id = String(catId);
   const rec = conversations.get(id);
   const message = error && error.message ? error.message : String(error || 'Hermes gateway is unavailable.');
@@ -1143,7 +1196,7 @@ function markGatewayError(catId: any, error: any, notify: any, opts: MutableJson
   }
 }
 
-async function runAgentLifecycle({ catId, prompt, pointerContext, notify, log, getMainWindow }: any) {
+async function runAgentLifecycle({ catId, prompt, pointerContext, notify, log, getMainWindow }: LooseBoundaryValue) {
   const id = String(catId);
   const resetGatewayReplay = !gatewayClient && conversations.size === 0;
   initConversationState(id, {
@@ -1157,12 +1210,15 @@ async function runAgentLifecycle({ catId, prompt, pointerContext, notify, log, g
       getMainWindow,
       resetGatewayReplay,
     });
-  } catch (e: any) {
+  } catch (e: LooseBoundaryValue) {
     markGatewayError(id, e, notify, { retryText: String(prompt || ''), retryKind: 'initial' });
   }
 }
 
-function startAgentForCat({ catId, prompt, pointerContext }: any, { getMainWindow, log = console }: AgentOptions = {}) {
+function startAgentForCat(
+  { catId, prompt, pointerContext }: LooseBoundaryValue,
+  { getMainWindow, log = console }: AgentOptions = {},
+) {
   const notify = getNotify(getMainWindow);
   void runAgentLifecycle({
     catId: String(catId),
@@ -1174,7 +1230,7 @@ function startAgentForCat({ catId, prompt, pointerContext }: any, { getMainWindo
   });
 }
 
-async function sendFollowup(catId: any, text: any, opts: AgentOptions = {}) {
+async function sendFollowup(catId: LooseBoundaryValue, text: LooseBoundaryValue, opts: AgentOptions = {}) {
   const { getMainWindow, log = console } = opts;
   const id = String(catId);
   const t = String(text || '');
@@ -1201,13 +1257,13 @@ async function sendFollowup(catId: any, text: any, opts: AgentOptions = {}) {
   try {
     await runOnGateway(id, notify, log, t, { includeContext: false, getMainWindow });
     return { ok: true };
-  } catch (e: any) {
+  } catch (e: LooseBoundaryValue) {
     markGatewayError(id, e, notify, { retryText: t, retryKind: 'followup' });
     return { ok: false, error: e && e.message ? e.message : String(e) };
   }
 }
 
-async function cancelAgent(catId: any, opts: AgentOptions = {}) {
+async function cancelAgent(catId: LooseBoundaryValue, opts: AgentOptions = {}) {
   const { getMainWindow, log = console } = opts;
   const id = String(catId);
   const rec = conversations.get(id);
@@ -1227,7 +1283,7 @@ async function cancelAgent(catId: any, opts: AgentOptions = {}) {
   try {
     await runOnGateway(id, notify, log, '/stop', { includeContext: false, getMainWindow });
     return { ok: true };
-  } catch (e: any) {
+  } catch (e: LooseBoundaryValue) {
     markGatewayError(id, e, notify, { retryText: '/stop', retryKind: 'command' });
     return { ok: false, error: e && e.message ? e.message : String(e) };
   }
@@ -1243,19 +1299,7 @@ function cancelAllAgents() {
   stopGatewayProcess();
 }
 
-function resetGatewayClientForTests() {
-  if (gatewayClient) gatewayClient.stop();
-  stopGatewayProcess();
-  gatewayClient = null;
-  gatewayNotify = () => {};
-  gatewayReadyPromise = null;
-  gatewayReadySnapshot = null;
-  conversations.clear();
-  dismissedGatewayConversations = null;
-  clearGatewayDisconnectTimer();
-}
-
-module.exports = {
+export {
   startAgentForCat,
   cancelAllAgents,
   getAgentConversation,
@@ -1269,10 +1313,4 @@ module.exports = {
   dismissAgent,
   sendFollowup,
   getAgentArtifacts,
-  _test: {
-    handleGatewayEvent,
-    handleGatewayReplayExpired,
-    isHermesSlashCommandPrompt,
-    resetGatewayClientForTests,
-  },
 };

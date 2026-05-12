@@ -1,5 +1,3 @@
-/* global agentUI */
-
 import type {
   HermesAuthContext as AuthContext,
   HermesAuthEvent as AuthEvent,
@@ -54,31 +52,9 @@ let activeOauthSessionId = '';
 let latestOauthUrl = '';
 let openedOauthUrl = '';
 let latestUserCode = '';
-let oauthTranscript = '';
 let oauthCancelRequested = false;
 let oauthMonitorState = 'idle';
 let autoStartedOAuth = false;
-
-function stripAnsi(value: any) {
-  return String(value || '').replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
-}
-
-function cleanHermesOutput(value: any) {
-  return stripAnsi(value).replace(/\r/g, '');
-}
-
-function extractUrls(value: any) {
-  const text = cleanHermesOutput(value);
-  return Array.from(new Set((text.match(/https?:\/\/[^\s)>"']+/g) || []).map((url) => url.replace(/[.,;]+$/, ''))));
-}
-
-function extractUserCode(value: any) {
-  const text = cleanHermesOutput(value);
-  const explicit = text.match(/enter (?:this )?code:\s*\n\s*([A-Z0-9][A-Z0-9-]{3,})/i);
-  if (explicit) return explicit[1].trim();
-  const inline = text.match(/\b(?:user[_ -]?code|code):\s*([A-Z0-9][A-Z0-9-]{3,})\b/i);
-  return inline ? inline[1].trim() : '';
-}
 
 function providerLabel(provider: Provider = {}) {
   return String(provider.name || provider.id || provider.slug || '').trim();
@@ -111,7 +87,7 @@ function selectedCatalogProvider() {
   return sortedCatalog().find((provider) => providerId(provider) === id) || null;
 }
 
-function setError(message: unknown) {
+function setError(message: LooseBoundaryValue) {
   const text = String(message || '').trim();
   if (!errorEl) return;
   errorEl.hidden = !text;
@@ -119,7 +95,16 @@ function setError(message: unknown) {
 }
 
 function setBusy(busy: boolean, label = '') {
-  for (const el of [providerSelect, checkOauthBtn, retryOauthBtn, modelProviderSelect, modelSelect, customModelInput, primaryBtn, backBtn]) {
+  for (const el of [
+    providerSelect,
+    checkOauthBtn,
+    retryOauthBtn,
+    modelProviderSelect,
+    modelSelect,
+    customModelInput,
+    primaryBtn,
+    backBtn,
+  ]) {
     if (el) el.disabled = !!busy;
   }
   if (primaryBtn && label) primaryBtn.textContent = label;
@@ -134,9 +119,7 @@ async function loadHeaderAppIcon() {
   try {
     const payload = await window.agentUI.getPetCharacters();
     const spriteUrl = String(
-      (payload && payload.selectedSpriteUrl) ||
-      (payload && payload.selected && payload.selected.spriteUrl) ||
-      ''
+      (payload && payload.selectedSpriteUrl) || (payload && payload.selected && payload.selected.spriteUrl) || '',
     ).trim();
     if (spriteUrl) headerAppIcon.style.backgroundImage = `url("${spriteUrl}")`;
   } catch {
@@ -148,21 +131,31 @@ function syncFooter() {
   const hasCredentials = Array.isArray(status?.providers) && status.providers.length > 0;
   if (backBtn) backBtn.hidden = step !== 'model';
   if (primaryBtn) {
-    const waitingForOauth = step === 'connect' && mode === 'oauth' && !!activeOauthSessionId && (oauthMonitorState === 'waiting' || oauthMonitorState === 'stale');
+    const waitingForOauth =
+      step === 'connect' &&
+      mode === 'oauth' &&
+      !!activeOauthSessionId &&
+      (oauthMonitorState === 'waiting' || oauthMonitorState === 'stale');
     primaryBtn.hidden = false;
     primaryBtn.disabled = waitingForOauth;
-    primaryBtn.textContent = step === 'model'
-      ? (hasPendingRun ? 'Save & Start Task' : 'Save Model')
-      : hasCredentials
-        ? 'Continue'
-        : waitingForOauth
-          ? 'Waiting for Sign-In'
-        : mode === 'api'
-          ? 'Save API Key'
-          : 'Open Browser Sign-In';
+    primaryBtn.textContent =
+      step === 'model'
+        ? hasPendingRun
+          ? 'Save & Start Task'
+          : 'Save Model'
+        : hasCredentials
+          ? 'Continue'
+          : waitingForOauth
+            ? 'Waiting for Sign-In'
+            : mode === 'api'
+              ? 'Save API Key'
+              : 'Open Browser Sign-In';
   }
   if (hintEl) {
-    const escLabel = hasPendingRun || activeOauthSessionId || oauthMonitorState !== 'idle' ? '<kbd>Esc</kbd> hide' : '<kbd>Esc</kbd> close';
+    const escLabel =
+      hasPendingRun || activeOauthSessionId || oauthMonitorState !== 'idle'
+        ? '<kbd>Esc</kbd> hide'
+        : '<kbd>Esc</kbd> close';
     hintEl.innerHTML = step === 'model' ? 'Choose once; Hermes remembers it' : escLabel;
   }
 }
@@ -217,7 +210,10 @@ function populateProviderSelect() {
   }
   if (prior && Array.from(providerSelect.options).some((option) => option.value === prior)) {
     providerSelect.value = prior;
-  } else if (status?.current_provider && Array.from(providerSelect.options).some((option) => option.value === status!.current_provider)) {
+  } else if (
+    status?.current_provider &&
+    Array.from(providerSelect.options).some((option) => option.value === status!.current_provider)
+  ) {
     providerSelect.value = status.current_provider;
   }
   syncProviderMode();
@@ -234,7 +230,7 @@ function syncProviderMode() {
   }
 }
 
-function providerBySlug(slug: unknown) {
+function providerBySlug(slug: LooseBoundaryValue) {
   return (status?.providers || []).find((provider) => String(provider.slug || '') === String(slug || '')) || null;
 }
 
@@ -332,20 +328,12 @@ async function saveApiKey() {
   }
 }
 
-function appendOauthOutput(text: any) {
-  oauthTranscript += cleanHermesOutput(text);
-  const urls = extractUrls(oauthTranscript);
-  latestOauthUrl = urls.length ? urls[urls.length - 1] : latestOauthUrl;
-  latestUserCode = extractUserCode(oauthTranscript) || latestUserCode;
-  updateOauthSummary();
-}
-
-function setOauthMessage(message: unknown) {
+function setOauthMessage(message: LooseBoundaryValue) {
   if (!oauthOutput) return;
   oauthOutput.textContent = String(message || '').trim();
 }
 
-function setOauthStatus(message: unknown) {
+function setOauthStatus(message: LooseBoundaryValue) {
   if (!oauthStatus) return;
   oauthStatus.textContent = String(message || '').trim();
 }
@@ -377,11 +365,17 @@ function updateOauthSummary() {
   if (!activeOauthSessionId || oauthMonitorState !== 'waiting') return;
   if (latestOauthUrl && latestUserCode) {
     maybeOpenOauthUrl();
-    setOauthStatus(openedOauthUrl === latestOauthUrl ? 'Browser opened. Enter the code there.' : 'Open the link, then paste the code.');
+    setOauthStatus(
+      openedOauthUrl === latestOauthUrl
+        ? 'Browser opened. Enter the code there.'
+        : 'Open the link, then paste the code.',
+    );
     setOauthMessage('Waiting for sign-in to finish.');
   } else if (latestOauthUrl) {
     maybeOpenOauthUrl();
-    setOauthStatus(openedOauthUrl === latestOauthUrl ? 'Browser opened. Finish sign-in there.' : 'Open the link to continue.');
+    setOauthStatus(
+      openedOauthUrl === latestOauthUrl ? 'Browser opened. Finish sign-in there.' : 'Open the link to continue.',
+    );
     setOauthMessage('Waiting for Hermes to provide a code.');
   } else {
     setOauthStatus('Starting browser sign-in.');
@@ -390,9 +384,10 @@ function updateOauthSummary() {
 }
 
 function maybeOpenOauthUrl() {
-  if (!latestOauthUrl || openedOauthUrl === latestOauthUrl || typeof window.agentUI?.openExternalUrl !== 'function') return;
+  if (!latestOauthUrl || openedOauthUrl === latestOauthUrl || typeof window.agentUI?.openExternalUrl !== 'function')
+    return;
   openedOauthUrl = latestOauthUrl;
-  void window.agentUI.openExternalUrl(latestOauthUrl).then((result: any) => {
+  void window.agentUI.openExternalUrl(latestOauthUrl).then((result: LooseBoundaryValue) => {
     if (!result || result.ok !== false) return;
     openedOauthUrl = '';
     setError(result.error || 'Could not open the sign-in link.');
@@ -404,13 +399,11 @@ function resetCopyButton(button: HTMLButtonElement | null) {
   button.textContent = 'Copy';
 }
 
-async function copyText(value: unknown, button: HTMLButtonElement | null) {
+async function copyText(value: LooseBoundaryValue, button: HTMLButtonElement | null) {
   const text = String(value || '').trim();
   if (!text) return;
   try {
-    const result = typeof window.agentUI?.copyText === 'function'
-      ? await window.agentUI.copyText(text)
-      : null;
+    const result = typeof window.agentUI?.copyText === 'function' ? await window.agentUI.copyText(text) : null;
     if (!result || result.ok === false) {
       throw new Error((result && result.error) || 'Could not copy.');
     }
@@ -432,7 +425,11 @@ async function applyAuthFlowSnapshot(flow: AuthFlow = {}, reason = '') {
   latestOauthUrl = String(flow.latestUrl || '');
   if (!latestOauthUrl) openedOauthUrl = '';
   latestUserCode = String(flow.userCode || '');
-  if (flow.provider && providerSelect && Array.from(providerSelect.options).some((option) => option.value === flow.provider)) {
+  if (
+    flow.provider &&
+    providerSelect &&
+    Array.from(providerSelect.options).some((option) => option.value === flow.provider)
+  ) {
     providerSelect.value = flow.provider;
   }
   if (nextState !== 'idle') setMode('oauth');
@@ -441,11 +438,13 @@ async function applyAuthFlowSnapshot(flow: AuthFlow = {}, reason = '') {
 
   if (nextState === 'waiting') {
     if (latestOauthUrl) maybeOpenOauthUrl();
-    setOauthStatus(latestOauthUrl
-      ? openedOauthUrl === latestOauthUrl
-        ? 'Browser opened. Finish sign-in there.'
-        : 'Open the link, then paste the code.'
-      : 'Starting browser sign-in.');
+    setOauthStatus(
+      latestOauthUrl
+        ? openedOauthUrl === latestOauthUrl
+          ? 'Browser opened. Finish sign-in there.'
+          : 'Open the link, then paste the code.'
+        : 'Starting browser sign-in.',
+    );
     setOauthMessage(latestOauthUrl ? 'Waiting for sign-in to finish.' : 'Waiting for Hermes.');
   } else if (nextState === 'stale') {
     setOauthStatus('Still waiting for browser sign-in.');
@@ -483,7 +482,6 @@ async function startOAuth(opts: { retry?: boolean } = {}) {
   latestOauthUrl = '';
   openedOauthUrl = '';
   latestUserCode = '';
-  oauthTranscript = '';
   oauthCancelRequested = false;
   oauthMonitorState = 'waiting';
   activeOauthSessionId = '';
@@ -533,7 +531,7 @@ async function saveModelAndFinish() {
   const provider = modelProviderSelect?.value || '';
   const providerInfo = providerBySlug(provider);
   const models = Array.isArray(providerInfo?.models) ? providerInfo.models : [];
-  const model = models.length ? (modelSelect?.value || '') : (customModelInput?.value || '');
+  const model = models.length ? modelSelect?.value || '' : customModelInput?.value || '';
   setBusy(true, hasPendingRun ? 'Starting' : 'Saving');
   setError('');
   try {
@@ -587,7 +585,13 @@ openLinkBtn?.addEventListener('click', () => {
   if (latestOauthUrl && typeof window.agentUI.openExternalUrl === 'function') {
     void (async () => {
       const result = await window.agentUI.openExternalUrl(latestOauthUrl);
-      if ((!result || result.ok !== false) && activeOauthSessionId && latestOauthUrl && latestUserCode && typeof window.agentUI.dismissHermesAuth === 'function') {
+      if (
+        (!result || result.ok !== false) &&
+        activeOauthSessionId &&
+        latestOauthUrl &&
+        latestUserCode &&
+        typeof window.agentUI.dismissHermesAuth === 'function'
+      ) {
         await window.agentUI.dismissHermesAuth();
       }
     })();
@@ -652,9 +656,10 @@ window.agentUI?.onHermesAuthEvent?.((event: AuthEvent = {}) => {
       return;
     }
     if (event.type === 'output') {
-      if (Array.isArray(event.urls) && event.urls.length) latestOauthUrl = event.urls[event.urls.length - 1];
+      if (Array.isArray(event.urls) && event.urls.length)
+        latestOauthUrl = String(event.urls[event.urls.length - 1] || '');
       if (event.userCode) latestUserCode = String(event.userCode || '');
-      appendOauthOutput(event.text || '');
+      updateOauthSummary();
       return;
     }
     if (event.type === 'exit' || event.type === 'error') {
@@ -667,7 +672,10 @@ window.agentUI?.onHermesAuthEvent?.((event: AuthEvent = {}) => {
         setOauthStatus('Sign-in canceled.');
         setOauthMessage('');
       } else {
-        await applyAuthFlowSnapshot({ state: 'failed', lastError: event.stderr || event.stdout || event.error || 'Hermes sign-in failed.' }, 'error');
+        await applyAuthFlowSnapshot(
+          { state: 'failed', lastError: event.stderr || event.stdout || event.error || 'Hermes sign-in failed.' },
+          'error',
+        );
       }
     }
   })();

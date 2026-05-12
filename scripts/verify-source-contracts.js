@@ -56,22 +56,75 @@ function verifyPackageScripts() {
   for (const token of ['verify:hermes-contracts', 'typecheck', 'build', 'verify:source-contracts']) {
     if (!packageScript('verify:source').includes(token)) fail(`verify:source must include ${token}.`);
   }
-  requireNoPackageScript('dist:mac:connector', 'Use dist:mac or the explicit dist:mac:connector:bootstrap implementation.');
-  requireNoPackageScript('release:verify:connector:bootstrap', 'Use release:verify or release:verify:bootstrap.');
-  requireNoPackageScript('smoke:installed-release:lmstudio', 'Use verify:live:lmstudio so LM Studio preflight cannot be skipped.');
+  for (const [name, tokens] of [
+    [
+      'dist:mac',
+      [
+        'assert-mac-release-env.js bootstrap connector',
+        'npm run build',
+        'CSC_IDENTITY_AUTO_DISCOVERY=false',
+        'electron-builder.connector.bootstrap.cjs',
+      ],
+    ],
+    [
+      'dist:mac:developer-id',
+      ['assert-mac-release-env.js developer-id connector', 'npm run build', 'electron-builder.connector.cjs'],
+    ],
+    [
+      'release:verify',
+      ['RELEASE_VERIFY_SIGNING_MODE=bootstrap', 'RELEASE_VERIFY_APP_MODE=connector', 'release-manifest.js'],
+    ],
+    [
+      'release:verify:developer-id',
+      ['RELEASE_VERIFY_SIGNING_MODE=developer-id', 'RELEASE_VERIFY_APP_MODE=connector', 'release-manifest.js'],
+    ],
+  ]) {
+    const script = packageScript(name);
+    for (const token of tokens) {
+      if (!script.includes(token)) fail(`${name} must include ${token}.`);
+    }
+  }
+  for (const removed of [
+    'dist:mac:bootstrap',
+    'dist:mac:connector',
+    'dist:mac:connector:bootstrap',
+    'dist:mac:connector:developer-id',
+    'release:verify:bootstrap',
+    'release:verify:connector:bootstrap',
+  ]) {
+    requireNoPackageScript(removed, 'Use the direct connector release scripts instead.');
+  }
+  requireNoPackageScript(
+    'smoke:installed-release:lmstudio',
+    'Use verify:live:lmstudio so LM Studio preflight cannot be skipped.',
+  );
   if (packageScript('verify:installed') !== 'node scripts/installed-app-release-smoke.js') {
     fail('verify:installed must be the black-box installed-app smoke.');
   }
   const live = packageScript('verify:live:lmstudio');
-  for (const token of ['lmstudio-live-preflight.js', 'AGENT_UI_INSTALLED_SMOKE_PROVIDER=lmstudio', 'AGENT_UI_LMSTUDIO_MODEL=google/gemma-4-26b-a4b', 'installed-app-release-smoke.js']) {
+  for (const token of [
+    'lmstudio-live-preflight.js',
+    'AGENT_UI_INSTALLED_SMOKE_PROVIDER=lmstudio',
+    'AGENT_UI_LMSTUDIO_MODEL=google/gemma-4-26b-a4b',
+    'installed-app-release-smoke.js',
+  ]) {
     if (!live.includes(token)) fail(`verify:live:lmstudio must include ${token}.`);
   }
   const concurrency = packageScript('verify:concurrency:3');
-  for (const token of ['lmstudio-live-preflight.js', 'AGENT_UI_INSTALLED_SMOKE_PHASES=concurrency', 'AGENT_UI_STAGE_REPORT_MIN_RUNS=3', 'AGENT_UI_LMSTUDIO_MODEL=google/gemma-4-26b-a4b']) {
+  for (const token of [
+    'lmstudio-live-preflight.js',
+    'AGENT_UI_INSTALLED_SMOKE_PHASES=concurrency',
+    'AGENT_UI_STAGE_REPORT_MIN_RUNS=3',
+    'AGENT_UI_LMSTUDIO_MODEL=google/gemma-4-26b-a4b',
+  ]) {
     if (!concurrency.includes(token)) fail(`verify:concurrency:3 must include ${token}.`);
   }
   const interaction = packageScript('verify:interaction:lmstudio');
-  for (const token of ['lmstudio-live-preflight.js', 'AGENT_UI_LMSTUDIO_MODEL=google/gemma-4-26b-a4b', 'interaction-lmstudio-smoke.js']) {
+  for (const token of [
+    'lmstudio-live-preflight.js',
+    'AGENT_UI_LMSTUDIO_MODEL=google/gemma-4-26b-a4b',
+    'interaction-lmstudio-smoke.js',
+  ]) {
     if (!interaction.includes(token)) fail(`verify:interaction:lmstudio must include ${token}.`);
   }
 }
@@ -82,16 +135,41 @@ function verifyPackagingModes() {
   if (connector.extraMetadata.agentUI.hermesRuntimeIncluded !== false) {
     fail('connector package must not claim embedded Hermes runtime.');
   }
-  if (Array.isArray(connector.extraResources) && connector.extraResources.some((item) => String(item && item.to || '').includes('hermes-runtime'))) {
+  if (
+    Array.isArray(connector.extraResources) &&
+    connector.extraResources.some((item) => String((item && item.to) || '').includes('hermes-runtime'))
+  ) {
     fail('connector package must not include hermes-runtime resources.');
   }
-  if (!Array.isArray(connector.extraResources) || !connector.extraResources.some((item) => item && item.from === 'vendor/hermes-platforms' && item.to === 'hermes-platforms')) {
+  if (
+    !Array.isArray(connector.extraResources) ||
+    !connector.extraResources.some(
+      (item) => item && item.from === 'vendor/hermes-platforms' && item.to === 'hermes-platforms',
+    )
+  ) {
     fail('connector package must include the local_desktop platform plugin resource.');
   }
-  const appModes = Object.keys(require(path.join(repoRoot, 'packaging', 'electron-builder.shared.cjs')).APP_MODES).sort();
+  const appModes = Object.keys(
+    require(path.join(repoRoot, 'packaging', 'electron-builder.shared.cjs')).APP_MODES,
+  ).sort();
   if (appModes.length !== 1 || appModes[0] !== 'connector') {
     fail('packaging must stay connector-only.', appModes.join(', '));
   }
+}
+
+function verifyReleaseManifestContract() {
+  requireNoText(
+    'scripts/verify-hermes-contracts.cjs',
+    'dist local_desktop',
+    'packaged artifact assertions in source verification',
+  );
+  requireText('scripts/release-manifest.js', 'localDesktopPluginState', 'packaged local_desktop plugin inspection');
+  requireText('scripts/release-manifest.js', 'matchesSource', 'packaged local_desktop source comparison');
+  requireText(
+    'scripts/release-manifest.js',
+    'connector app local_desktop',
+    'packaged local_desktop release enforcement',
+  );
 }
 
 function verifyGatewayEnvContract() {
@@ -126,29 +204,69 @@ function verifyEvalSurface() {
 function verifyInstalledSmokeContract() {
   requireText('scripts/installed-app-release-smoke.js', "providerSmoke === 'lmstudio'", 'live LM Studio mode');
   requireText('scripts/installed-app-release-smoke.js', 'AGENT_UI_LMSTUDIO_MODEL', 'pinned LM Studio model env');
-  requireText('scripts/installed-app-release-smoke.js', 'context_length: 64000', 'Hermes minimum context override for LM Studio live smoke');
-  requireText('scripts/installed-app-release-smoke.js', 'auxiliary:', 'Hermes auxiliary config for LM Studio live smoke');
-  requireText('scripts/installed-app-release-smoke.js', 'compression:', 'Hermes compression config for LM Studio live smoke');
+  requireText(
+    'scripts/installed-app-release-smoke.js',
+    'context_length: 64000',
+    'Hermes minimum context override for LM Studio live smoke',
+  );
+  requireText(
+    'scripts/installed-app-release-smoke.js',
+    'auxiliary:',
+    'Hermes auxiliary config for LM Studio live smoke',
+  );
+  requireText(
+    'scripts/installed-app-release-smoke.js',
+    'compression:',
+    'Hermes compression config for LM Studio live smoke',
+  );
   requireText('scripts/installed-app-release-smoke.js', 'AGENT_UI_LMSTUDIO_INITIAL_OK', 'initial live sentinel');
   requireText('scripts/installed-app-release-smoke.js', 'AGENT_UI_LMSTUDIO_FOLLOWUP_OK', 'follow-up live sentinel');
   requireText('scripts/installed-app-release-smoke.js', 'AGENT_UI_LMSTUDIO_REOPEN_OK', 'reopen live sentinel');
-  requireText('scripts/installed-app-release-smoke.js', 'AGENT_UI_LMSTUDIO_POST_CANCEL_OK', 'post-cancel live sentinel');
-  requireText('scripts/installed-app-release-smoke.js', 'AGENT_UI_LMSTUDIO_CONCURRENT_1_OK', 'concurrency live sentinel');
+  requireText(
+    'scripts/installed-app-release-smoke.js',
+    'AGENT_UI_LMSTUDIO_POST_CANCEL_OK',
+    'post-cancel live sentinel',
+  );
+  requireText(
+    'scripts/installed-app-release-smoke.js',
+    'AGENT_UI_LMSTUDIO_CONCURRENT_1_OK',
+    'concurrency live sentinel',
+  );
   requireText('scripts/installed-app-release-smoke.js', 'runConcurrencyChecks', 'three-conversation live stress phase');
   requireText('scripts/installed-app-release-smoke.js', 'appSealSnapshot', 'installed app mutation guard');
-  requireRegex('scripts/installed-app-release-smoke.js', /sealBefore\.sha256\s*===\s*sealAfter\.sha256/, 'bundle integrity comparison');
+  requireRegex(
+    'scripts/installed-app-release-smoke.js',
+    /sealBefore\.sha256\s*===\s*sealAfter\.sha256/,
+    'bundle integrity comparison',
+  );
 }
 
 function verifyInteractionSmokeContract() {
-  requireText('scripts/interaction-lmstudio-smoke.js', "clickMenuItem('File', 'Use Text Input')", 'menu input-mode interaction');
+  requireText(
+    'scripts/interaction-lmstudio-smoke.js',
+    "clickMenuItem('File', 'Use Text Input')",
+    'menu input-mode interaction',
+  );
   requireText('scripts/interaction-lmstudio-smoke.js', 'pressShortcutC()', 'keyboard shortcut interaction');
   requireText('scripts/interaction-lmstudio-smoke.js', 'clickAtRect(', 'real mouse click interaction');
-  requireText('scripts/interaction-lmstudio-smoke.js', 'CGEvent(mouseEventSource', 'native mouse event click automation');
+  requireText(
+    'scripts/interaction-lmstudio-smoke.js',
+    'CGEvent(mouseEventSource',
+    'native mouse event click automation',
+  );
   requireText('scripts/interaction-lmstudio-smoke.js', 'pasteText(', 'real paste interaction');
   requireText('scripts/interaction-lmstudio-smoke.js', 'screencapture', 'screenshot evidence');
   requireText('scripts/interaction-lmstudio-smoke.js', 'assertRealHermesAvailable', 'real Hermes executable preflight');
-  requireText('scripts/interaction-lmstudio-smoke.js', 'https://github.com/NousResearch/hermes-agent.git', 'direct upstream Hermes clone assertion');
-  requireText('scripts/interaction-lmstudio-smoke.js', 'AGENT_UI_HERMES_BIN: evidence.realHermes.command', 'app process uses verified upstream Hermes executable');
+  requireText(
+    'scripts/interaction-lmstudio-smoke.js',
+    'https://github.com/NousResearch/hermes-agent.git',
+    'direct upstream Hermes clone assertion',
+  );
+  requireText(
+    'scripts/interaction-lmstudio-smoke.js',
+    'AGENT_UI_HERMES_BIN: evidence.realHermes.command',
+    'app process uses verified upstream Hermes executable',
+  );
   requireText('scripts/interaction-lmstudio-smoke.js', 'gatewayPostEvents', 'Hermes gateway message assertions');
   requireText('scripts/interaction-lmstudio-smoke.js', 'includeContext === true', 'normal prompt context assertion');
   requireText('scripts/interaction-lmstudio-smoke.js', 'includeContext === false', 'follow-up no-context assertion');
@@ -157,9 +275,21 @@ function verifyInteractionSmokeContract() {
   requireNoText('scripts/interaction-lmstudio-smoke.js', 'createLocalAdapterHermes', 'local adapter path');
   requireNoText('scripts/interaction-lmstudio-smoke.js', 'fallback_adapter', 'fake gateway metadata');
   requireNoText('scripts/interaction-lmstudio-smoke.js', 'AGENT_UI_INTERACTION_AUTH_REQUIRED', 'synthetic auth prompt');
-  requireNoText('scripts/interaction-lmstudio-smoke.js', 'AGENT_UI_INTERACTION_REPLAY_EXPIRE', 'synthetic replay prompt');
-  requireNoText('scripts/interaction-lmstudio-smoke.js', 'AGENT_UI_INTERACTION_ATTACHMENT', 'synthetic attachment prompt');
-  requireNoText('scripts/interaction-lmstudio-smoke.js', 'process.env.AGENT_UI_HERMES_BIN', 'externally selected Hermes executable');
+  requireNoText(
+    'scripts/interaction-lmstudio-smoke.js',
+    'AGENT_UI_INTERACTION_REPLAY_EXPIRE',
+    'synthetic replay prompt',
+  );
+  requireNoText(
+    'scripts/interaction-lmstudio-smoke.js',
+    'AGENT_UI_INTERACTION_ATTACHMENT',
+    'synthetic attachment prompt',
+  );
+  requireNoText(
+    'scripts/interaction-lmstudio-smoke.js',
+    'process.env.AGENT_UI_HERMES_BIN',
+    'externally selected Hermes executable',
+  );
   requireText('src/renderer/src/renderer.ts', 'rows,', 'overlay row eval rectangles');
   requireText('src/renderer/src/conversation.ts', 'followupValueLength', 'conversation follow-up value assertion');
 }
@@ -203,6 +333,7 @@ function verifyPublicSurface() {
 
 verifyPackageScripts();
 verifyPackagingModes();
+verifyReleaseManifestContract();
 verifyGatewayEnvContract();
 verifyEvalSurface();
 verifyInstalledSmokeContract();

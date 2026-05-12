@@ -1,5 +1,3 @@
-/* global agentUI */
-
 import { rectForEvalElement } from './eval-ui-state.ts';
 import type { AgentUIPayload } from '../../shared/contracts.ts';
 
@@ -59,7 +57,7 @@ const STATUS_META = {
   },
 };
 
-const DEFAULT_PET_OPTIONS: any[] = [];
+const DEFAULT_PET_OPTIONS: LooseBoundaryValue[] = [];
 const DEFAULT_PET_ID = 'custom:goblin';
 const AVATAR_COLUMNS = 8;
 const AVATAR_ROWS = 9;
@@ -72,7 +70,7 @@ const IDLE_FRAMES = [
   { rowIndex: 0, columnIndex: 5, frameDurationMs: 320 },
 ];
 const LONG_IDLE_FRAMES = IDLE_FRAMES.map((frame) => ({ ...frame, frameDurationMs: frame.frameDurationMs * 6 }));
-const AVATAR_FRAMES: Record<string, any[]> = {
+const AVATAR_FRAMES: Record<string, LooseBoundaryValue[]> = {
   failed: linearFrames(5, 8, 140, 240),
   idle: IDLE_FRAMES,
   jumping: linearFrames(4, 5, 140, 280),
@@ -102,18 +100,18 @@ let layout = DEFAULT_LAYOUT;
 let trayOpen = true;
 let mascotHover = false;
 let petPointerInteractionActive = false;
-let pointerInteractionPoint: any = null;
-let pointerInteractionFrame: any = null;
-let pointerInteractionObserver: any = null;
+let pointerInteractionPoint: LooseBoundaryValue = null;
+let pointerInteractionFrame: LooseBoundaryValue = null;
+let pointerInteractionObserver: LooseBoundaryValue = null;
 let scrollState = { hasLatestNotificationsAbove: false, hiddenOlderNotificationCount: 0 };
 let lastElementSizePayload = '';
-let rowMeasureFrame: any = null;
-let petDrag: any = null;
-let petOptions: any[] = DEFAULT_PET_OPTIONS.slice();
+let rowMeasureFrame: LooseBoundaryValue = null;
+let petDrag: LooseBoundaryValue = null;
+let petOptions: LooseBoundaryValue[] = DEFAULT_PET_OPTIONS.slice();
 let selectedPetId = DEFAULT_PET_ID;
-let renderFrame: any = null;
+let renderFrame: LooseBoundaryValue = null;
 
-function traceEvalEvent(type: any, payload = {}) {
+function traceEvalEvent(type: LooseBoundaryValue, payload = {}) {
   if (!window.agentUI || typeof window.agentUI.traceEvalEvent !== 'function') return;
   window.agentUI.traceEvalEvent({ type, ...payload });
 }
@@ -121,8 +119,8 @@ function traceEvalEvent(type: any, payload = {}) {
 function reportEvalUiState(list = notifications()) {
   if (!window.agentUI || typeof window.agentUI.reportEvalUiState !== 'function') return;
   const top = list[0] || null;
-  const cats: any[] = [];
-  const push = (el: any, catId: any) => {
+  const cats: LooseBoundaryValue[] = [];
+  const push = (el: LooseBoundaryValue, catId: LooseBoundaryValue) => {
     const rect = rectForEvalElement(el);
     if (!rect || !catId) return;
     cats.push({ catId, ...rect });
@@ -132,17 +130,19 @@ function reportEvalUiState(list = notifications()) {
   if (tray && !tray.hidden && tray.dataset.collapsed !== 'true') {
     push(tray, top ? top.catId : '__pet_tray__');
   }
-  const rows = trayRows().map((row: any) => {
-    const catId = String(row.dataset.notificationId || '').trim();
-    const rect = rectForEvalElement(row);
-    if (!catId || !rect) return null;
-    const action = row.querySelector('.pet-row-action');
-    return {
-      catId,
-      rect,
-      actionRect: rectForEvalElement(action),
-    };
-  }).filter(Boolean);
+  const rows = trayRows()
+    .map((row: LooseBoundaryValue) => {
+      const catId = String(row.dataset.notificationId || '').trim();
+      const rect = rectForEvalElement(row);
+      if (!catId || !rect) return null;
+      const action = row.querySelector('.pet-row-action');
+      return {
+        catId,
+        rect,
+        actionRect: rectForEvalElement(action),
+      };
+    })
+    .filter(Boolean);
   window.agentUI.reportEvalUiState('overlay', {
     layout,
     notificationCount: list.length,
@@ -152,7 +152,12 @@ function reportEvalUiState(list = notifications()) {
   });
 }
 
-function linearFrames(rowIndex: any, count: any, frameDurationMs: any, finalFrameDurationMs: any) {
+function linearFrames(
+  rowIndex: LooseBoundaryValue,
+  count: LooseBoundaryValue,
+  frameDurationMs: LooseBoundaryValue,
+  finalFrameDurationMs: LooseBoundaryValue,
+) {
   return Array.from({ length: count }, (_unused, columnIndex) => ({
     columnIndex,
     frameDurationMs: columnIndex === count - 1 ? finalFrameDurationMs : frameDurationMs,
@@ -160,7 +165,7 @@ function linearFrames(rowIndex: any, count: any, frameDurationMs: any, finalFram
   }));
 }
 
-function normalizePetOption(option: any) {
+function normalizePetOption(option: LooseBoundaryValue) {
   if (!option || typeof option !== 'object') return null;
   const id = String(option.id || '').trim();
   if (!id) return null;
@@ -173,7 +178,7 @@ function normalizePetOption(option: any) {
   };
 }
 
-function setPetOptions(options: any, selectedId = selectedPetId, selectedSpriteUrl = '') {
+function setPetOptions(options: LooseBoundaryValue, selectedId = selectedPetId, selectedSpriteUrl = '') {
   const nextOptions = Array.isArray(options) ? options.map(normalizePetOption).filter(Boolean) : [];
   if (nextOptions.length > 0) petOptions = nextOptions;
   const candidate = String(selectedId || '').trim();
@@ -181,7 +186,7 @@ function setPetOptions(options: any, selectedId = selectedPetId, selectedSpriteU
   setActivePetSprite(selectedPetId, selectedSpriteUrl);
 }
 
-function setActivePetSprite(id: any, spriteUrl: any) {
+function setActivePetSprite(id: LooseBoundaryValue, spriteUrl: LooseBoundaryValue) {
   const url = String(spriteUrl || '').trim();
   if (!url) return;
   const pet = petOptions.find((option) => option.id === id);
@@ -206,7 +211,7 @@ async function loadPetOptionsFromBridge() {
     setPetOptions(
       payload && payload.options,
       payload && payload.id,
-      (payload && payload.selectedSpriteUrl) || (payload && payload.selected && payload.selected.spriteUrl)
+      (payload && payload.selectedSpriteUrl) || (payload && payload.selected && payload.selected.spriteUrl),
     );
     await preloadActivePetAsset();
   } catch {
@@ -214,33 +219,36 @@ async function loadPetOptionsFromBridge() {
   }
 }
 
-function petOptionById(id: any) {
+function petOptionById(id: LooseBoundaryValue) {
   const value = String(id || '').trim();
-  return petOptions.find((pet) => pet.id === value) || petOptions[0] || {
-    assetRef: 'codex',
-    description: '',
-    displayName: 'Codex pet',
-    id: DEFAULT_PET_ID,
-    spriteUrl: '',
-  };
+  return (
+    petOptions.find((pet) => pet.id === value) ||
+    petOptions[0] || {
+      assetRef: 'codex',
+      description: '',
+      displayName: 'Codex pet',
+      id: DEFAULT_PET_ID,
+      spriteUrl: '',
+    }
+  );
 }
 
 function currentPetOption() {
   return petOptionById(selectedPetId);
 }
 
-function setSelectedPet(id: any) {
+function setSelectedPet(id: LooseBoundaryValue) {
   const next = petOptionById(id);
   if (selectedPetId === next.id) return;
   selectedPetId = next.id;
   renderAll();
 }
 
-function framePosition(frame: any) {
+function framePosition(frame: LooseBoundaryValue) {
   return `${(frame.columnIndex / (AVATAR_COLUMNS - 1)) * 100}% ${(frame.rowIndex / (AVATAR_ROWS - 1)) * 100}%`;
 }
 
-function framesForState(state: any, prefersReducedMotion: any) {
+function framesForState(state: LooseBoundaryValue, prefersReducedMotion: LooseBoundaryValue) {
   const frames = AVATAR_FRAMES[state] || AVATAR_FRAMES.idle;
   if (prefersReducedMotion) return { frames: [frames[0]], loopStartIndex: null };
   if (state === 'idle') return { frames: LONG_IDLE_FRAMES, loopStartIndex: 0 };
@@ -248,7 +256,7 @@ function framesForState(state: any, prefersReducedMotion: any) {
   return { frames: [...lead, ...LONG_IDLE_FRAMES], loopStartIndex: lead.length };
 }
 
-function animateAvatar(el: any, state: any) {
+function animateAvatar(el: LooseBoundaryValue, state: LooseBoundaryValue) {
   if (!el) return;
   const nextState = state || 'idle';
   const pet = currentPetOption();
@@ -263,7 +271,7 @@ function animateAvatar(el: any, state: any) {
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const animation = framesForState(nextState, prefersReducedMotion);
   let index = 0;
-  let timer: any = null;
+  let timer: LooseBoundaryValue = null;
   el.style.backgroundPosition = framePosition(animation.frames[index]);
   if (animation.frames.length <= 1) {
     avatarTimers.set(el, () => {});
@@ -292,7 +300,7 @@ function animateAvatar(el: any, state: any) {
   });
 }
 
-function iconMarkup(type: any) {
+function iconMarkup(type: LooseBoundaryValue) {
   switch (type) {
     case 'check-circle':
       return '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.8 10.9 3.9 8l1-1 1.9 1.9 4.3-4.8 1.1.9-5.4 5.9Z"/><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13Zm0 1.3a5.2 5.2 0 1 1 0 10.4A5.2 5.2 0 0 1 8 2.8Z"/></svg>';
@@ -310,13 +318,15 @@ function iconMarkup(type: any) {
   }
 }
 
-function summarize(text: any, max = 90) {
-  const value = String(text || '').replace(/\s+/g, ' ').trim();
+function summarize(text: LooseBoundaryValue, max = 90) {
+  const value = String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim();
   if (!value) return '';
   return value.length > max ? `${value.slice(0, max - 3)}...` : value;
 }
 
-function normalizeStatus(status: any) {
+function normalizeStatus(status: LooseBoundaryValue) {
   const s = String(status || '').toLowerCase();
   if (s === 'running' || s === 'in_progress' || s === 'resuming') return 'running';
   if (s === 'review' || s === 'completed' || s === 'complete') return 'review';
@@ -324,16 +334,16 @@ function normalizeStatus(status: any) {
   return 'idle';
 }
 
-function statusMeta(status: any) {
+function statusMeta(status: LooseBoundaryValue) {
   return STATUS_META[normalizeStatus(status)] || STATUS_META.idle;
 }
 
-function sessionTitle(session: any) {
+function sessionTitle(session: LooseBoundaryValue) {
   const title = summarize(session.prompt, 48);
   return title || 'New session';
 }
 
-function sessionBody(session: any) {
+function sessionBody(session: LooseBoundaryValue) {
   const state = normalizeStatus(session && session.status);
   if (state === 'running' && session.streamBubble) return String(session.streamBubble);
   if (session.finishLine) return String(session.finishLine);
@@ -341,12 +351,12 @@ function sessionBody(session: any) {
   return '';
 }
 
-function canDismissSession(session: any) {
+function canDismissSession(session: LooseBoundaryValue) {
   const status = normalizeStatus(session && session.status);
   return status === 'review' || status === 'failed';
 }
 
-function notificationForSession(session: any) {
+function notificationForSession(session: LooseBoundaryValue) {
   const state = normalizeStatus(session.status);
   if (state === 'idle') return null;
   const id = String(session.catId);
@@ -388,7 +398,7 @@ function visibleSessionCount(list = notifications()) {
   return { active, review };
 }
 
-function reportPetPointerInteraction(active: any, { force = false } = {}) {
+function reportPetPointerInteraction(active: LooseBoundaryValue, { force = false } = {}) {
   const next = !!active;
   if (!force && petPointerInteractionActive === next) return;
   petPointerInteractionActive = next;
@@ -397,7 +407,7 @@ function reportPetPointerInteraction(active: any, { force = false } = {}) {
   }
 }
 
-function elementIsUsableHitRegion(el: any) {
+function elementIsUsableHitRegion(el: LooseBoundaryValue) {
   if (!(el instanceof HTMLElement)) return false;
   if (el.hidden || el.closest('[hidden]')) return false;
   if (el.closest('[inert], [aria-hidden="true"]')) return false;
@@ -407,12 +417,13 @@ function elementIsUsableHitRegion(el: any) {
     style.visibility === 'hidden' ||
     style.pointerEvents === 'none' ||
     Number(style.opacity) <= 0.01
-  ) return false;
+  )
+    return false;
   const rect = el.getBoundingClientRect();
   return rect.width > 0 && rect.height > 0;
 }
 
-function pointHitsPetRegion(point: any) {
+function pointHitsPetRegion(point: LooseBoundaryValue) {
   if (!point) return false;
   const x = Number(point.clientX);
   const y = Number(point.clientY);
@@ -446,7 +457,7 @@ function clearPetPointerInteraction({ force = false } = {}) {
 }
 
 function installPetPointerInteractivity() {
-  const rememberPoint = (e: any) => {
+  const rememberPoint = (e: LooseBoundaryValue) => {
     pointerInteractionPoint = { clientX: e.clientX, clientY: e.clientY };
     schedulePetPointerInteraction(pointerInteractionPoint);
   };
@@ -470,8 +481,8 @@ function installPetPointerInteractivity() {
 }
 
 function finishPetDrag(
-  pointerId: any,
-  { shouldOpenMainWindow = false }: { shouldOpenMainWindow?: boolean } = {}
+  pointerId: LooseBoundaryValue,
+  { shouldOpenMainWindow = false }: { shouldOpenMainWindow?: boolean } = {},
 ) {
   if (!petDrag || petDrag.pointerId !== pointerId) return;
   const currentDrag = petDrag;
@@ -487,12 +498,8 @@ function finishPetDrag(
   renderAll();
 }
 
-function onPetPointerDown(e: any) {
-  if (
-    e.button !== 0 ||
-    !(e.target instanceof Element) ||
-    e.target.closest('.no-drag') != null
-  ) return;
+function onPetPointerDown(e: LooseBoundaryValue) {
+  if (e.button !== 0 || !(e.target instanceof Element) || e.target.closest('.no-drag') != null) return;
   e.preventDefault();
   shell?.setPointerCapture?.(e.pointerId);
   petDrag = {
@@ -507,7 +514,7 @@ function onPetPointerDown(e: any) {
   }
 }
 
-function onPetPointerMove(e: any) {
+function onPetPointerMove(e: LooseBoundaryValue) {
   if (!petDrag || petDrag.pointerId !== e.pointerId) return;
   if (typeof e.buttons === 'number' && (e.buttons & 1) === 0) {
     finishPetDrag(e.pointerId);
@@ -524,13 +531,13 @@ function onPetPointerMove(e: any) {
   }
 }
 
-function openSessionConversation(catId: any) {
+function openSessionConversation(catId: LooseBoundaryValue) {
   if (window.agentUI && typeof window.agentUI.openCatConversation === 'function') {
     window.agentUI.openCatConversation(String(catId));
   }
 }
 
-function dismissNotification(notification: any) {
+function dismissNotification(notification: LooseBoundaryValue) {
   if (!notification || !notification.canDismiss) return;
   const id = String(notification.catId || notification.id || '').trim();
   if (!id) return;
@@ -542,7 +549,7 @@ function dismissNotification(notification: any) {
   removeSession(id);
 }
 
-function styleBox(el: any, box: any) {
+function styleBox(el: LooseBoundaryValue, box: LooseBoundaryValue) {
   if (!el || !box) return;
   el.style.left = `${box.left}px`;
   el.style.top = `${box.top}px`;
@@ -552,7 +559,7 @@ function styleBox(el: any, box: any) {
 
 function ensureMascotAvatar() {
   if (!mascot) return null;
-  let avatar = mascot.querySelector('.codex-avatar-root') as HTMLElement | null;
+  let avatar = mascot.querySelector<HTMLElement>('.codex-avatar-root');
   if (!avatar) {
     mascot.textContent = '';
     avatar = document.createElement('div');
@@ -564,12 +571,12 @@ function ensureMascotAvatar() {
   return avatar;
 }
 
-function renderMascot(list: any) {
+function renderMascot(list: LooseBoundaryValue) {
   const top = list[0] || null;
   const meta = statusMeta(top ? top.level : 'idle');
-  const state: any = mascotHover ? 'jumping' : meta.mascotState;
+  const state: LooseBoundaryValue = mascotHover ? 'jumping' : meta.mascotState;
   const pet = currentPetOption();
-  const stage = mascot ? mascot.closest('.pet-stage') as HTMLElement | null : null;
+  const stage = mascot ? mascot.closest<HTMLElement>('.pet-stage') : null;
   styleBox(stage, layout.mascot);
   if (stage) {
     stage.dataset.avatarOverlayHitRegion = 'mascot';
@@ -596,20 +603,20 @@ function renderMascot(list: any) {
   badgeEl.innerHTML = trayOpen ? iconMarkup('chevron') : String(list.length);
   badgeEl.setAttribute(
     'aria-label',
-    trayOpen ? 'Collapse activity' : `Open activity tray, ${list.length} ${list.length === 1 ? 'item' : 'items'}`
+    trayOpen ? 'Collapse activity' : `Open activity tray, ${list.length} ${list.length === 1 ? 'item' : 'items'}`,
   );
 }
 
-function notificationCanExpand(notification: any) {
+function notificationCanExpand(notification: LooseBoundaryValue) {
   return expandableRows.get(String(notification.id)) === true;
 }
 
-function rowBody(notification: any) {
+function rowBody(notification: LooseBoundaryValue) {
   const meta = statusMeta(notification.level);
   return notification.body || meta.defaultBody;
 }
 
-function makeStatusIcon(notification: any) {
+function makeStatusIcon(notification: LooseBoundaryValue) {
   const meta = statusMeta(notification.level);
   const span = document.createElement('span');
   span.className = `pet-row-status pet-row-status-${notification.level}`;
@@ -618,7 +625,7 @@ function makeStatusIcon(notification: any) {
   return span;
 }
 
-function makeRow(notification: any, index: any) {
+function makeRow(notification: LooseBoundaryValue, index: LooseBoundaryValue) {
   const row = document.createElement('div');
   row.className = 'pet-row no-drag';
   row.dataset.notificationId = notification.id;
@@ -637,7 +644,10 @@ function makeRow(notification: any, index: any) {
   action.tabIndex = notification.action ? 0 : -1;
   if (notification.action) {
     action.setAttribute('role', 'button');
-    action.setAttribute('aria-label', `${notification.title}. ${statusMeta(notification.level).label}. ${bodyText}. Open notification`);
+    action.setAttribute(
+      'aria-label',
+      `${notification.title}. ${statusMeta(notification.level).label}. ${bodyText}. Open notification`,
+    );
     action.addEventListener('click', () => openSessionConversation(notification.action.catId));
     action.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -712,7 +722,7 @@ function makeRow(notification: any, index: any) {
   return row;
 }
 
-function rowRenderKey(notification: any) {
+function rowRenderKey(notification: LooseBoundaryValue) {
   const id = String(notification.id);
   return JSON.stringify({
     id,
@@ -725,7 +735,7 @@ function rowRenderKey(notification: any) {
   });
 }
 
-function rowMeasureKey(notification: any) {
+function rowMeasureKey(notification: LooseBoundaryValue) {
   return JSON.stringify({
     id: String(notification.id),
     body: rowBody(notification),
@@ -738,14 +748,14 @@ function trayRows() {
   return Array.from(trayList.children).filter((child) => child instanceof HTMLElement);
 }
 
-function pruneExpandableRows(list: any) {
-  const ids = new Set(list.map((notification: any) => String(notification.id)));
+function pruneExpandableRows(list: LooseBoundaryValue) {
+  const ids = new Set(list.map((notification: LooseBoundaryValue) => String(notification.id)));
   for (const id of expandableRows.keys()) {
     if (!ids.has(id)) expandableRows.delete(id);
   }
 }
 
-function scheduleRowOverflowMeasurement(list: any, { force = false } = {}) {
+function scheduleRowOverflowMeasurement(list: LooseBoundaryValue, { force = false } = {}) {
   if (!trayList || rowMeasureFrame != null) return;
   let changed = force;
   for (const notification of list) {
@@ -765,9 +775,7 @@ function scheduleRowOverflowMeasurement(list: any, { force = false } = {}) {
       const id = String(row.dataset.notificationId || '');
       if (!id) continue;
       const measure = row.querySelector('.pet-row-measure');
-      const canExpand = measure instanceof HTMLElement
-        ? measure.scrollHeight > COLLAPSED_BODY_MAX_HEIGHT + 1
-        : false;
+      const canExpand = measure instanceof HTMLElement ? measure.scrollHeight > COLLAPSED_BODY_MAX_HEIGHT + 1 : false;
       if (expandableRows.get(id) !== canExpand) {
         expandableRows.set(id, canExpand);
         changed = true;
@@ -788,11 +796,11 @@ function isScrolledToOlderEnd(scrollTop = trayList ? trayList.scrollTop : 0) {
   return scrollTop >= maxScrollTop - SCROLL_EDGE_SLOP;
 }
 
-function visibleAnchorOffset(rows: any, scrollTop = trayList ? trayList.scrollTop : 0) {
+function visibleAnchorOffset(rows: LooseBoundaryValue, scrollTop = trayList ? trayList.scrollTop : 0) {
   return scrollTop + (rows[0]?.offsetTop || 0) + SCROLL_EDGE_SLOP;
 }
 
-function rowIndexAtOffset(rows: any, offset: any) {
+function rowIndexAtOffset(rows: LooseBoundaryValue, offset: LooseBoundaryValue) {
   let index = 0;
   for (let i = 0; i < rows.length; i += 1) {
     if (rows[i].offsetTop <= offset) index = i;
@@ -800,10 +808,10 @@ function rowIndexAtOffset(rows: any, offset: any) {
   return index;
 }
 
-function hiddenOlderCount(rows: any, anchorOffset: any) {
+function hiddenOlderCount(rows: LooseBoundaryValue, anchorOffset: LooseBoundaryValue) {
   if (!trayList) return 0;
   const lowerEdge = anchorOffset + trayList.clientHeight - SCROLL_EDGE_SLOP;
-  return rows.filter((row: any) => row.offsetTop + row.offsetHeight > lowerEdge).length;
+  return rows.filter((row: LooseBoundaryValue) => row.offsetTop + row.offsetHeight > lowerEdge).length;
 }
 
 function updateScrollState(scrollTop = trayList ? trayList.scrollTop : 0) {
@@ -823,7 +831,7 @@ function updateScrollState(scrollTop = trayList ? trayList.scrollTop : 0) {
   scrollState = { hasLatestNotificationsAbove, hiddenOlderNotificationCount };
 }
 
-function makeScrollButton(kind: any, count: any) {
+function makeScrollButton(kind: LooseBoundaryValue, count: LooseBoundaryValue) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = `pet-scroll-control pet-scroll-${kind} no-drag`;
@@ -841,9 +849,10 @@ function makeScrollButton(kind: any, count: any) {
     button.addEventListener('click', () => {
       const rows = trayRows();
       const currentIndex = rowIndexAtOffset(rows, visibleAnchorOffset(rows));
-      const target = count <= VISIBLE_SCROLL_STEP
-        ? trayList!.scrollHeight
-        : rows[currentIndex + VISIBLE_SCROLL_STEP]?.offsetTop ?? trayList!.scrollHeight;
+      const target =
+        count <= VISIBLE_SCROLL_STEP
+          ? trayList!.scrollHeight
+          : (rows[currentIndex + VISIBLE_SCROLL_STEP]?.offsetTop ?? trayList!.scrollHeight);
       trayList!.scrollTo({ behavior: 'smooth', top: target });
       requestAnimationFrame(() => updateScrollState(target));
     });
@@ -851,7 +860,7 @@ function makeScrollButton(kind: any, count: any) {
   return button;
 }
 
-function renderTray(list: any) {
+function renderTray(list: LooseBoundaryValue) {
   if (!tray || !trayList) return;
   const hasNotifications = list.length > 0;
   const isVisible = hasNotifications && trayOpen;
@@ -880,7 +889,7 @@ function renderTray(list: any) {
   let rowsChanged = existingRows.size !== list.length;
   trayList.dataset.avatarOverlaySize = 'notification-tray-list';
   trayList.setAttribute('aria-label', 'Activity notifications');
-  list.forEach((notification: any, index: any) => {
+  list.forEach((notification: LooseBoundaryValue, index: LooseBoundaryValue) => {
     const id = String(notification.id);
     const key = rowRenderKey(notification);
     const existing = existingRows.get(id);
@@ -893,7 +902,7 @@ function renderTray(list: any) {
     renderedRowKeys.set(id, key);
     fragment.appendChild(row);
   });
-  const ids = new Set(list.map((notification: any) => String(notification.id)));
+  const ids = new Set(list.map((notification: LooseBoundaryValue) => String(notification.id)));
   for (const id of renderedRowKeys.keys()) {
     if (!ids.has(id)) renderedRowKeys.delete(id);
   }
@@ -916,14 +925,14 @@ function renderTray(list: any) {
   }
 }
 
-function updateCounts(list: any) {
+function updateCounts(list: LooseBoundaryValue) {
   const counts = visibleSessionCount(list);
   if (window.agentUI && typeof window.agentUI.reportCatCounts === 'function') {
     window.agentUI.reportCatCounts({ active: counts.active, inReview: counts.review });
   }
 }
 
-function reportElementSize(list: any) {
+function reportElementSize(list: LooseBoundaryValue) {
   if (!window.agentUI || typeof window.agentUI.reportPetElementSize !== 'function') return;
   requestAnimationFrame(() => {
     const avatar = mascot ? mascot.querySelector('.codex-avatar-root') : null;
@@ -936,10 +945,13 @@ function reportElementSize(list: any) {
         width: Math.ceil(avatarRect && avatarRect.width > 0 ? avatarRect.width : DEFAULT_LAYOUT.mascot.width),
         height: Math.ceil(avatarRect && avatarRect.height > 0 ? avatarRect.height : DEFAULT_LAYOUT.mascot.height),
       },
-      tray: list.length > 0 ? {
-        width: Math.ceil(trayWidth),
-        height: Math.ceil(trayHeight),
-      } : null,
+      tray:
+        list.length > 0
+          ? {
+              width: Math.ceil(trayWidth),
+              height: Math.ceil(trayHeight),
+            }
+          : null,
     };
     const key = JSON.stringify(payload);
     if (key === lastElementSizePayload) return;
@@ -1031,7 +1043,7 @@ function applyFinish(ev: AgentUIPayload = {}) {
   renderAll();
 }
 
-function reactivate(catId: any) {
+function reactivate(catId: LooseBoundaryValue) {
   const id = String(catId || '').trim();
   if (!id) return;
   const session = sessions.get(id);
@@ -1043,7 +1055,7 @@ function reactivate(catId: any) {
   renderAll();
 }
 
-function removeSession(catId: any) {
+function removeSession(catId: LooseBoundaryValue) {
   const id = String(catId || '').trim();
   if (!id) return;
   sessions.delete(id);
@@ -1062,7 +1074,7 @@ async function boot() {
   }
 
   if (typeof window.agentUI.onPetLayoutChanged === 'function') {
-    window.agentUI.onPetLayoutChanged((payload: any) => {
+    window.agentUI.onPetLayoutChanged((payload: LooseBoundaryValue) => {
       if (payload && payload.layout) {
         layout = {
           mascot: payload.layout.mascot || DEFAULT_LAYOUT.mascot,
@@ -1076,12 +1088,12 @@ async function boot() {
   }
 
   if (typeof window.agentUI.onPetCharacterChanged === 'function') {
-    window.agentUI.onPetCharacterChanged((payload: any) => {
+    window.agentUI.onPetCharacterChanged((payload: LooseBoundaryValue) => {
       if (payload && Array.isArray(payload.options)) {
         setPetOptions(
           payload.options,
           payload.id,
-          payload.selectedSpriteUrl || (payload.selected && payload.selected.spriteUrl)
+          payload.selectedSpriteUrl || (payload.selected && payload.selected.spriteUrl),
         );
         void preloadActivePetAsset();
         renderAll();
@@ -1092,7 +1104,7 @@ async function boot() {
   }
 
   if (typeof window.agentUI.onSpawnCat === 'function') {
-    window.agentUI.onSpawnCat((payload: any) => {
+    window.agentUI.onSpawnCat((payload: LooseBoundaryValue) => {
       const session = upsertSession(payload);
       if (!session) return;
       renderAll();
@@ -1109,7 +1121,7 @@ async function boot() {
   }
 
   if (typeof window.agentUI.onAgentFinished === 'function') {
-    window.agentUI.onAgentFinished((ev: any) => {
+    window.agentUI.onAgentFinished((ev: LooseBoundaryValue) => {
       const id = String(ev && ev.catId ? ev.catId : '').trim();
       if (!id) return;
       if (!sessions.has(id)) {
@@ -1121,7 +1133,7 @@ async function boot() {
   }
 
   if (typeof window.agentUI.onAgentStreamBubble === 'function') {
-    window.agentUI.onAgentStreamBubble((ev: any) => {
+    window.agentUI.onAgentStreamBubble((ev: LooseBoundaryValue) => {
       const id = String(ev && ev.catId ? ev.catId : '').trim();
       if (!id) return;
       if (!sessions.has(id)) {
@@ -1133,13 +1145,13 @@ async function boot() {
   }
 
   if (typeof window.agentUI.onAgentRestarted === 'function') {
-    window.agentUI.onAgentRestarted((ev: any) => {
+    window.agentUI.onAgentRestarted((ev: LooseBoundaryValue) => {
       if (ev && ev.catId != null) reactivate(ev.catId);
     });
   }
 
   if (typeof window.agentUI.onRemoveCat === 'function') {
-    window.agentUI.onRemoveCat((payload: any) => {
+    window.agentUI.onRemoveCat((payload: LooseBoundaryValue) => {
       if (payload && payload.catId != null) removeSession(payload.catId);
     });
   }
@@ -1184,9 +1196,13 @@ async function boot() {
     }
   });
 
-  trayList?.addEventListener('scroll', () => {
-    updateScrollState();
-  }, { passive: true });
+  trayList?.addEventListener(
+    'scroll',
+    () => {
+      updateScrollState();
+    },
+    { passive: true },
+  );
   window.addEventListener('resize', () => {
     reportElementSize(notifications());
     reportEvalUiState();

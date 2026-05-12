@@ -17,9 +17,13 @@ docs or generated copies.
   - `GET /health` is unauthenticated.
   - `POST /messages` and `GET /events` use
     `Authorization: Bearer <LOCAL_DESKTOP_GATEWAY_KEY>`.
+- The app does not spawn `hermes chat` for tasks and does not keep local
+  conversation history. It posts prompts to `/messages`, streams `/events`, and
+  leaves transcript/session ownership in Hermes.
 - The app may remember the local Hermes binary path and write the required
-  gateway env/config settings. It must not install, copy, or mutate plugins in a
-  user's Hermes tree.
+  gateway env/config settings. It may expose the packaged `local_desktop`
+  plugin through `HERMES_BUNDLED_PLUGINS`, but it must not install, copy, or
+  mutate plugins in a user's Hermes tree.
 - Keep first-run failures actionable. Missing provider/model setup should route
   through the thin Hermes auth/model flow or show a specific Hermes setup error,
   not a generic app failure.
@@ -48,6 +52,10 @@ docs or generated copies.
 - `scripts/verify-source-contracts.js`: repo-owned public/release surface guard.
 - `scripts/installed-app-release-smoke.js`: black-box installed-app smoke and
   LM Studio live verification driver.
+- `scripts/interaction-lmstudio-smoke.js`: real macOS menu/shortcut/click
+  installed-app user-flow check against real Hermes and LM Studio.
+- `scripts/lmstudio-live-preflight.js`: required LM Studio model/server
+  preflight used before live verification gates.
 - `packaging/`: connector-only Electron Builder configs.
 
 If you add a new Electron main-process helper that must exist in production,
@@ -92,13 +100,16 @@ npm run verify:hermes-contracts
 npm run verify:source-contracts
 npm run dist:mac
 npm run release:verify
+npm run verify:installed -- "/Applications/agent-UI for Hermes.app"
 npm run smoke:installed-release -- "/Applications/agent-UI for Hermes.app"
 ```
 
-Live demo gates require LM Studio serving `google/gemma-4-26b-a4b` on
-`http://127.0.0.1:1234/v1` with 64K context and enough parallelism:
+Real LM Studio gates require LM Studio serving `google/gemma-4-26b-a4b` on
+`http://127.0.0.1:1234/v1` with 64K context. The interaction gate also requires
+macOS Accessibility permission and the direct NousResearch Hermes clone:
 
 ```bash
+npm run verify:interaction:lmstudio -- "/Applications/agent-UI for Hermes.app"
 npm run verify:live:lmstudio -- "/Applications/agent-UI for Hermes.app"
 npm run verify:concurrency:3 -- "/Applications/agent-UI for Hermes.app"
 ```
@@ -114,9 +125,16 @@ npm run verify:concurrency:3 -- "/Applications/agent-UI for Hermes.app"
   actual app path.
 - For Hermes boundary changes, run `npm run verify:hermes-contracts` and verify
   against `/Users/saminkhan1/Documents/hermes/hermes-agent`.
+- For menu, shortcut, modal, paste, click, or follow-up/cancel user-flow
+  changes, prefer `npm run verify:interaction:lmstudio -- "/Applications/agent-UI for Hermes.app"`
+  when the local permissions/runtime are available.
 - For user-flow confidence, prefer installed-app and live Hermes/model checks
   over mocks. Mocks are acceptable only as narrow unit scaffolding, not as proof
   that the customer path works.
+- Do not count eval mode, local JS adapters, synthetic gateway events, or fake
+  auth/replay prompts as production proof. They can support observation only;
+  the proof path must drive the installed app through real Hermes and a real
+  model when user-flow confidence is the goal.
 - If `electron-vite preview` fails with an Electron install error, inspect or
   rebuild `node_modules/electron` before changing app logic.
 

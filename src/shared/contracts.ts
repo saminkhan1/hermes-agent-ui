@@ -1,9 +1,9 @@
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export type JsonObject = { [key: string]: JsonValue };
-export type MutableJsonObject = Record<string, any>;
+export type MutableJsonObject = Record<string, LooseBoundaryValue>;
 
-type LocalDesktopGatewayEventType =
+export type LocalDesktopGatewayEventType =
   | 'message.created'
   | 'message.updated'
   | 'message.deleted'
@@ -11,10 +11,7 @@ type LocalDesktopGatewayEventType =
   | 'typing.started'
   | 'typing.stopped';
 
-type LocalDesktopProcessingOutcome =
-  | 'success'
-  | 'failure'
-  | 'cancelled';
+export type LocalDesktopProcessingOutcome = 'success' | 'failure' | 'cancelled';
 
 type LocalDesktopGatewayEventBase = {
   seq: number;
@@ -24,13 +21,20 @@ type LocalDesktopGatewayEventBase = {
   created_at: number;
 };
 
-export type LocalDesktopMessageEvent = LocalDesktopGatewayEventBase & {
-  type: 'message.created' | 'message.updated';
-  text?: string;
-  reply_to?: string | null;
-  metadata?: JsonObject;
-  finalize?: boolean;
+export type LocalDesktopMessageCreatedEvent = LocalDesktopGatewayEventBase & {
+  type: 'message.created';
+  text: string;
+  reply_to: string | null;
+  metadata: JsonObject;
 };
+
+export type LocalDesktopMessageUpdatedEvent = LocalDesktopGatewayEventBase & {
+  type: 'message.updated';
+  text: string;
+  finalize: boolean;
+};
+
+export type LocalDesktopMessageEvent = LocalDesktopMessageCreatedEvent | LocalDesktopMessageUpdatedEvent;
 
 export type LocalDesktopMessageDeletedEvent = LocalDesktopGatewayEventBase & {
   type: 'message.deleted';
@@ -38,19 +42,30 @@ export type LocalDesktopMessageDeletedEvent = LocalDesktopGatewayEventBase & {
 
 export type LocalDesktopAttachmentEvent = LocalDesktopGatewayEventBase & {
   type: 'attachment.created';
-  attachment_type?: 'image' | 'document' | 'voice' | 'video';
-  ref?: string;
-  caption?: string | null;
-  reply_to?: string | null;
-  metadata?: JsonObject;
+  attachment_type: 'image' | 'document' | 'voice' | 'video';
+  ref: string;
+  caption: string | null;
+  reply_to: string | null;
+  metadata: JsonObject;
 };
 
-export type LocalDesktopTypingEvent = LocalDesktopGatewayEventBase & {
-  type: 'typing.started' | 'typing.stopped';
-  inbound_message_id?: string | null;
-  metadata?: JsonObject;
-  transient?: boolean;
-  outcome?: LocalDesktopProcessingOutcome;
+export type LocalDesktopTypingStartedEvent = LocalDesktopGatewayEventBase & {
+  type: 'typing.started';
+} & ({ metadata: JsonObject } | { inbound_message_id: string | null });
+
+export type LocalDesktopTypingStoppedEvent = LocalDesktopGatewayEventBase & {
+  type: 'typing.stopped';
+} & ({ transient: boolean } | { inbound_message_id: string | null; outcome: LocalDesktopProcessingOutcome });
+
+export type LocalDesktopTypingEvent = LocalDesktopTypingStartedEvent | LocalDesktopTypingStoppedEvent;
+
+export type LocalDesktopEventPayloadByType = {
+  'message.created': Omit<LocalDesktopMessageCreatedEvent, keyof LocalDesktopGatewayEventBase | 'type'>;
+  'message.updated': Omit<LocalDesktopMessageUpdatedEvent, keyof LocalDesktopGatewayEventBase | 'type'>;
+  'message.deleted': Omit<LocalDesktopMessageDeletedEvent, keyof LocalDesktopGatewayEventBase | 'type'>;
+  'attachment.created': Omit<LocalDesktopAttachmentEvent, keyof LocalDesktopGatewayEventBase | 'type'>;
+  'typing.started': Omit<LocalDesktopTypingStartedEvent, keyof LocalDesktopGatewayEventBase | 'type'>;
+  'typing.stopped': Omit<LocalDesktopTypingStoppedEvent, keyof LocalDesktopGatewayEventBase | 'type'>;
 };
 
 export type LocalDesktopGatewayEvent =
@@ -100,7 +115,7 @@ type AttachmentDescriptor = {
   url?: string;
   fileName?: string;
   mimeType?: string;
-  size?: number;
+  size?: number | null;
   extension?: string;
   reason?: string;
 };
@@ -113,7 +128,7 @@ export type AgentConversationItem = {
   text?: string;
   messageId?: string;
   seq?: number;
-  createdAt?: unknown;
+  createdAt?: LooseBoundaryValue;
   replyTo?: string;
   finalize?: boolean;
   metadata?: JsonObject;
@@ -138,7 +153,7 @@ export type AgentConversationSnapshot = {
   pointerContext: JsonObject | null;
   items: AgentConversationItem[];
   runStatus: string;
-  endResult?: unknown;
+  endResult?: LooseBoundaryValue;
   durationMs?: number;
   gatewayConversationId?: string | null;
   startedAt: number;
@@ -197,4 +212,4 @@ export type HermesAuthContext = {
   reason?: string;
 };
 
-export type AgentUIPayload = Record<string, unknown>;
+export type AgentUIPayload = Record<string, LooseBoundaryValue>;

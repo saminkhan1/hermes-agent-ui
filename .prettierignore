@@ -1,0 +1,6 @@
+assets/
+build/
+dist/
+node_modules/
+out/
+vendor/

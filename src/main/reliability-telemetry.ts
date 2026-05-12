@@ -2,73 +2,17 @@
 
 import type { MutableJsonObject } from '../shared/contracts.ts';
 
-const { recordTrace } = require('./eval-trace');
-const { EVENTS, SCHEMA_VERSION } = require('./reliability-schema');
+import { recordTrace } from './eval-trace';
+import * as reliabilitySchema from './reliability-schema';
 
-type ReliabilitySink = (event: MutableJsonObject) => void;
-
-const externalSinks: ReliabilitySink[] = [];
-const REDACT_EXTERNAL_KEY = /authorization|key|preview|prompt|secret|sha256|text|title|token|transcript|url|usercode/i;
-
-function safeExternalValue(key: string, value: unknown): unknown {
-  if (value == null) return value;
-  if (REDACT_EXTERNAL_KEY.test(key)) return '[redacted]';
-  if (Array.isArray(value)) return value.map((entry) => safeExternalValue(key, entry));
-  if (typeof value === 'object') {
-    const out: MutableJsonObject = {};
-    for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
-      out[childKey] = safeExternalValue(childKey, childValue);
-    }
-    return out;
-  }
-  return value;
-}
-
-function externalEvent(type: string, payload: MutableJsonObject = {}) {
-  const out: MutableJsonObject = {
-    type,
-    schema: `agent-ui.reliability.v${SCHEMA_VERSION}`,
-  };
-  for (const [key, value] of Object.entries(payload)) {
-    out[key] = safeExternalValue(key, value);
-  }
-  return out;
-}
-
-function emitExternal(type: string, payload: MutableJsonObject = {}) {
-  if (!externalSinks.length) return;
-  const event = externalEvent(type, payload);
-  for (const sink of externalSinks.slice()) {
-    try {
-      sink(event);
-    } catch {
-      // Observability exporters must never affect product behavior.
-    }
-  }
-}
-
-function registerReliabilitySink(sink: ReliabilitySink) {
-  if (typeof sink !== 'function') return () => {};
-  externalSinks.push(sink);
-  return () => {
-    const index = externalSinks.indexOf(sink);
-    if (index >= 0) externalSinks.splice(index, 1);
-  };
-}
+const { EVENTS, SCHEMA_VERSION } = reliabilitySchema;
 
 function emit(type: string, payload: MutableJsonObject = {}) {
   const tracePayload = {
     schema: `agent-ui.reliability.v${SCHEMA_VERSION}`,
     ...(payload && typeof payload === 'object' ? payload : {}),
   };
-  emitExternal(type, tracePayload);
   return recordTrace(type, tracePayload);
-}
-
-function errorMessage(error: unknown, fallback = 'unknown error') {
-  return error && typeof error === 'object' && 'message' in error
-    ? String((error as Error).message || fallback)
-    : String(error || fallback);
 }
 
 const telemetry = {
@@ -91,7 +35,8 @@ const telemetry = {
   gatewayHydrationStarted: (payload: MutableJsonObject = {}) => emit(EVENTS.GATEWAY_HYDRATION_STARTED, payload),
   gatewayMessagePostAccepted: (payload: MutableJsonObject = {}) => emit(EVENTS.GATEWAY_MESSAGE_POST_ACCEPTED, payload),
   gatewayMessagePostFailed: (payload: MutableJsonObject = {}) => emit(EVENTS.GATEWAY_MESSAGE_POST_FAILED, payload),
-  gatewayMessagePostRequested: (payload: MutableJsonObject = {}) => emit(EVENTS.GATEWAY_MESSAGE_POST_REQUESTED, payload),
+  gatewayMessagePostRequested: (payload: MutableJsonObject = {}) =>
+    emit(EVENTS.GATEWAY_MESSAGE_POST_REQUESTED, payload),
   gatewayPrewarmCompleted: (payload: MutableJsonObject = {}) => emit(EVENTS.GATEWAY_PREWARM_COMPLETED, payload),
   gatewayPrewarmStarted: (payload: MutableJsonObject = {}) => emit(EVENTS.GATEWAY_PREWARM_STARTED, payload),
   gatewayReadyCheckCompleted: (payload: MutableJsonObject = {}) => emit(EVENTS.GATEWAY_READY_CHECK_COMPLETED, payload),
@@ -115,19 +60,12 @@ const telemetry = {
   terminalStateRendered: (payload: MutableJsonObject = {}) => emit(EVENTS.TERMINAL_STATE_RENDERED, payload),
   voiceFinalTranscript: (payload: MutableJsonObject = {}) => emit(EVENTS.VOICE_FINAL_TRANSCRIPT, payload),
   voicePartialTranscript: (payload: MutableJsonObject = {}) => emit(EVENTS.VOICE_PARTIAL_TRANSCRIPT, payload),
-  voiceSessionRecordingRequested: (payload: MutableJsonObject = {}) => emit(EVENTS.VOICE_SESSION_RECORDING_REQUESTED, payload),
+  voiceSessionRecordingRequested: (payload: MutableJsonObject = {}) =>
+    emit(EVENTS.VOICE_SESSION_RECORDING_REQUESTED, payload),
   voiceSessionRejected: (payload: MutableJsonObject = {}) => emit(EVENTS.VOICE_SESSION_REJECTED, payload),
-  voiceSessionTranscriptReady: (payload: MutableJsonObject = {}) => emit(EVENTS.VOICE_SESSION_TRANSCRIPT_READY, payload),
+  voiceSessionTranscriptReady: (payload: MutableJsonObject = {}) =>
+    emit(EVENTS.VOICE_SESSION_TRANSCRIPT_READY, payload),
   voiceStarted: (payload: MutableJsonObject = {}) => emit(EVENTS.VOICE_STARTED, payload),
 };
 
-module.exports = {
-  EVENTS,
-  errorMessage,
-  emitReliabilityEvent: emit,
-  registerReliabilitySink,
-  telemetry,
-  _test: {
-    externalEvent,
-  },
-};
+export { EVENTS, telemetry };

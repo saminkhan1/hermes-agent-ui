@@ -1,9 +1,9 @@
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-const { createHash } = require('crypto');
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { createHash } from 'node:crypto';
 
 const ATTACHMENT_SCHEME = 'agent-ui-attachment';
 const DEFAULT_MAX_BYTES = 100 * 1024 * 1024;
@@ -67,20 +67,22 @@ const MIME_BY_EXTENSION: Record<string, string> = {
 
 const localAttachmentRegistry = new Map();
 
-function text(value: any, max = REMOTE_REF_MAX_CHARS) {
+function text(value: LooseBoundaryValue, max = REMOTE_REF_MAX_CHARS) {
   const out = value == null ? '' : String(value);
   return out.length > max ? out.slice(0, max) : out;
 }
 
-function normalizeAttachmentType(value: any) {
-  const type = String(value || '').trim().toLowerCase();
+function normalizeAttachmentType(value: LooseBoundaryValue) {
+  const type = String(value || '')
+    .trim()
+    .toLowerCase();
   if (type === 'image' || type === 'document' || type === 'voice' || type === 'video') return type;
   if (type === 'audio') return 'voice';
   if (type === 'file') return 'document';
   return 'document';
 }
 
-function allowedExtensionsForType(type: any) {
+function allowedExtensionsForType(type: LooseBoundaryValue) {
   const normalized = normalizeAttachmentType(type);
   if (normalized === 'image') return IMAGE_EXTENSIONS;
   if (normalized === 'video') return VIDEO_EXTENSIONS;
@@ -88,15 +90,15 @@ function allowedExtensionsForType(type: any) {
   return DOCUMENT_EXTENSIONS;
 }
 
-function maxBytesForType(type: any) {
+function maxBytesForType(type: LooseBoundaryValue) {
   return normalizeAttachmentType(type) === 'image' ? IMAGE_MAX_BYTES : DEFAULT_MAX_BYTES;
 }
 
-function mimeForExtension(ext: any) {
+function mimeForExtension(ext: LooseBoundaryValue) {
   return MIME_BY_EXTENSION[String(ext || '').toLowerCase()] || 'application/octet-stream';
 }
 
-function fileNameForRef(ref: any) {
+function fileNameForRef(ref: LooseBoundaryValue) {
   const raw = String(ref || '').trim();
   if (!raw) return '';
   try {
@@ -111,7 +113,7 @@ function fileNameForRef(ref: any) {
   return path.basename(raw);
 }
 
-function pathFromLocalRef(ref: any) {
+function pathFromLocalRef(ref: LooseBoundaryValue) {
   const raw = String(ref || '').trim();
   if (!raw) return '';
   if (raw.startsWith('~/')) return path.resolve(os.homedir(), raw.slice(2));
@@ -125,7 +127,7 @@ function pathFromLocalRef(ref: any) {
   return path.isAbsolute(raw) ? raw : '';
 }
 
-function remoteDescriptor(type: any, ref: any) {
+function remoteDescriptor(type: LooseBoundaryValue, ref: LooseBoundaryValue) {
   const raw = text(ref);
   let parsed;
   try {
@@ -156,14 +158,14 @@ function remoteDescriptor(type: any, ref: any) {
   };
 }
 
-function tokenForLocalAttachment(file: any, stat: any) {
+function tokenForLocalAttachment(file: LooseBoundaryValue, stat: LooseBoundaryValue) {
   return createHash('sha256')
     .update(`${file}\0${stat.size}\0${Number(stat.mtimeMs || 0)}`)
     .digest('hex')
     .slice(0, 48);
 }
 
-function blockedDescriptor(reason: any, type: any, ref: any, extra = {}) {
+function blockedDescriptor(reason: LooseBoundaryValue, type: LooseBoundaryValue, ref: LooseBoundaryValue, extra = {}) {
   return {
     status: 'blocked',
     source: 'local',
@@ -177,7 +179,7 @@ function blockedDescriptor(reason: any, type: any, ref: any, extra = {}) {
   };
 }
 
-function resolveLocalDescriptor(type: any, ref: any) {
+function resolveLocalDescriptor(type: LooseBoundaryValue, ref: LooseBoundaryValue) {
   const file = pathFromLocalRef(ref);
   if (!file) return null;
 
@@ -211,7 +213,13 @@ function resolveLocalDescriptor(type: any, ref: any) {
 
   const token = tokenForLocalAttachment(file, stat);
   const mimeType = mimeForExtension(ext);
-  localAttachmentRegistry.set(token, { file, mimeType, size: stat.size, extension: ext, type: normalizeAttachmentType(type) });
+  localAttachmentRegistry.set(token, {
+    file,
+    mimeType,
+    size: stat.size,
+    extension: ext,
+    type: normalizeAttachmentType(type),
+  });
   return {
     status: 'ready',
     source: 'local',
@@ -223,7 +231,7 @@ function resolveLocalDescriptor(type: any, ref: any) {
   };
 }
 
-function attachmentDescriptor(item: any = {}) {
+function attachmentDescriptor(item: LooseBoundaryValue = {}) {
   const type = normalizeAttachmentType(item.attachmentType || item.attachment_type);
   const ref = text(item.ref);
   if (!ref) return blockedDescriptor('missing_ref', type, ref);
@@ -237,7 +245,7 @@ function attachmentDescriptor(item: any = {}) {
   return blockedDescriptor('unsupported_ref', type, ref);
 }
 
-function resolveAttachmentRequest(urlValue: any) {
+function resolveAttachmentRequest(urlValue: LooseBoundaryValue) {
   let parsed;
   try {
     parsed = new URL(String(urlValue || ''));
@@ -258,14 +266,4 @@ function resolveAttachmentRequest(urlValue: any) {
   return registered;
 }
 
-module.exports = {
-  ATTACHMENT_SCHEME,
-  attachmentDescriptor,
-  normalizeAttachmentType,
-  resolveAttachmentRequest,
-  _test: {
-    allowedExtensionsForType,
-    pathFromLocalRef,
-    localAttachmentRegistry,
-  },
-};
+export { ATTACHMENT_SCHEME, attachmentDescriptor, normalizeAttachmentType, resolveAttachmentRequest };

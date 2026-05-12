@@ -1,18 +1,17 @@
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
+import fs from 'node:fs';
+import path from 'node:path';
 
 const enabled = process.env.AGENT_UI_EVAL === '1';
 const runId =
-  String(process.env.AGENT_UI_EVAL_RUN_ID || '').trim() ||
-  `manual-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+  String(process.env.AGENT_UI_EVAL_RUN_ID || '').trim() || `manual-${new Date().toISOString().replace(/[:.]/g, '-')}`;
 const baseDir = path.resolve(process.env.AGENT_UI_EVAL_DIR || path.join(process.cwd(), '.agent-ui-eval'));
 const runDir = path.join(baseDir, 'runs', runId);
 const traceFile = path.join(runDir, 'trace.jsonl');
 
-/** @type {Array<Record<string, unknown>>} */
-const events: any[] = [];
+/** @type {Array<Record<string, LooseBoundaryValue>>} */
+const events: LooseBoundaryValue[] = [];
 let seq = 0;
 const startedHr = process.hrtime.bigint();
 
@@ -25,18 +24,18 @@ function ensureRunDir() {
   fs.mkdirSync(runDir, { recursive: true });
 }
 
-function safeName(value: any) {
+function safeName(value: LooseBoundaryValue) {
   return String(value || 'unknown').replace(/[^A-Za-z0-9_.-]/g, '_');
 }
 
-function getCatArtifactDir(catId: any) {
+function getCatArtifactDir(catId: LooseBoundaryValue) {
   if (!enabled) return null;
   const dir = path.join(runDir, 'cats', safeName(catId));
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
-function artifactPath(catId: any, relPath: any) {
+function artifactPath(catId: LooseBoundaryValue, relPath: LooseBoundaryValue) {
   const dir = getCatArtifactDir(catId);
   if (!dir) return null;
   const full = path.resolve(path.join(dir, String(relPath || 'artifact')));
@@ -47,29 +46,19 @@ function artifactPath(catId: any, relPath: any) {
   return full;
 }
 
-function writeArtifactText(catId: any, relPath: any, text: any) {
+function writeArtifactText(catId: LooseBoundaryValue, relPath: LooseBoundaryValue, text: LooseBoundaryValue) {
   if (!enabled) return null;
   const file = artifactPath(catId, relPath);
+  if (!file) return null;
   fs.writeFileSync(file, String(text || ''), 'utf8');
   return file;
 }
 
-function appendArtifactText(catId: any, relPath: any, text: any) {
-  if (!enabled) return null;
-  const file = artifactPath(catId, relPath);
-  fs.appendFileSync(file, String(text || ''), 'utf8');
-  return file;
-}
-
-function writeArtifactJson(catId: any, relPath: any, value: any) {
+function writeArtifactJson(catId: LooseBoundaryValue, relPath: LooseBoundaryValue, value: LooseBoundaryValue) {
   return writeArtifactText(catId, relPath, JSON.stringify(value, null, 2));
 }
 
-function appendArtifactJsonl(catId: any, relPath: any, value: any) {
-  return appendArtifactText(catId, relPath, `${JSON.stringify(value)}\n`);
-}
-
-function recordTrace(type: any, payload = {}) {
+function recordTrace(type: LooseBoundaryValue, payload = {}) {
   if (!enabled) return null;
   const event = {
     type: String(type || 'event'),
@@ -100,30 +89,4 @@ function getTrace() {
   };
 }
 
-function resetTrace() {
-  events.length = 0;
-  seq = 0;
-  if (!enabled) return;
-  try {
-    ensureRunDir();
-    fs.writeFileSync(traceFile, '', 'utf8');
-  } catch {
-    /* ignore */
-  }
-}
-
-module.exports = {
-  recordTrace,
-  getTrace,
-  resetTrace,
-  getCatArtifactDir,
-  artifactPath,
-  writeArtifactText,
-  appendArtifactText,
-  writeArtifactJson,
-  appendArtifactJsonl,
-  runId,
-  runDir,
-  traceFile,
-  enabled,
-};
+export { recordTrace, getTrace, getCatArtifactDir, writeArtifactJson, runId, runDir, traceFile, enabled };

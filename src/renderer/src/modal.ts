@@ -1,5 +1,3 @@
-/* global agentUI */
-
 import { activeElementForEval, rectForEvalElement, visibleTextForEval } from './eval-ui-state.ts';
 import { insertNewlineAtCursor } from './insert-newline-at-cursor.ts';
 import type { AgentUIPayload } from '../../shared/contracts.ts';
@@ -37,9 +35,7 @@ async function loadHeaderAppIcon() {
   try {
     const payload = await window.agentUI.getPetCharacters();
     const spriteUrl = String(
-      (payload && payload.selectedSpriteUrl) ||
-      (payload && payload.selected && payload.selected.spriteUrl) ||
-      ''
+      (payload && payload.selectedSpriteUrl) || (payload && payload.selected && payload.selected.spriteUrl) || '',
     ).trim();
     if (spriteUrl) headerAppIcon.style.backgroundImage = `url("${spriteUrl}")`;
   } catch {
@@ -66,7 +62,7 @@ function reportEvalUiState() {
   });
 }
 
-function setError(msg: unknown) {
+function setError(msg: LooseBoundaryValue) {
   if (!errorEl) return;
   if (!msg) {
     errorEl.hidden = true;

@@ -174,7 +174,7 @@ After Ring 1 packaging, run:
 npm run release:verify
 ```
 
-This writes `dist/release-manifest.json` with app mode, app version, git SHA, app source dirty status, connector Hermes baseline, whether Hermes runtime is included, signing identity, notarization status, and SHA-256 hashes for every DMG/zip artifact. In bootstrap signing mode, `notarizationStatus` is recorded as `not_applicable_bootstrap`; `spctl` and stapler results are still captured as evidence but are not required to pass.
+This writes `dist/release-manifest.json` with app mode, app version, git SHA, app source dirty status, connector Hermes baseline, whether Hermes runtime is included, packaged `local_desktop` source-match status, signing identity, notarization status, and SHA-256 hashes for every DMG/zip artifact. In bootstrap signing mode, `notarizationStatus` is recorded as `not_applicable_bootstrap`; `spctl` and stapler results are still captured as evidence but are not required to pass.
 
 The customer-facing download link should be the GitHub Release page, not a GitHub Actions artifact link.
 

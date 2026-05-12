@@ -1,8 +1,8 @@
 'use strict';
 
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const RELEASE_MODE_CONNECTOR = 'connector';
 const RELEASE_MODES = new Set([RELEASE_MODE_CONNECTOR]);
@@ -31,8 +31,10 @@ function readPackageJson() {
   }
 }
 
-function normalizeReleaseMode(value: any, fallback = RELEASE_MODE_CONNECTOR) {
-  const mode = String(value || '').trim().toLowerCase();
+function normalizeReleaseMode(value: LooseBoundaryValue, fallback = RELEASE_MODE_CONNECTOR) {
+  const mode = String(value || '')
+    .trim()
+    .toLowerCase();
   return RELEASE_MODES.has(mode) ? mode : fallback;
 }
 
@@ -40,9 +42,9 @@ function releaseMode() {
   const pkg = readPackageJson();
   return normalizeReleaseMode(
     process.env.AGENT_UI_RELEASE_MODE ||
-    process.env.AGENT_UI_RELEASE_FLAVOR ||
-    (pkg.agentUI && pkg.agentUI.releaseMode),
-    RELEASE_MODE_CONNECTOR
+      process.env.AGENT_UI_RELEASE_FLAVOR ||
+      (pkg.agentUI && pkg.agentUI.releaseMode),
+    RELEASE_MODE_CONNECTOR,
   );
 }
 
@@ -73,9 +75,8 @@ function connectorRuntimeStatePath() {
   return path.join(getAgentUIConfigDir(), 'connector-runtime.json');
 }
 
-function readJsonFile(file: any, fallback = {}) {
+function readJsonFile(file: LooseBoundaryValue, fallback = {}) {
   try {
-    if (!fs.existsSync(file)) return fallback;
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
     return data && typeof data === 'object' ? data : fallback;
   } catch {
@@ -83,7 +84,7 @@ function readJsonFile(file: any, fallback = {}) {
   }
 }
 
-function writeJsonFile(file: any, value: any) {
+function writeJsonFile(file: LooseBoundaryValue, value: LooseBoundaryValue) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
 }
@@ -92,7 +93,7 @@ function readConnectorRuntimeState() {
   return readJsonFile(connectorRuntimeStatePath(), {});
 }
 
-function rememberConnectorHermesCommand(command: any) {
+function rememberConnectorHermesCommand(command: LooseBoundaryValue) {
   const value = String(command || '').trim();
   if (!value) return;
   writeJsonFile(connectorRuntimeStatePath(), {
@@ -111,7 +112,7 @@ function defaultConnectorHermesCandidates() {
   ];
 }
 
-module.exports = {
+export {
   RELEASE_MODE_CONNECTOR,
   connectorHermesHome,
   defaultConnectorHermesCandidates,

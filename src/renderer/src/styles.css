@@ -47,7 +47,13 @@ body {
 
 body {
   color: var(--color-token-foreground);
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
   font-size: 13px;
   pointer-events: none;
 }
@@ -184,7 +190,10 @@ button svg,
   color: var(--color-token-foreground);
   pointer-events: auto;
   transform-origin: bottom right;
-  transition: opacity 160ms ease, transform 160ms ease, visibility 160ms ease;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease,
+    visibility 160ms ease;
   -webkit-app-region: no-drag;
 }
 
@@ -248,7 +257,10 @@ button svg,
   background: var(--color-token-main-surface-primary);
   box-shadow: var(--pet-shadow-inset);
   backdrop-filter: blur(18px);
-  transition: background-color 200ms cubic-bezier(0.16, 1, 0.3, 1), border-color 200ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition:
+    background-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1);
   -webkit-backdrop-filter: blur(18px);
 }
 
@@ -256,7 +268,9 @@ button svg,
 .pet-row:focus-within .pet-row-card {
   border-color: color-mix(in srgb, var(--color-token-border) 80%, transparent);
   background: var(--color-token-main-surface-primary);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.52), inset 0 -1px 0 rgba(0, 0, 0, 0.1);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.52),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.1);
 }
 
 .pet-row-action {
@@ -366,7 +380,9 @@ button svg,
   z-index: 10;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 280ms cubic-bezier(0.16, 1, 0.3, 1), transform 280ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition:
+    opacity 280ms cubic-bezier(0.16, 1, 0.3, 1),
+    transform 280ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .pet-row:hover .pet-row-control-wrap,

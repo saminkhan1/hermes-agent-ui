@@ -8,21 +8,30 @@ const { spawnSync } = require('node:child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
 const distDir = path.join(repoRoot, 'dist');
+const vendorPluginDir = path.join(repoRoot, 'vendor', 'hermes-platforms', 'local_desktop');
+const vendorPluginFiles = {
+  adapter: path.join(vendorPluginDir, 'adapter.py'),
+  pluginYaml: path.join(vendorPluginDir, 'plugin.yaml'),
+};
 const requestedSigningMode = String(
-  process.env.RELEASE_VERIFY_SIGNING_MODE ||
-  process.env.RELEASE_VERIFY_MODE ||
-  'bootstrap'
-).trim().toLowerCase();
+  process.env.RELEASE_VERIFY_SIGNING_MODE || process.env.RELEASE_VERIFY_MODE || 'bootstrap',
+)
+  .trim()
+  .toLowerCase();
 const signingMode = requestedSigningMode === 'developer-id' ? 'developer-id' : requestedSigningMode;
 const requestedAppMode = String(
   process.env.RELEASE_VERIFY_APP_MODE ||
-  process.env.AGENT_UI_RELEASE_MODE ||
-  process.env.AGENT_UI_RELEASE_FLAVOR ||
-  'connector'
-).trim().toLowerCase();
+    process.env.AGENT_UI_RELEASE_MODE ||
+    process.env.AGENT_UI_RELEASE_FLAVOR ||
+    'connector',
+)
+  .trim()
+  .toLowerCase();
 
 if (!['bootstrap', 'developer-id'].includes(signingMode)) {
-  console.error(`[agent-ui] RELEASE_VERIFY_SIGNING_MODE must be bootstrap or developer-id, got ${requestedSigningMode}`);
+  console.error(
+    `[agent-ui] RELEASE_VERIFY_SIGNING_MODE must be bootstrap or developer-id, got ${requestedSigningMode}`,
+  );
   process.exit(2);
 }
 if (requestedAppMode !== 'connector') {
@@ -72,6 +81,40 @@ function sha256(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
 
+function isDirectory(file) {
+  try {
+    return fs.lstatSync(file).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function packagedFileState(actual, expected) {
+  const exists = fs.existsSync(actual);
+  const sourceExists = fs.existsSync(expected);
+  const actualSha256 = exists ? sha256(actual) : '';
+  const sourceSha256 = sourceExists ? sha256(expected) : '';
+  return {
+    path: actual,
+    source: path.relative(repoRoot, expected),
+    exists,
+    sourceExists,
+    sha256: actualSha256,
+    sourceSha256,
+    matchesSource: exists && sourceExists && actualSha256 === sourceSha256,
+  };
+}
+
+function localDesktopPluginState(appPath) {
+  const pluginDir = path.join(appPath, 'Contents', 'Resources', 'hermes-platforms', 'local_desktop');
+  return {
+    path: pluginDir,
+    directoryExists: isDirectory(pluginDir),
+    adapter: packagedFileState(path.join(pluginDir, 'adapter.py'), vendorPluginFiles.adapter),
+    pluginYaml: packagedFileState(path.join(pluginDir, 'plugin.yaml'), vendorPluginFiles.pluginYaml),
+  };
+}
+
 function artifactAppMode(file) {
   const name = path.basename(String(file || '')).toLowerCase();
   if (name.includes('for-hermes')) return 'connector';
@@ -80,13 +123,15 @@ function artifactAppMode(file) {
 
 function artifactFiles(mode = signingMode) {
   if (!fs.existsSync(distDir)) return [];
-  const files = fs.readdirSync(distDir)
+  const files = fs
+    .readdirSync(distDir)
     .filter((name) => /\.(dmg|zip)$/i.test(name))
     .map((name) => path.join(distDir, name))
     .sort();
-  const signingFiles = mode === 'bootstrap'
-    ? files.filter((file) => /-bootstrap\.(dmg|zip)$/i.test(path.basename(file)))
-    : files.filter((file) => !/-bootstrap\.(dmg|zip)$/i.test(path.basename(file)));
+  const signingFiles =
+    mode === 'bootstrap'
+      ? files.filter((file) => /-bootstrap\.(dmg|zip)$/i.test(path.basename(file)))
+      : files.filter((file) => !/-bootstrap\.(dmg|zip)$/i.test(path.basename(file)));
   const scopedFiles = signingFiles.length ? signingFiles : files;
   return scopedFiles.filter((file) => artifactAppMode(file) === 'connector');
 }
@@ -132,6 +177,7 @@ function appRuntimeState(appPath) {
   return {
     hermesRuntimePath,
     hermesRuntimeIncluded: fs.existsSync(hermesRuntimePath),
+    localDesktopPlugin: localDesktopPluginState(appPath),
   };
 }
 
@@ -171,11 +217,13 @@ function inspectDmg(file) {
   const dir = fs.mkdtempSync(path.join(base, 'agent-ui-release-dmg-'));
   const mountPoint = path.join(dir, 'mnt');
   fs.mkdirSync(mountPoint);
-  const attach = run('hdiutil', ['attach', '-nobrowse', '-readonly', '-mountpoint', mountPoint, file], { timeoutMs: 120000 });
+  const attach = run('hdiutil', ['attach', '-nobrowse', '-readonly', '-mountpoint', mountPoint, file], {
+    timeoutMs: 120000,
+  });
   const device = (attach.stdout.match(/^(\/dev\/disk\S+)/m) || [])[1] || '';
   let apps = [];
   let detach = null;
-  let cleanup = null;
+  let cleanup;
   if (attach.ok) {
     try {
       apps = findApps(mountPoint).map(appChecks);
@@ -198,7 +246,9 @@ function inspectDmg(file) {
     detach,
     cleanup,
     apps,
-    spctlOpen: run('spctl', ['-a', '-vv', '--type', 'open', '--context', 'context:primary-signature', file], { timeoutMs: 20000 }),
+    spctlOpen: run('spctl', ['-a', '-vv', '--type', 'open', '--context', 'context:primary-signature', file], {
+      timeoutMs: 20000,
+    }),
     staplerValidate: run('xcrun', ['stapler', 'validate', file], { timeoutMs: 20000 }),
   };
 }
@@ -230,11 +280,34 @@ function appRuntimeEnforcementFailures(app) {
   return runtime.hermesRuntimeIncluded ? ['connector app must not include Contents/Resources/hermes-runtime'] : [];
 }
 
+function appPluginEnforcementFailures(app) {
+  const plugin = app && app.runtime ? app.runtime.localDesktopPlugin : null;
+  if (!plugin || !plugin.directoryExists) {
+    return ['connector app must include Contents/Resources/hermes-platforms/local_desktop'];
+  }
+
+  const failures = [];
+  for (const [label, state] of [
+    ['adapter.py', plugin.adapter],
+    ['plugin.yaml', plugin.pluginYaml],
+  ]) {
+    if (!state.sourceExists) {
+      failures.push(`source local_desktop ${label} is missing`);
+    } else if (!state.exists) {
+      failures.push(`connector app is missing local_desktop ${label}`);
+    } else if (!state.matchesSource) {
+      failures.push(`connector app local_desktop ${label} does not match source`);
+    }
+  }
+  return failures;
+}
+
 function appEnforcementFailures(app, mode) {
   const failures = [];
   failures.push(...commandFailure(app.codesignDisplay, 'app.codesignDisplay'));
   failures.push(...commandFailure(app.codesignVerify, 'app.codesignVerify'));
   failures.push(...appRuntimeEnforcementFailures(app));
+  failures.push(...appPluginEnforcementFailures(app));
   const signing = app.signingIdentity || {};
   if (mode === 'developer-id') {
     if (!signing.developerId) failures.push('app is not signed with Developer ID Application');
@@ -252,7 +325,8 @@ function enforcementFailures(kind, checks, mode) {
   if (kind === 'dmg') {
     failures.push(...commandFailure(checks.attach, 'dmg.attach'));
     if (checks.detach) failures.push(...commandFailure(checks.detach, 'dmg.detach'));
-    if (checks.cleanup && checks.cleanup.ok === false) failures.push(`dmg.cleanup: ${checks.cleanup.error || 'failed'}`);
+    if (checks.cleanup && checks.cleanup.ok === false)
+      failures.push(`dmg.cleanup: ${checks.cleanup.error || 'failed'}`);
     if (mode === 'developer-id') {
       failures.push(...commandFailure(checks.spctlOpen, 'dmg.spctlOpen'));
       failures.push(...commandFailure(checks.staplerValidate, 'dmg.staplerValidate'));
@@ -314,6 +388,7 @@ function main() {
     const ext = path.extname(file).slice(1).toLowerCase();
     const checks = ext === 'dmg' ? inspectDmg(file) : inspectZip(file);
     const failures = enforcementFailures(ext, checks, signingMode);
+    const pluginStates = (checks.apps || []).map((app) => app.runtime.localDesktopPlugin);
     const record = {
       file: path.relative(repoRoot, file),
       name: path.basename(file),
@@ -324,6 +399,15 @@ function main() {
       releaseMode: 'connector',
       signingMode,
       hermesRuntimeIncluded: (checks.apps || []).some((app) => app.runtime && app.runtime.hermesRuntimeIncluded),
+      localDesktopPlugin: {
+        included: pluginStates.some((plugin) => plugin && plugin.directoryExists),
+        matchesSource:
+          pluginStates.length > 0 &&
+          pluginStates.every(
+            (plugin) =>
+              plugin && plugin.directoryExists && plugin.adapter.matchesSource && plugin.pluginYaml.matchesSource,
+          ),
+      },
       hermes: {
         runtimeIncluded: false,
         baselineRequirement: 'v2026.4.30+',

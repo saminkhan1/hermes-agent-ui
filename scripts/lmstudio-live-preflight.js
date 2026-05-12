@@ -29,7 +29,7 @@ async function requestJson(url) {
     signal: AbortSignal.timeout(5000),
   });
   const text = await res.text();
-  let json = null;
+  let json;
   try {
     json = text ? JSON.parse(text) : null;
   } catch {
@@ -64,7 +64,10 @@ function parseLoadedModels(stdout) {
   try {
     modelsResponse = await requestJson(`${baseUrl}/models`);
   } catch (error) {
-    fail(`LM Studio OpenAI-compatible API is unreachable at ${baseUrl}.`, error && error.message ? error.message : String(error));
+    fail(
+      `LM Studio OpenAI-compatible API is unreachable at ${baseUrl}.`,
+      error && error.message ? error.message : String(error),
+    );
   }
   if (
     !modelsResponse ||
@@ -76,9 +79,7 @@ function parseLoadedModels(stdout) {
     fail(`LM Studio /models failed at ${baseUrl}.`, `${modelsResponse.status} ${modelsResponse.text}`);
   }
 
-  const apiModelIds = modelsResponse.json.data
-    .map((entry) => String(entry && entry.id || '').trim())
-    .filter(Boolean);
+  const apiModelIds = modelsResponse.json.data.map((entry) => String((entry && entry.id) || '').trim()).filter(Boolean);
   if (!apiModelIds.includes(model)) {
     fail(`LM Studio server does not expose ${model}.`, `Visible models: ${apiModelIds.join(', ') || '<none>'}`);
   }
@@ -94,7 +95,9 @@ function parseLoadedModels(stdout) {
       entry && entry.path,
       entry && entry.modelKey,
       entry && entry.indexedModelIdentifier,
-    ].map((value) => String(value || '').trim()).includes(model);
+    ]
+      .map((value) => String(value || '').trim())
+      .includes(model);
   });
   if (!loadedEntry) {
     fail(`${model} is not loaded in LM Studio.`, `Load it with: lms load --identifier ${model}`);
@@ -103,28 +106,34 @@ function parseLoadedModels(stdout) {
   if (!Number.isFinite(loadedContextLength) || loadedContextLength < minContextLength) {
     fail(
       `${model} is loaded with context length ${loadedContextLength || '<unknown>'}, below the ${minContextLength} token live-test minimum.`,
-      `Reload it with: lms unload ${model} && lms load ${model} --identifier ${model} --context-length ${minContextLength} --parallel ${minParallel} -y`
+      `Reload it with: lms unload ${model} && lms load ${model} --identifier ${model} --context-length ${minContextLength} --parallel ${minParallel} -y`,
     );
   }
   const parallel = Number(loadedEntry.parallel || 0);
   if (!Number.isFinite(parallel) || parallel < minParallel) {
     fail(
       `${model} is loaded with parallel=${parallel || '<unknown>'}, below the ${minParallel} request concurrency minimum.`,
-      `Reload it with: lms unload ${model} && lms load ${model} --identifier ${model} --context-length ${minContextLength} --parallel ${minParallel} -y`
+      `Reload it with: lms unload ${model} && lms load ${model} --identifier ${model} --context-length ${minContextLength} --parallel ${minParallel} -y`,
     );
   }
 
-  console.log(JSON.stringify({
-    ok: true,
-    provider: 'lmstudio',
-    baseUrl,
-    model,
-    lms: String(version.stdout || version.stderr || '').trim(),
-    loadedStatus: loadedEntry.status || null,
-    loadedContextLength,
-    parallel,
-    hermesContextLength: minContextLength,
-  }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        provider: 'lmstudio',
+        baseUrl,
+        model,
+        lms: String(version.stdout || version.stderr || '').trim(),
+        loadedStatus: loadedEntry.status || null,
+        loadedContextLength,
+        parallel,
+        hermesContextLength: minContextLength,
+      },
+      null,
+      2,
+    ),
+  );
 })().catch((error) => {
   fail(error && error.message ? error.message : String(error));
 });

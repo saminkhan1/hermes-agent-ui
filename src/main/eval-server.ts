@@ -1,25 +1,25 @@
 'use strict';
 
-const fs = require('fs');
-const http = require('http');
-const crypto = require('crypto');
+import fs from 'node:fs';
+import http from 'node:http';
+import crypto from 'node:crypto';
 
 function evalToken() {
   return String(process.env.AGENT_UI_EVAL_TOKEN || '').trim();
 }
 
-function safeCompare(a: any, b: any) {
+function safeCompare(a: LooseBoundaryValue, b: LooseBoundaryValue) {
   const left = Buffer.from(String(a || ''), 'utf8');
   const right = Buffer.from(String(b || ''), 'utf8');
   if (left.length !== right.length || left.length === 0) return false;
   return crypto.timingSafeEqual(left, right);
 }
 
-function readEvalJson(req: any) {
+function readEvalJson(req: LooseBoundaryValue) {
   return new Promise((resolve, reject) => {
     let body = '';
     req.setEncoding('utf8');
-    req.on('data', (chunk: any) => {
+    req.on('data', (chunk: LooseBoundaryValue) => {
       body += chunk;
       if (body.length > 1024 * 1024) {
         reject(new Error('request body too large'));
@@ -41,7 +41,7 @@ function readEvalJson(req: any) {
   });
 }
 
-function sendEvalJson(res: any, statusCode: any, payload: any) {
+function sendEvalJson(res: LooseBoundaryValue, statusCode: LooseBoundaryValue, payload: LooseBoundaryValue) {
   const text = JSON.stringify(payload);
   res.writeHead(statusCode, {
     'content-type': 'application/json; charset=utf-8',
@@ -50,22 +50,22 @@ function sendEvalJson(res: any, statusCode: any, payload: any) {
   res.end(text);
 }
 
-function writeEvalPortFile(port: any) {
+function writeEvalPortFile(port: LooseBoundaryValue) {
   const file = String(process.env.AGENT_UI_EVAL_PORT_FILE || '').trim();
   if (!file) return;
   fs.writeFileSync(file, `${port}\n`, 'utf8');
 }
 
-function requestAuthorized(req: any) {
+function requestAuthorized(req: LooseBoundaryValue) {
   const token = evalToken();
   if (!token) return false;
-  const header = String(req.headers && req.headers.authorization || '').trim();
+  const header = String((req.headers && req.headers.authorization) || '').trim();
   const prefix = 'Bearer ';
   if (!header.startsWith(prefix)) return false;
   return safeCompare(header.slice(prefix.length).trim(), token);
 }
 
-async function handleEvalRequest(req: any, res: any, handlers: any) {
+async function handleEvalRequest(req: LooseBoundaryValue, res: LooseBoundaryValue, handlers: LooseBoundaryValue) {
   try {
     if (!requestAuthorized(req)) {
       sendEvalJson(res, 401, { ok: false, error: 'unauthorized' });
@@ -139,14 +139,14 @@ async function handleEvalRequest(req: any, res: any, handlers: any) {
   }
 }
 
-function startAgentUIEvalServer(handlers: any, log = console) {
+function startAgentUIEvalServer(handlers: LooseBoundaryValue, log = console) {
   if (process.env.AGENT_UI_EVAL !== '1') return null;
   if (!evalToken()) {
     log.warn('[agent-ui] eval server disabled: AGENT_UI_EVAL_TOKEN is required.');
     return null;
   }
 
-  const server = http.createServer((req: any, res: any) => {
+  const server = http.createServer((req: LooseBoundaryValue, res: LooseBoundaryValue) => {
     void handleEvalRequest(req, res, handlers);
   });
 
@@ -169,9 +169,4 @@ function startAgentUIEvalServer(handlers: any, log = console) {
   };
 }
 
-module.exports = {
-  startAgentUIEvalServer,
-  _test: {
-    handleEvalRequest,
-  },
-};
+export { startAgentUIEvalServer };

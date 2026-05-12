@@ -1,14 +1,14 @@
 'use strict';
 
-function isLiveWindow(win: any) {
+function isLiveWindow(win: LooseBoundaryValue) {
   return !!(win && typeof win.isDestroyed === 'function' && !win.isDestroyed());
 }
 
-function isCurrentWindow(win: any, getCurrent: any) {
+function isCurrentWindow(win: LooseBoundaryValue, getCurrent: LooseBoundaryValue) {
   return isLiveWindow(win) && typeof getCurrent === 'function' && getCurrent() === win;
 }
 
-function focusWindow(win: any) {
+function focusWindow(win: LooseBoundaryValue) {
   if (!isLiveWindow(win)) return false;
   if (typeof win.show === 'function' && typeof win.isVisible === 'function' && !win.isVisible()) {
     win.show();
@@ -21,23 +21,17 @@ function focusWindow(win: any) {
   return true;
 }
 
-function runForCurrentWindow(win: any, getCurrent: any, fn: any) {
+function runForCurrentWindow(win: LooseBoundaryValue, getCurrent: LooseBoundaryValue, fn: LooseBoundaryValue) {
   if (!isCurrentWindow(win, getCurrent)) return false;
   fn(win);
   return true;
 }
 
-function clearCurrentWindow(win: any, getCurrent: any, setCurrent: any) {
+function clearCurrentWindow(win: LooseBoundaryValue, getCurrent: LooseBoundaryValue, setCurrent: LooseBoundaryValue) {
   if (typeof getCurrent !== 'function' || typeof setCurrent !== 'function') return false;
   if (getCurrent() !== win) return false;
   setCurrent(null);
   return true;
 }
 
-module.exports = {
-  clearCurrentWindow,
-  focusWindow,
-  isCurrentWindow,
-  isLiveWindow,
-  runForCurrentWindow,
-};
+export { clearCurrentWindow, focusWindow, isCurrentWindow, isLiveWindow, runForCurrentWindow };

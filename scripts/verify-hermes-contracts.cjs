@@ -14,11 +14,7 @@ const hermesRuntimePath = path.join(repoRoot, 'src', 'main', 'hermes-runtime.ts'
 const vendorAdapterPath = path.join(repoRoot, 'vendor', 'hermes-platforms', 'local_desktop', 'adapter.py');
 const vendorPluginPath = path.join(repoRoot, 'vendor', 'hermes-platforms', 'local_desktop', 'plugin.yaml');
 
-const EXPECTED_LOCAL_DESKTOP_ROUTES = [
-  'GET /events',
-  'GET /health',
-  'POST /messages',
-];
+const EXPECTED_LOCAL_DESKTOP_ROUTES = ['GET /events', 'GET /health', 'POST /messages'];
 
 const AGENT_UI_GATEWAY_ENV_KEYS = [
   'LOCAL_DESKTOP_GATEWAY_KEY',
@@ -84,19 +80,6 @@ function assertIncludesAll(label, actual, required) {
   }
 }
 
-function assertFileSame(label, actualFile, expectedFile) {
-  if (!exists(actualFile)) return;
-  const actual = readFile(actualFile);
-  const expected = readFile(expectedFile);
-  if (actual !== expected) {
-    fail(`${label} is stale`, {
-      actual: relative(actualFile),
-      expected: relative(expectedFile),
-      hint: 'Update the Agent UI local_desktop plugin source.',
-    });
-  }
-}
-
 function parseTs(file) {
   const source = readFile(file);
   return {
@@ -143,6 +126,105 @@ function collectTypeLiteralKeys(node, out = []) {
 
 function tsObjectKeys(parsed, typeName) {
   return unique(collectTypeLiteralKeys(findTypeAlias(parsed, typeName).type));
+}
+
+function typeKind(node) {
+  if (!node) return 'unknown';
+  if (ts.isParenthesizedTypeNode(node)) return typeKind(node.type);
+  if (node.kind === ts.SyntaxKind.StringKeyword) return 'string';
+  if (node.kind === ts.SyntaxKind.NumberKeyword) return 'number';
+  if (node.kind === ts.SyntaxKind.BooleanKeyword) return 'boolean';
+  if (node.kind === ts.SyntaxKind.NullKeyword) return 'null';
+  if (ts.isLiteralTypeNode(node)) {
+    if (ts.isStringLiteral(node.literal) || ts.isNoSubstitutionTemplateLiteral(node.literal)) return 'string';
+    if (node.literal.kind === ts.SyntaxKind.TrueKeyword || node.literal.kind === ts.SyntaxKind.FalseKeyword)
+      return 'boolean';
+    if (node.literal.kind === ts.SyntaxKind.NullKeyword) return 'null';
+    if (ts.isNumericLiteral(node.literal)) return 'number';
+  }
+  if (ts.isTypeReferenceNode(node)) {
+    const name = node.typeName.getText();
+    if (name === 'JsonObject' || name === 'MutableJsonObject' || name === 'Record') return 'object';
+    if (name === 'LocalDesktopGatewayEventType' || name === 'LocalDesktopProcessingOutcome') return 'string';
+    return name;
+  }
+  if (ts.isArrayTypeNode(node) || ts.isTupleTypeNode(node)) return 'array';
+  if (ts.isTypeLiteralNode(node)) return 'object';
+  if (ts.isUnionTypeNode(node)) return unique(node.types.flatMap((child) => typeKind(child).split('|'))).join('|');
+  if (ts.isIntersectionTypeNode(node)) {
+    const childKinds = unique(node.types.flatMap((child) => typeKind(child).split('|')));
+    if (childKinds.includes('object')) return 'object';
+    return childKinds.join('|');
+  }
+  return 'unknown';
+}
+
+function collectTypeLiteralProperties(node, out = new Map()) {
+  if (!node) return out;
+  if (ts.isTypeLiteralNode(node)) {
+    for (const member of node.members) {
+      if (!ts.isPropertySignature(member)) continue;
+      const name = propertyNameText(member.name);
+      if (!name) continue;
+      const existing = out.get(name);
+      const kinds = unique([...(existing ? existing.kinds : []), ...typeKind(member.type).split('|')]);
+      out.set(name, {
+        optional: !!member.questionToken || !!(existing && existing.optional),
+        kinds,
+      });
+    }
+    return out;
+  }
+  if (ts.isUnionTypeNode(node) || ts.isIntersectionTypeNode(node)) {
+    for (const child of node.types) collectTypeLiteralProperties(child, out);
+    return out;
+  }
+  if (ts.isParenthesizedTypeNode(node)) return collectTypeLiteralProperties(node.type, out);
+  return out;
+}
+
+function tsPropertyShape(parsed, typeName) {
+  const props = collectTypeLiteralProperties(findTypeAlias(parsed, typeName).type);
+  const out = {};
+  for (const [name, info] of props.entries()) {
+    out[name] = {
+      optional: !!info.optional,
+      type: unique(info.kinds).join('|'),
+    };
+  }
+  return out;
+}
+
+const BASE_EVENT_KEYS = ['seq', 'type', 'conversation_id', 'message_id', 'created_at'];
+
+function tsEventPayloadKeys(parsed, typeName) {
+  const base = new Set(BASE_EVENT_KEYS);
+  return tsObjectKeys(parsed, typeName).filter((key) => !base.has(key));
+}
+
+function tsEventPayloadShape(parsed, typeName) {
+  const base = new Set(BASE_EVENT_KEYS);
+  const shape = tsPropertyShape(parsed, typeName);
+  const out = {};
+  for (const [key, info] of Object.entries(shape)) {
+    if (!base.has(key)) out[key] = info;
+  }
+  return out;
+}
+
+function assertPropertyShape(label, actualShape, expectedShape) {
+  assertSame(`${label} keys`, Object.keys(actualShape), Object.keys(expectedShape));
+  for (const [key, expected] of Object.entries(expectedShape)) {
+    const actual = actualShape[key];
+    if (!actual || actual.optional !== expected.optional || actual.type !== expected.type) {
+      fail(`${label}.${key} type does not match`, {
+        actual,
+        expected,
+        actualShape,
+        expectedShape,
+      });
+    }
+  }
 }
 
 function collectStringLiterals(node, out = []) {
@@ -597,9 +679,9 @@ function extractPythonContract(adapterPath, basePath) {
 
 function payloadKeysFor(contract, eventTypes) {
   const wanted = new Set(eventTypes);
-  return unique(contract.append_events
-    .filter((event) => wanted.has(event.type))
-    .flatMap((event) => event.payload_keys || []));
+  return unique(
+    contract.append_events.filter((event) => wanted.has(event.type)).flatMap((event) => event.payload_keys || []),
+  );
 }
 
 function routeStrings(contract) {
@@ -619,9 +701,7 @@ function errorCodes(contract) {
 }
 
 function errorStatusesByCode(contract, code) {
-  return unique(contract.error_calls
-    .filter((error) => error.code === code)
-    .map((error) => error.status));
+  return unique(contract.error_calls.filter((error) => error.code === code).map((error) => error.status));
 }
 
 function verifyAdapterContract(label, adapterPath, basePath, contracts) {
@@ -653,9 +733,50 @@ function verifyAdapterContract(label, adapterPath, basePath, contracts) {
     tsObjectKeys(contracts, 'LocalDesktopGatewayEventBase'),
     hermes.row_to_event_keys,
   );
+  assertPropertyShape(
+    `${context}: LocalDesktopGatewayEventBase property types`,
+    tsPropertyShape(contracts, 'LocalDesktopGatewayEventBase'),
+    {
+      seq: { optional: false, type: 'number' },
+      type: { optional: false, type: 'string' },
+      conversation_id: { optional: false, type: 'string' },
+      message_id: { optional: false, type: 'null|string' },
+      created_at: { optional: false, type: 'number' },
+    },
+  );
+  assertSame(
+    `${context}: LocalDesktopMessageCreatedEvent payload keys`,
+    tsEventPayloadKeys(contracts, 'LocalDesktopMessageCreatedEvent'),
+    payloadKeysFor(hermes, ['message.created']),
+  );
+  assertPropertyShape(
+    `${context}: LocalDesktopMessageCreatedEvent payload property types`,
+    tsEventPayloadShape(contracts, 'LocalDesktopMessageCreatedEvent'),
+    {
+      text: { optional: false, type: 'string' },
+      reply_to: { optional: false, type: 'null|string' },
+      metadata: { optional: false, type: 'object' },
+    },
+  );
+  assertSame(
+    `${context}: LocalDesktopMessageUpdatedEvent payload keys`,
+    tsEventPayloadKeys(contracts, 'LocalDesktopMessageUpdatedEvent'),
+    payloadKeysFor(hermes, ['message.updated']),
+  );
+  assertPropertyShape(
+    `${context}: LocalDesktopMessageUpdatedEvent payload property types`,
+    tsEventPayloadShape(contracts, 'LocalDesktopMessageUpdatedEvent'),
+    {
+      text: { optional: false, type: 'string' },
+      finalize: { optional: false, type: 'boolean' },
+    },
+  );
   assertSame(
     `${context}: LocalDesktopMessageEvent payload keys`,
-    tsObjectKeys(contracts, 'LocalDesktopMessageEvent').filter((key) => key !== 'type'),
+    [
+      ...tsEventPayloadKeys(contracts, 'LocalDesktopMessageCreatedEvent'),
+      ...tsEventPayloadKeys(contracts, 'LocalDesktopMessageUpdatedEvent'),
+    ],
     payloadKeysFor(hermes, ['message.created', 'message.updated']),
   );
   assertSame(
@@ -668,9 +789,50 @@ function verifyAdapterContract(label, adapterPath, basePath, contracts) {
     tsObjectKeys(contracts, 'LocalDesktopAttachmentEvent').filter((key) => key !== 'type'),
     payloadKeysFor(hermes, ['attachment.created']),
   );
+  assertPropertyShape(
+    `${context}: LocalDesktopAttachmentEvent payload property types`,
+    tsEventPayloadShape(contracts, 'LocalDesktopAttachmentEvent'),
+    {
+      attachment_type: { optional: false, type: 'string' },
+      ref: { optional: false, type: 'string' },
+      caption: { optional: false, type: 'null|string' },
+      reply_to: { optional: false, type: 'null|string' },
+      metadata: { optional: false, type: 'object' },
+    },
+  );
+  assertSame(
+    `${context}: LocalDesktopTypingStartedEvent payload keys`,
+    tsEventPayloadKeys(contracts, 'LocalDesktopTypingStartedEvent'),
+    payloadKeysFor(hermes, ['typing.started']),
+  );
+  assertPropertyShape(
+    `${context}: LocalDesktopTypingStartedEvent payload property types`,
+    tsEventPayloadShape(contracts, 'LocalDesktopTypingStartedEvent'),
+    {
+      inbound_message_id: { optional: false, type: 'null|string' },
+      metadata: { optional: false, type: 'object' },
+    },
+  );
+  assertSame(
+    `${context}: LocalDesktopTypingStoppedEvent payload keys`,
+    tsEventPayloadKeys(contracts, 'LocalDesktopTypingStoppedEvent'),
+    payloadKeysFor(hermes, ['typing.stopped']),
+  );
+  assertPropertyShape(
+    `${context}: LocalDesktopTypingStoppedEvent payload property types`,
+    tsEventPayloadShape(contracts, 'LocalDesktopTypingStoppedEvent'),
+    {
+      inbound_message_id: { optional: false, type: 'null|string' },
+      outcome: { optional: false, type: 'string' },
+      transient: { optional: false, type: 'boolean' },
+    },
+  );
   assertSame(
     `${context}: LocalDesktopTypingEvent payload keys`,
-    tsObjectKeys(contracts, 'LocalDesktopTypingEvent').filter((key) => key !== 'type'),
+    [
+      ...tsEventPayloadKeys(contracts, 'LocalDesktopTypingStartedEvent'),
+      ...tsEventPayloadKeys(contracts, 'LocalDesktopTypingStoppedEvent'),
+    ],
     payloadKeysFor(hermes, ['typing.started', 'typing.stopped']),
   );
   assertSame(
@@ -678,16 +840,46 @@ function verifyAdapterContract(label, adapterPath, basePath, contracts) {
     tsObjectKeys(contracts, 'LocalDesktopInboundMessage'),
     hermes.inbound_hash_keys,
   );
+  assertPropertyShape(
+    `${context}: LocalDesktopInboundMessage property types`,
+    tsPropertyShape(contracts, 'LocalDesktopInboundMessage'),
+    {
+      conversation_id: { optional: false, type: 'string' },
+      message_id: { optional: false, type: 'string' },
+      text: { optional: false, type: 'string' },
+      chat_name: { optional: true, type: 'null|string' },
+      metadata: { optional: true, type: 'object' },
+    },
+  );
   assertSame(
     `${context}: LocalDesktopMessageAcceptedResponse keys`,
     tsObjectKeys(contracts, 'LocalDesktopMessageAcceptedResponse'),
     acceptedResponseKeys(hermes),
+  );
+  assertPropertyShape(
+    `${context}: LocalDesktopMessageAcceptedResponse property types`,
+    tsPropertyShape(contracts, 'LocalDesktopMessageAcceptedResponse'),
+    {
+      ok: { optional: false, type: 'boolean' },
+      accepted: { optional: false, type: 'boolean' },
+      duplicate: { optional: false, type: 'boolean' },
+    },
   );
   assertSame(`${context}: accepted response HTTP status`, acceptedResponseStatuses(hermes), ['202']);
   assertSame(
     `${context}: LocalDesktopHealthResponse keys`,
     tsObjectKeys(contracts, 'LocalDesktopHealthResponse'),
     hermes.health_keys,
+  );
+  assertPropertyShape(
+    `${context}: LocalDesktopHealthResponse property types`,
+    tsPropertyShape(contracts, 'LocalDesktopHealthResponse'),
+    {
+      ok: { optional: false, type: 'boolean' },
+      status: { optional: false, type: 'string' },
+      platform: { optional: false, type: 'string' },
+      latest_seq: { optional: false, type: 'number' },
+    },
   );
   assertSame(
     `${context}: LocalDesktopHealthResponse string literals`,
@@ -699,13 +891,26 @@ function verifyAdapterContract(label, adapterPath, basePath, contracts) {
     tsObjectKeys(contracts, 'LocalDesktopErrorResponse'),
     hermes.json_error_keys,
   );
+  assertPropertyShape(
+    `${context}: LocalDesktopErrorResponse property types`,
+    tsPropertyShape(contracts, 'LocalDesktopErrorResponse'),
+    {
+      ok: { optional: false, type: 'boolean' },
+      error: { optional: false, type: 'string' },
+      message: { optional: false, type: 'string' },
+    },
+  );
   assertSame(
     `${context}: LocalDesktopErrorResponse error codes`,
     tsStringLiteralsInType(contracts, 'LocalDesktopErrorResponse'),
     errorCodes(hermes),
   );
   assertSame(`${context}: replay_window_expired status`, errorStatusesByCode(hermes, 'replay_window_expired'), ['409']);
-  assertSame(`${context}: duplicate_message_conflict status`, errorStatusesByCode(hermes, 'duplicate_message_conflict'), ['409']);
+  assertSame(
+    `${context}: duplicate_message_conflict status`,
+    errorStatusesByCode(hermes, 'duplicate_message_conflict'),
+    ['409'],
+  );
   assertSame(`${context}: unauthorized status`, errorStatusesByCode(hermes, 'unauthorized'), ['401']);
   assertSame(`${context}: local_desktop HTTP routes`, routeStrings(hermes), EXPECTED_LOCAL_DESKTOP_ROUTES);
 
@@ -744,11 +949,7 @@ function verifyAgentUiSurfaces(canonicalHermes, contracts, agents, gatewayClient
     pluginEnv.required_env,
     canonicalHermes.register.required_env || [],
   );
-  assertIncludesAll(
-    'local_desktop plugin.yaml env declarations',
-    declaredPluginEnv,
-    adapterRegisterEnv,
-  );
+  assertIncludesAll('local_desktop plugin.yaml env declarations', declaredPluginEnv, adapterRegisterEnv);
   assertIncludesAll(
     'Agent UI gateway env file keys',
     stringArrayVariable(hermesRuntime, 'LOCAL_DESKTOP_ENV_KEYS'),
@@ -770,7 +971,8 @@ function verify() {
   const adapters = adapterCandidates();
 
   if (!adapters.length) fail('No local_desktop adapter candidates found.');
-  const canonical = adapters.find((candidate) => path.resolve(candidate.path) === path.resolve(vendorAdapterPath)) || adapters[0];
+  const canonical =
+    adapters.find((candidate) => path.resolve(candidate.path) === path.resolve(vendorAdapterPath)) || adapters[0];
   const canonicalHermes = verifyAdapterContract(canonical.label, canonical.path, basePath, contracts);
 
   for (const candidate of adapters) {
@@ -780,13 +982,15 @@ function verify() {
 
   verifyAgentUiSurfaces(canonicalHermes, contracts, agents, gatewayClient, hermesRuntime);
 
-  console.log([
-    'Hermes local_desktop contracts verified:',
-    `  TypeScript contracts: ${relative(contractsPath)}`,
-    `  Canonical adapter: ${relative(canonical.path)}`,
-    `  Hermes base contract: ${relative(basePath)}`,
-    `  Adapter candidates checked: ${adapters.length}`,
-  ].join('\n'));
+  console.log(
+    [
+      'Hermes local_desktop contracts verified:',
+      `  TypeScript contracts: ${relative(contractsPath)}`,
+      `  Canonical adapter: ${relative(canonical.path)}`,
+      `  Hermes base contract: ${relative(basePath)}`,
+      `  Adapter candidates checked: ${adapters.length}`,
+    ].join('\n'),
+  );
 }
 
 try {

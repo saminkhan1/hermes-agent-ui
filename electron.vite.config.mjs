@@ -1,9 +1,9 @@
-import { defineConfig } from 'electron-vite'
+import { defineConfig } from 'electron-vite';
 
 // Dedicated dev port + strictPort so `ELECTRON_RENDERER_URL` matches the real listener.
 // When the default port is busy, Vite increments until free, but electron-vite still reads
 // `config.server.port` (the requested port) — then Electron loadURL hangs on the wrong URL.
-const RENDERER_DEV_PORT = 56247
+const RENDERER_DEV_PORT = 56247;
 const MAIN_ENTRIES = {
   index: 'src/main/index.ts',
   agents: 'src/main/agents.ts',
@@ -19,7 +19,7 @@ const MAIN_ENTRIES = {
   'reliability-schema': 'src/main/reliability-schema.js',
   'reliability-telemetry': 'src/main/reliability-telemetry.ts',
   'window-lifecycle': 'src/main/window-lifecycle.ts',
-}
+};
 
 export default defineConfig({
   main: {
@@ -46,4 +46,4 @@ export default defineConfig({
       },
     },
   },
-})
+});

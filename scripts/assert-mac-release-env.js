@@ -2,8 +2,14 @@
 
 const { spawnSync } = require('node:child_process');
 
-const signingMode = String(process.argv[2] || process.env.AGENT_UI_MAC_SIGNING_MODE || 'bootstrap').trim().toLowerCase();
-const appMode = String(process.argv[3] || process.env.AGENT_UI_RELEASE_MODE || process.env.AGENT_UI_RELEASE_FLAVOR || 'connector').trim().toLowerCase();
+const signingMode = String(process.argv[2] || process.env.AGENT_UI_MAC_SIGNING_MODE || 'bootstrap')
+  .trim()
+  .toLowerCase();
+const appMode = String(
+  process.argv[3] || process.env.AGENT_UI_RELEASE_MODE || process.env.AGENT_UI_RELEASE_FLAVOR || 'connector',
+)
+  .trim()
+  .toLowerCase();
 
 function hasDeveloperIdIdentity() {
   if (String(process.env.CSC_LINK || '').trim()) return true;

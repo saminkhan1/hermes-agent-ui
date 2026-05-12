@@ -9,15 +9,11 @@ import type {
   LocalDesktopMessageAcceptedResponse,
 } from '../shared/contracts.ts';
 
-const fs = require('fs');
-const path = require('path');
-const { randomUUID } = require('crypto');
-const { setTimeout: delay } = require('timers/promises');
-const {
-  defaultGatewayEnvPathForMode,
-  getAgentUIConfigDir,
-  realUserHomeDir,
-} = require('./hermes-release');
+import fs from 'node:fs';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
+import { defaultGatewayEnvPathForMode, getAgentUIConfigDir } from './hermes-release';
 
 const DEFAULT_POST_TIMEOUT_MS = 15000;
 
@@ -42,10 +38,10 @@ type GatewayState = {
   lastSeq: number;
 };
 type PostMessageInput = {
-  conversationId?: unknown;
-  messageId?: unknown;
-  text?: unknown;
-  chatName?: unknown;
+  conversationId?: LooseBoundaryValue;
+  messageId?: LooseBoundaryValue;
+  text?: LooseBoundaryValue;
+  chatName?: LooseBoundaryValue;
   metadata?: JsonObject;
   retries?: number;
   timeoutMs?: number;
@@ -54,26 +50,19 @@ type HealthOptions = {
   timeoutMs?: number;
 };
 type GatewayError = Error & {
-  cause?: unknown;
+  cause?: LooseBoundaryValue;
   code?: string;
   status?: number;
-  body?: unknown;
+  body?: LooseBoundaryValue;
 };
 
 function defaultStatePath() {
   return path.join(getAgentUIConfigDir(), 'hermes-gateway.json');
 }
 
-function defaultGatewayEnvPath() {
-  return defaultGatewayEnvPathForMode();
-}
-
-function unquoteEnvValue(value: any) {
+function unquoteEnvValue(value: LooseBoundaryValue) {
   const text = String(value || '').trim();
-  if (
-    (text.startsWith('"') && text.endsWith('"')) ||
-    (text.startsWith("'") && text.endsWith("'"))
-  ) {
+  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
     return text.slice(1, -1);
   }
   return text;
@@ -91,16 +80,15 @@ function parseGatewayEnvText(text = ''): Record<string, string> {
   return out;
 }
 
-function readGatewayEnvFile(file = defaultGatewayEnvPath()): Record<string, string> {
+function readGatewayEnvFile(file = defaultGatewayEnvPathForMode()): Record<string, string> {
   try {
-    if (!fs.existsSync(file)) return {};
     return parseGatewayEnvText(fs.readFileSync(file, 'utf8'));
   } catch {
     return {};
   }
 }
 
-function gatewayEnvValue(name: any) {
+function gatewayEnvValue(name: LooseBoundaryValue) {
   const direct = String(process.env[name] || '').trim();
   if (direct) return direct;
   return String(readGatewayEnvFile()[name] || '').trim();
@@ -118,9 +106,8 @@ function gatewayKeyFromEnv() {
   return gatewayEnvValue('AGENT_UI_HERMES_GATEWAY_KEY') || gatewayEnvValue('LOCAL_DESKTOP_GATEWAY_KEY');
 }
 
-function readJsonFile(file: any, fallback: any) {
+function readJsonFile(file: LooseBoundaryValue, fallback: LooseBoundaryValue) {
   try {
-    if (!fs.existsSync(file)) return fallback;
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
     return data && typeof data === 'object' ? data : fallback;
   } catch {
@@ -128,29 +115,29 @@ function readJsonFile(file: any, fallback: any) {
   }
 }
 
-function writeJsonFile(file: any, value: any) {
+function writeJsonFile(file: LooseBoundaryValue, value: LooseBoundaryValue) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(value, null, 2), 'utf8');
 }
 
-function isRetryableStatus(status: any) {
+function isRetryableStatus(status: LooseBoundaryValue) {
   const code = Number(status);
   return code === 429 || (code >= 500 && code <= 599);
 }
 
-function gatewayConnectionErrorMessage(error: any, baseUrl: any) {
+function gatewayConnectionErrorMessage(error: LooseBoundaryValue, baseUrl: LooseBoundaryValue) {
   const raw = error && error.message ? error.message : String(error || 'disconnected');
   const cause = error && error.cause && error.cause.message ? ` (${error.cause.message})` : '';
   return `${raw}${cause}. Check that Hermes gateway is running at ${baseUrl}.`;
 }
 
-function gatewayConnectionError(error: any, baseUrl: any) {
+function gatewayConnectionError(error: LooseBoundaryValue, baseUrl: LooseBoundaryValue) {
   const wrapped: GatewayError = new Error(gatewayConnectionErrorMessage(error, baseUrl));
   wrapped.cause = error;
   return wrapped;
 }
 
-function parseSseFrame(frame: any): LocalDesktopGatewayEvent | JsonObject | null {
+function parseSseFrame(frame: LooseBoundaryValue): LocalDesktopGatewayEvent | JsonObject | null {
   const event = { event: 'message', data: '', id: '' };
   for (const rawLine of String(frame || '').split(/\r?\n/)) {
     if (!rawLine || rawLine.startsWith(':')) continue;
@@ -216,8 +203,11 @@ class HermesGatewayClient {
     const savedState = readJsonFile(this.statePath, {});
     const savedLastSeq = Number(savedState && savedState.lastSeq);
     const resetLastSeq = !!opts.resetLastSeq;
-    const hasStaleStateKeys = !!(savedState && typeof savedState === 'object' &&
-      Object.keys(savedState).some((key) => key !== 'lastSeq'));
+    const hasStaleStateKeys = !!(
+      savedState &&
+      typeof savedState === 'object' &&
+      Object.keys(savedState).some((key) => key !== 'lastSeq')
+    );
     this.state = {
       lastSeq: !resetLastSeq && Number.isFinite(savedLastSeq) && savedLastSeq > 0 ? Math.trunc(savedLastSeq) : 0,
     };
@@ -258,7 +248,7 @@ class HermesGatewayClient {
     if (this.stateDirty || this.stateSaveTimer) this.saveState();
   }
 
-  logSseDisconnect(error: any) {
+  logSseDisconnect(error: LooseBoundaryValue) {
     const message = gatewayConnectionErrorMessage(error, this.baseUrl);
     const now = Date.now();
     if (
@@ -273,12 +263,12 @@ class HermesGatewayClient {
     this.log.warn('[agent-ui] Hermes gateway SSE disconnected:', message);
   }
 
-  reportConnection(state: string, error: any = null) {
+  reportConnection(state: string, error: LooseBoundaryValue = null) {
     try {
       this.onConnectionChange({
         state,
         baseUrl: this.baseUrl,
-        error: error && error.message ? error.message : (error ? String(error) : ''),
+        error: error && error.message ? error.message : error ? String(error) : '',
       });
     } catch {
       // Status callbacks must never break the reconnect loop.
@@ -290,7 +280,10 @@ class HermesGatewayClient {
   }
 
   authHeaders(extra: Record<string, string> = {}) {
-    if (!this.key) throw new Error('Missing LOCAL_DESKTOP_GATEWAY_KEY for Hermes gateway. Set LOCAL_DESKTOP_GATEWAY_KEY, AGENT_UI_HERMES_GATEWAY_KEY, or create the active Hermes .env file.');
+    if (!this.key)
+      throw new Error(
+        'Missing LOCAL_DESKTOP_GATEWAY_KEY for Hermes gateway. Set LOCAL_DESKTOP_GATEWAY_KEY, AGENT_UI_HERMES_GATEWAY_KEY, or create the active Hermes .env file.',
+      );
     return {
       ...extra,
       authorization: `Bearer ${this.key}`,
@@ -303,10 +296,18 @@ class HermesGatewayClient {
       signal: Number(timeoutMs) > 0 ? AbortSignal.timeout(Number(timeoutMs)) : undefined,
     });
     if (!res || !res.ok) throw new Error(`Gateway health failed: ${res ? res.status : 'no response'}`);
-    return await res.json() as LocalDesktopHealthResponse;
+    return (await res.json()) as LocalDesktopHealthResponse;
   }
 
-  async postMessage({ conversationId, messageId, text, chatName, metadata = {}, retries = 1, timeoutMs = this.postTimeoutMs }: PostMessageInput): Promise<LocalDesktopMessageAcceptedResponse | JsonObject> {
+  async postMessage({
+    conversationId,
+    messageId,
+    text,
+    chatName,
+    metadata = {},
+    retries = 1,
+    timeoutMs = this.postTimeoutMs,
+  }: PostMessageInput): Promise<LocalDesktopMessageAcceptedResponse | JsonObject> {
     if (!this.fetchImpl) throw new Error('fetch is not available.');
     const payload: LocalDesktopInboundMessage = {
       conversation_id: String(conversationId || '').trim(),
@@ -321,7 +322,7 @@ class HermesGatewayClient {
     };
     const bodyText = JSON.stringify(payload);
     const attempts = Math.max(1, Math.trunc(Number(retries) || 0) + 1);
-    let lastError: unknown = null;
+    let lastError: LooseBoundaryValue = null;
     for (let attempt = 0; attempt < attempts; attempt++) {
       try {
         const res = await this.fetchImpl(`${this.baseUrl}/messages`, {
@@ -330,24 +331,20 @@ class HermesGatewayClient {
           body: bodyText,
           signal: Number(timeoutMs) > 0 ? AbortSignal.timeout(Number(timeoutMs)) : undefined,
         });
-        let body: (LocalDesktopMessageAcceptedResponse | LocalDesktopErrorResponse | JsonObject | null) = null;
+        let body: LocalDesktopMessageAcceptedResponse | LocalDesktopErrorResponse | JsonObject | null = null;
         try {
           body = await res.json();
         } catch {
           body = null;
         }
         if (res.ok) return body || { ok: true };
-        const errorText = body && 'message' in body
-          ? body.message
-          : body && 'error' in body
-            ? body.error
-            : '';
+        const errorText = body && 'message' in body ? body.message : body && 'error' in body ? body.error : '';
         const error: GatewayError = new Error(errorText ? String(errorText) : `Gateway message failed: ${res.status}`);
         error.status = res.status;
         error.body = body;
         if (!isRetryableStatus(res.status) || attempt === attempts - 1) throw error;
         lastError = error;
-      } catch (e: any) {
+      } catch (e: LooseBoundaryValue) {
         if (e && (e.name === 'AbortError' || e.name === 'TimeoutError')) {
           const timeoutError: GatewayError = new Error(`Gateway message timed out after ${Number(timeoutMs)}ms`);
           timeoutError.code = 'ETIMEDOUT';
@@ -364,7 +361,10 @@ class HermesGatewayClient {
   }
 
   start() {
-    if (!this.key) throw new Error('Missing LOCAL_DESKTOP_GATEWAY_KEY for Hermes gateway. Set LOCAL_DESKTOP_GATEWAY_KEY, AGENT_UI_HERMES_GATEWAY_KEY, or create the active Hermes .env file.');
+    if (!this.key)
+      throw new Error(
+        'Missing LOCAL_DESKTOP_GATEWAY_KEY for Hermes gateway. Set LOCAL_DESKTOP_GATEWAY_KEY, AGENT_UI_HERMES_GATEWAY_KEY, or create the active Hermes .env file.',
+      );
     if (this.running) return;
     this.running = true;
     this.streamPromise = this.streamLoop();
@@ -389,7 +389,7 @@ class HermesGatewayClient {
       try {
         await this.openEventStream();
         delayMs = 500;
-      } catch (e: any) {
+      } catch (e: LooseBoundaryValue) {
         if (!this.running) return;
         if (e && e.status === 409 && e.code === 'replay_window_expired') {
           this.state.lastSeq = 0;
@@ -473,15 +473,12 @@ class HermesGatewayClient {
   }
 }
 
-module.exports = {
+export {
   HermesGatewayClient,
   defaultStatePath,
-  defaultGatewayEnvPath,
   gatewayBaseUrlFromEnv,
   gatewayKeyFromEnv,
-  getAgentUIConfigDir,
   parseSseFrame,
   parseGatewayEnvText,
-  realUserHomeDir,
   readGatewayEnvFile,
 };

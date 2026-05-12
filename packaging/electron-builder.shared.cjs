@@ -12,13 +12,17 @@ const APP_MODES = {
 };
 
 function normalizeAppMode(value) {
-  const mode = String(value || '').trim().toLowerCase();
+  const mode = String(value || '')
+    .trim()
+    .toLowerCase();
   if (!APP_MODES[mode]) throw new Error(`unknown agent-UI app mode: ${value}`);
   return mode;
 }
 
 function normalizeSigningMode(value) {
-  const mode = String(value || '').trim().toLowerCase();
+  const mode = String(value || '')
+    .trim()
+    .toLowerCase();
   if (!['bootstrap', 'developer-id'].includes(mode)) {
     throw new Error(`unknown agent-UI signing mode: ${value}`);
   }

@@ -1,4 +1,4 @@
-export function rectForEvalElement(el: any, { includeHidden = false } = {}) {
+export function rectForEvalElement(el: Element | null, { includeHidden = false }: { includeHidden?: boolean } = {}) {
   if (!(el instanceof HTMLElement)) return null;
   if (!includeHidden && (el.hidden || window.getComputedStyle(el).display === 'none')) return null;
   const rect = el.getBoundingClientRect();
@@ -15,14 +15,15 @@ export function rectForEvalElement(el: any, { includeHidden = false } = {}) {
   };
 }
 
-export function activeElementForEval(activeElement = document.activeElement) {
+export function activeElementForEval(activeElement: Element | null = document.activeElement) {
   return activeElement ? { id: activeElement.id || '', tag: activeElement.tagName || '' } : null;
 }
 
-export function visibleTextForEval({ root = document.body, maxPreviewLength = 4000 } = {}) {
-  const visibleText = root && typeof root.innerText === 'string'
-    ? root.innerText.replace(/\s+/g, ' ').trim()
-    : '';
+export function visibleTextForEval({
+  root = document.body,
+  maxPreviewLength = 4000,
+}: { root?: HTMLElement; maxPreviewLength?: number } = {}) {
+  const visibleText = root && typeof root.innerText === 'string' ? root.innerText.replace(/\s+/g, ' ').trim() : '';
   return {
     visibleTextLength: visibleText.length,
     visibleTextPreview: visibleText.slice(0, maxPreviewLength),
