@@ -33,7 +33,7 @@ type PreparedCatRun = MutableJsonObject & {
   closeModal?: boolean;
 };
 
-import { applyEvalConfigArgv } from './eval-config';
+import { applyEvalConfigArgv, recordEvalBoot } from './eval-config';
 import { getTrace, runDir as evalRunDir, runId as evalRunId, enabled as evalTraceEnabled } from './eval-trace';
 import { telemetry } from './reliability-telemetry';
 import {
@@ -2643,6 +2643,10 @@ function registerNewCatShortcut() {
 
 function startEvalServerIfNeeded() {
   if (closeEvalServer) return;
+  recordEvalBoot('start-eval-server-if-needed', {
+    enabled: process.env.AGENT_UI_EVAL === '1',
+    hasToken: !!String(process.env.AGENT_UI_EVAL_TOKEN || '').trim(),
+  });
   closeEvalServer = startAgentUIEvalServer(
     {
       getConversation: async (catId: LooseBoundaryValue) => {
@@ -2708,12 +2712,14 @@ function startEvalServerIfNeeded() {
 app.whenReady().then(() => {
   app.setName('agent-UI');
   applyEvalConfigArgv();
+  recordEvalBoot('app-ready');
   loadInputModeSetting();
   installPetAssetProtocol();
   installAttachmentProtocol();
   refreshPetCharacterOptions();
   void loadGetWindowsModule();
   startEvalServerIfNeeded();
+  recordEvalBoot('after-start-eval-server', { evalServer: !!closeEvalServer });
   if (IS_MAC && app.dock && process.env.AGENT_UI_EVAL !== '1') {
     app.dock.hide();
   }

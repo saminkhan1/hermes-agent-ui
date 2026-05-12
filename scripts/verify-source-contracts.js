@@ -196,15 +196,11 @@ function verifyEvalSurface() {
   requireText('src/main/eval-server.ts', 'AGENT_UI_EVAL_TOKEN', 'eval token gate');
   requireText('src/main/index.ts', "from './eval-config'", 'early eval config import');
   requireText('src/main/index.ts', 'applyEvalConfigArgv();', 'ready-time eval config application');
+  requireText('src/main/index.ts', 'recordEvalBoot', 'installed-app eval startup evidence');
   requireText('src/main/eval-config.ts', '--agent-ui-eval-config=', 'installed-app eval config handoff');
   requireText('src/main/eval-config.ts', "getSwitchValue('agent-ui-eval-config')", 'Electron eval config switch');
-  requireText('src/main/eval-config.ts', 'agent-ui-eval-config.json', 'installed-app cwd eval config fallback');
-  requireText(
-    'src/main/eval-config.ts',
-    'agent-ui-eval-config-${typeof process.getuid',
-    'installed-app tmp eval config fallback',
-  );
   requireText('src/main/eval-config.ts', 'EVAL_CONFIG_ENV_KEYS', 'eval config env allowlist');
+  requireText('src/main/eval-config.ts', 'AGENT_UI_EVAL_BOOT_FILE', 'eval boot evidence allowlist');
   requireText('src/main/eval-server.ts', 'timingSafeEqual', 'constant-time eval auth compare');
   requireText('src/main/eval-server.ts', "server.listen(port, '127.0.0.1'", 'loopback-only eval server');
   for (const route of ['/start', '/followup', '/cancel', '/open-conversation', '/wait', '/ui-targets']) {
