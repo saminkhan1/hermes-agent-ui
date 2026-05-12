@@ -11,10 +11,6 @@ const PET_DEFAULT_SPRITESHEET = 'spritesheet.webp';
 const PET_SPRITESHEET_WIDTH = 1536;
 const PET_SPRITESHEET_HEIGHT = 1872;
 
-function ensureDir(dir: any) {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-}
-
 function readJsonFile(file: any) {
   const data = JSON.parse(fs.readFileSync(file, 'utf8'));
   return data && typeof data === 'object' ? data : {};
@@ -48,10 +44,6 @@ function readPngDimensions(buffer: any) {
   };
 }
 
-function readUint24LE(buffer: any, offset: any) {
-  return buffer[offset] | (buffer[offset + 1] << 8) | (buffer[offset + 2] << 16);
-}
-
 function readWebpDimensions(buffer: any) {
   if (
     buffer.length < 16 ||
@@ -66,8 +58,8 @@ function readWebpDimensions(buffer: any) {
     if (data + size > buffer.length) return null;
     if (type === 'VP8X' && size >= 10) {
       return {
-        width: readUint24LE(buffer, data + 4) + 1,
-        height: readUint24LE(buffer, data + 7) + 1,
+        width: buffer.readUIntLE(data + 4, 3) + 1,
+        height: buffer.readUIntLE(data + 7, 3) + 1,
       };
     }
     if (type === 'VP8L' && size >= 5 && buffer[data] === 0x2f) {
@@ -159,7 +151,7 @@ function loadPetPackage(packageDir: any, manifestFile: any) {
 
 function scanPetPackageRoot(rootDir: any, manifestFile: any, { create = false } = {}) {
   try {
-    if (create) ensureDir(rootDir);
+    if (create) fs.mkdirSync(rootDir, { recursive: true });
     if (!fs.existsSync(rootDir)) return [];
     return fs.readdirSync(rootDir, { withFileTypes: true })
       .filter((entry: any) => entry.isDirectory())

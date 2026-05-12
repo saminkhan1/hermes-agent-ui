@@ -8,6 +8,9 @@ const path = require('path');
 const net = require('net');
 const { spawn, execFile } = require('child_process');
 const { randomBytes } = require('crypto');
+const { setTimeout: delay } = require('timers/promises');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFile);
 const {
   defaultGatewayEnvPath,
   parseGatewayEnvText,
@@ -16,9 +19,7 @@ const {
 const {
   defaultConnectorHermesCandidates,
   defaultHermesHomeForMode,
-  isConnectorMode,
   readConnectorRuntimeState,
-  releaseMode,
   rememberConnectorHermesCommand,
 } = require('./hermes-release');
 
@@ -32,6 +33,19 @@ const BASE_RUNTIME_PATH = '/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/
 
 function safeRuntimePath() {
   return `${BASE_RUNTIME_PATH}:${path.join(realUserHomeDir(), '.local', 'bin')}`;
+}
+
+function localDesktopPluginRoot() {
+  const resourcesPath = String((process as any).resourcesPath || '');
+  const resourceRoot = resourcesPath
+    ? path.join(resourcesPath, 'hermes-platforms')
+    : '';
+  if (resourceRoot && fs.existsSync(path.join(resourceRoot, 'local_desktop', 'plugin.yaml'))) {
+    return resourceRoot;
+  }
+  const devRoot = path.resolve(__dirname, '..', '..', 'vendor', 'hermes-platforms');
+  if (fs.existsSync(path.join(devRoot, 'local_desktop', 'plugin.yaml'))) return devRoot;
+  return '';
 }
 
 type CommandError = Error & {
@@ -74,7 +88,6 @@ const GATEWAY_READY_INTERVAL_MS = 250;
 const GATEWAY_READY_REQUEST_TIMEOUT_MS = 500;
 const GATEWAY_OCCUPIED_PORT_PREFLIGHT_TIMEOUT_MS = 150;
 const GATEWAY_OUTPUT_TAIL_CHARS = 4000;
-const CONNECTOR_GATEWAY_RESTART_APPROVED_ENV = 'AGENT_UI_CONNECTOR_GATEWAY_RESTART_APPROVED';
 const LOCAL_DESKTOP_ENV_KEYS = [
   'LOCAL_DESKTOP_GATEWAY_KEY',
   'LOCAL_DESKTOP_ALLOWED_USERS',
@@ -116,19 +129,9 @@ function executableExists(filePath: any) {
   }
 }
 
-function execFileText(command: any, args: any, opts: ExecTextOptions = { encoding: 'utf8' }) {
-  return new Promise((resolve, reject) => {
-    execFile(command, args, { encoding: 'utf8', timeout: 5000, ...opts }, (err: any, stdout: any, stderr: any) => {
-      if (err) {
-        const commandError = err as CommandError;
-        commandError.stdout = stdout;
-        commandError.stderr = stderr;
-        reject(commandError);
-        return;
-      }
-      resolve(String(stdout || ''));
-    });
-  });
+async function execFileText(command: any, args: any, opts: ExecTextOptions = { encoding: 'utf8' }) {
+  const { stdout } = await execFileAsync(command, args, { encoding: 'utf8', timeout: 5000, ...opts });
+  return String(stdout || '');
 }
 
 function execFileTextWithJsonEvents(command: any, args: any, opts: JsonEventOptions = {}, onJsonLine: any) {
@@ -234,28 +237,6 @@ function ensureDir(dir: any) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-function packageRootFromMainDir(mainDir = __dirname) {
-  return path.resolve(mainDir, '..', '..');
-}
-
-function bundledHermesCandidates() {
-  const candidates = [];
-  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-  if (resourcesPath) {
-    candidates.push(path.join(resourcesPath, 'hermes-runtime', 'bin', 'hermes'));
-  }
-  candidates.push(path.join(packageRootFromMainDir(), 'build', 'hermes-runtime', 'bin', 'hermes'));
-  return candidates;
-}
-
-function bundledHermesCommand() {
-  return bundledHermesCandidates().find(executableExists) || '';
-}
-
-function expectedBundledHermesCommand() {
-  return bundledHermesCandidates()[0] || '';
-}
-
 function absoluteCommandPath(value: any) {
   const command = String(value || '').trim();
   if (!command) return '';
@@ -327,35 +308,13 @@ function resolveConnectorHermesCommand(configured = '') {
 
 function resolveHermesCommand() {
   const configured = String(process.env[CLI_BIN_ENV] || '').trim();
-  const mode = releaseMode();
-  if (isConnectorMode(mode)) return resolveConnectorHermesCommand(configured);
-  const bundled = bundledHermesCommand();
-  const requested = configured || bundled;
-  return {
-    command: absoluteCommandPath(requested),
-    configured: !!configured,
-    bundled: !!requested && requested === bundled,
-    releaseMode: 'standalone',
-    needsOnboarding: false,
-  };
+  return resolveConnectorHermesCommand(configured);
 }
 
 function hermesCwd(command: any) {
-  const bundled = bundledHermesCommand();
-  if (bundled && command === bundled) return path.dirname(path.dirname(bundled));
   const connector = connectorHermesRuntimeForCommand(command);
   if (connector && connector.agentRoot) return connector.agentRoot;
   return process.cwd();
-}
-
-function bundledHermesRootForCommand(command: any) {
-  const resolved = path.resolve(String(command || ''));
-  const binDir = path.dirname(resolved);
-  const root = path.dirname(binDir);
-  if (path.basename(resolved) !== 'hermes') return '';
-  if (path.basename(binDir) !== 'bin') return '';
-  if (!fs.existsSync(path.join(root, 'hermes-agent', 'tools', 'voice_mode.py'))) return '';
-  return root;
 }
 
 function connectorHermesRuntimeForCommand(command: any) {
@@ -388,25 +347,9 @@ function connectorHermesRuntimeForCommand(command: any) {
   return null;
 }
 
-async function bundledHermesRuntimeForCommand(command: any) {
-  const root = bundledHermesRootForCommand(command);
-  if (!root) return null;
-  const python = await bundledHermesPython(command);
-  if (!python) return null;
-  const agentRoot = path.join(root, 'hermes-agent');
-  return {
-    agentRoot,
-    hermesHome: defaultHermesHome(),
-    projectRoot: agentRoot,
-    python,
-  };
-}
-
 async function hermesPythonRuntimeForCommand(command: any) {
-  const bundled = await bundledHermesRuntimeForCommand(command);
-  if (bundled) return bundled;
   const connector = connectorHermesRuntimeForCommand(command);
-  if (!connector || !await bundledVoiceDependenciesAvailable(connector.python)) return null;
+  if (!connector || !await voiceDependenciesAvailable(connector.python)) return null;
   return connector;
 }
 
@@ -423,15 +366,7 @@ function parseTranscriptionJson(stdout: any) {
   return null;
 }
 
-async function bundledHermesPython(command: any) {
-  const root = bundledHermesRootForCommand(command);
-  if (!root) return '';
-  const python = path.join(root, 'python', 'bin', 'python3');
-  if (executableExists(python) && await bundledVoiceDependenciesAvailable(python)) return python;
-  return '';
-}
-
-async function bundledVoiceDependenciesAvailable(python: any) {
+async function voiceDependenciesAvailable(python: any) {
   if (!executableExists(python)) return false;
   try {
     const stdout = await execFileText(python, ['-c', [
@@ -462,7 +397,7 @@ function formatVoiceCaptureErrorForUser(value: any) {
 async function captureAndTranscribeVoice(opts: CaptureVoiceOptions = {}) {
   const { command } = resolveHermesCommand();
   if (!command || !executableExists(command)) {
-    return { ok: false, error: 'Hermes executable is missing. Bundle Hermes with npm run bundle:hermes or set AGENT_UI_HERMES_BIN.' };
+    return { ok: false, error: 'Hermes executable is missing. Set AGENT_UI_HERMES_BIN or install Hermes in ~/Documents/hermes/hermes-agent.' };
   }
   try {
     const onStatus = typeof opts.onStatus === 'function' ? opts.onStatus : null;
@@ -808,23 +743,19 @@ function syncGatewayEnvToProcess(gatewayEnv: GatewayEnv) {
 
 async function healthOk(baseUrl: any, timeoutMs = 900) {
   if (!global.fetch) return false;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await global.fetch(`${String(baseUrl).replace(/\/+$/, '')}/health`, { signal: controller.signal });
+    const res = await global.fetch(`${String(baseUrl).replace(/\/+$/, '')}/health`, {
+      signal: Number(timeoutMs) > 0 ? AbortSignal.timeout(Number(timeoutMs)) : undefined,
+    });
     return !!(res && res.ok);
   } catch {
     return false;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
 async function gatewayAuthOk(baseUrl: any, key: any, timeoutMs = 900) {
   const secret = String(key || '').trim();
   if (!global.fetch || !secret) return false;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const url = `${String(baseUrl).replace(/\/+$/, '')}/messages`;
     const res = await global.fetch(url, {
@@ -834,7 +765,7 @@ async function gatewayAuthOk(baseUrl: any, key: any, timeoutMs = 900) {
         'content-type': 'application/json',
       },
       body: '{}',
-      signal: controller.signal,
+      signal: Number(timeoutMs) > 0 ? AbortSignal.timeout(Number(timeoutMs)) : undefined,
     });
     let body = null;
     try {
@@ -851,8 +782,6 @@ async function gatewayAuthOk(baseUrl: any, key: any, timeoutMs = 900) {
     );
   } catch {
     return false;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -860,14 +789,16 @@ async function gatewayEventsOk(baseUrl: any, key: any, timeoutMs = 900) {
   const secret = String(key || '').trim();
   if (!global.fetch || !secret) return false;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const signal = Number(timeoutMs) > 0
+    ? AbortSignal.any([controller.signal, AbortSignal.timeout(Number(timeoutMs))])
+    : controller.signal;
   try {
     const url = `${String(baseUrl).replace(/\/+$/, '')}/events`;
     const res = await global.fetch(url, {
       headers: {
         authorization: `Bearer ${secret}`,
       },
-      signal: controller.signal,
+      signal,
     });
     const contentType = res && res.headers && typeof res.headers.get === 'function'
       ? String(res.headers.get('content-type') || '')
@@ -891,7 +822,6 @@ async function gatewayEventsOk(baseUrl: any, key: any, timeoutMs = 900) {
   } catch {
     return false;
   } finally {
-    clearTimeout(timer);
     controller.abort();
   }
 }
@@ -952,10 +882,6 @@ function gatewayAutostartEnabled() {
 
 function gatewayArgsFor() {
   return ['gateway', 'run', '--replace'];
-}
-
-function connectorGatewayRestartApproved() {
-  return envFlag(CONNECTOR_GATEWAY_RESTART_APPROVED_ENV);
 }
 
 function gatewayStartupWaitBudgetMs() {
@@ -1020,12 +946,8 @@ function gatewayStartupFailureMessage(baseUrl: any, childExit: any, stdoutTail: 
 
 function missingHermesExecutableMessage(resolved: MutableJsonObject = {}) {
   const command = String(resolved.command || '').trim();
-  if (resolved.releaseMode === 'standalone' && !resolved.configured) {
-    const expected = command || expectedBundledHermesCommand();
-    return `Bundled Hermes runtime is missing or damaged${expected ? ` at ${expected}` : ''}. Run npm run bundle:hermes before building or launching the standalone app.`;
-  }
   if (command) return `Hermes executable is missing or not executable at ${command}. Check AGENT_UI_HERMES_BIN or rebuild Hermes.`;
-  return 'Hermes executable is missing. Bundle Hermes with npm run bundle:hermes or set AGENT_UI_HERMES_BIN.';
+  return 'Hermes executable is missing. Set AGENT_UI_HERMES_BIN or install Hermes in ~/Documents/hermes/hermes-agent.';
 }
 
 async function ensureGatewayProcess(log = console, opts: GatewayReadyOptions = {}) {
@@ -1041,20 +963,6 @@ async function ensureGatewayProcess(log = console, opts: GatewayReadyOptions = {
   const preferredPortAvailable = await portAvailable(endpoint.host, endpoint.port);
   if (!preferredPortAvailable && await gatewayReadyOk(baseUrl, gatewayEnv.LOCAL_DESKTOP_GATEWAY_KEY, GATEWAY_OCCUPIED_PORT_PREFLIGHT_TIMEOUT_MS)) {
     return { ok: true, alreadyRunning: true, baseUrl };
-  }
-
-  if (isConnectorMode() && !connectorGatewayRestartApproved()) {
-    const { command } = resolveHermesCommand();
-    const manual = command
-      ? `HERMES_HOME="${hermesHome}" "${command}" gateway run --replace`
-      : 'Reconnect Hermes, then run `hermes gateway run --replace`.';
-    return {
-      ok: false,
-      pendingRestart: true,
-      reason: `Hermes gateway restart is required before agent-UI for Hermes can connect. Run: ${manual}`,
-      command,
-      baseUrl,
-    };
   }
 
   if (!preferredPortAvailable) {
@@ -1094,6 +1002,7 @@ async function ensureGatewayProcess(log = console, opts: GatewayReadyOptions = {
       ...process.env,
       ...gatewayEnv,
       HERMES_HOME: hermesHome,
+      HERMES_BUNDLED_PLUGINS: localDesktopPluginRoot(),
       HOME: realUserHomeDir(),
       PATH: safeRuntimePath(),
       PYTHONDONTWRITEBYTECODE: '1',
@@ -1132,7 +1041,7 @@ async function ensureGatewayProcess(log = console, opts: GatewayReadyOptions = {
         return { ok: true, started: true, baseUrl, pid: child.pid || null, ...portRotation };
       }
       if (childExit) break;
-      await new Promise((resolve) => setTimeout(resolve, gatewayReadyPollDelayMs(i, readyIntervalMs)));
+      await delay(gatewayReadyPollDelayMs(i, readyIntervalMs));
     }
     if (childIsAlive(child)) {
       await terminateGatewayChild(child, log, 'startup-timeout');

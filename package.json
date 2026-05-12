@@ -11,39 +11,30 @@
     "bin",
     "out",
     "assets",
-    "src",
-    "vendor",
-    "README.md",
-    "electron.vite.config.mjs"
+    "README.md"
   ],
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "bundle:hermes": "node scripts/bundle-hermes-runtime.js",
     "dist:mac": "npm run dist:mac:bootstrap",
-    "dist:mac:bootstrap": "npm run dist:mac:connector:bootstrap && npm run dist:mac:standalone:bootstrap",
-    "dist:mac:connector": "npm run dist:mac:connector:bootstrap",
-    "dist:mac:standalone": "npm run dist:mac:standalone:bootstrap",
+    "dist:mac:bootstrap": "npm run dist:mac:connector:bootstrap",
     "dist:mac:connector:bootstrap": "node scripts/assert-mac-release-env.js bootstrap connector && npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config packaging/electron-builder.connector.bootstrap.cjs --mac dmg zip --publish never",
-    "dist:mac:standalone:bootstrap": "node scripts/assert-mac-release-env.js bootstrap standalone && npm run bundle:hermes && npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config packaging/electron-builder.standalone.bootstrap.cjs --mac dmg zip --publish never",
-    "dist:mac:developer-id": "npm run dist:mac:connector:developer-id && npm run dist:mac:standalone:developer-id",
+    "dist:mac:developer-id": "npm run dist:mac:connector:developer-id",
     "dist:mac:connector:developer-id": "node scripts/assert-mac-release-env.js developer-id connector && npm run build && electron-builder --config packaging/electron-builder.connector.cjs --mac dmg zip --publish never",
-    "dist:mac:standalone:developer-id": "node scripts/assert-mac-release-env.js developer-id standalone && HERMES_BUNDLE_SOURCE_POLICY=release npm run bundle:hermes && npm run build && electron-builder --config packaging/electron-builder.standalone.cjs --mac dmg zip --publish never",
     "typecheck": "tsc --noEmit",
     "verify:hermes-contracts": "node scripts/verify-hermes-contracts.cjs",
-    "verify": "npm run verify:hermes-contracts && npm run typecheck && npm test && npm run build",
+    "verify:source-contracts": "node scripts/verify-source-contracts.js",
+    "verify:source": "npm run verify:hermes-contracts && npm run typecheck && npm run build && npm run verify:source-contracts",
+    "verify": "npm run verify:source",
     "release:verify": "npm run release:verify:bootstrap",
-    "release:verify:bootstrap": "RELEASE_VERIFY_SIGNING_MODE=bootstrap RELEASE_VERIFY_APP_MODE=all node scripts/release-manifest.js",
-    "release:verify:connector:bootstrap": "RELEASE_VERIFY_SIGNING_MODE=bootstrap RELEASE_VERIFY_APP_MODE=connector node scripts/release-manifest.js",
-    "release:verify:standalone:bootstrap": "RELEASE_VERIFY_SIGNING_MODE=bootstrap RELEASE_VERIFY_APP_MODE=standalone node scripts/release-manifest.js",
-    "release:verify:developer-id": "RELEASE_VERIFY_SIGNING_MODE=developer-id RELEASE_VERIFY_APP_MODE=all node scripts/release-manifest.js",
-    "smoke:gateway": "node scripts/local-gateway-smoke.js",
+    "release:verify:bootstrap": "RELEASE_VERIFY_SIGNING_MODE=bootstrap RELEASE_VERIFY_APP_MODE=connector node scripts/release-manifest.js",
+    "release:verify:developer-id": "RELEASE_VERIFY_SIGNING_MODE=developer-id RELEASE_VERIFY_APP_MODE=connector node scripts/release-manifest.js",
     "smoke:installed-release": "node scripts/installed-app-release-smoke.js",
-    "smoke:installed-release:lmstudio": "AGENT_UI_INSTALLED_SMOKE_PROVIDER=lmstudio node scripts/installed-app-release-smoke.js",
+    "verify:installed": "node scripts/installed-app-release-smoke.js",
+    "verify:live:lmstudio": "node scripts/lmstudio-live-preflight.js && AGENT_UI_INSTALLED_SMOKE_PROVIDER=lmstudio AGENT_UI_LMSTUDIO_MODEL=google/gemma-4-26b-a4b node scripts/installed-app-release-smoke.js",
+    "verify:concurrency:3": "node scripts/lmstudio-live-preflight.js && AGENT_UI_INSTALLED_SMOKE_PROVIDER=lmstudio AGENT_UI_INSTALLED_SMOKE_PHASES=concurrency AGENT_UI_STAGE_REPORT_MIN_RUNS=3 AGENT_UI_LMSTUDIO_MODEL=google/gemma-4-26b-a4b node scripts/installed-app-release-smoke.js",
     "report:stages": "node scripts/eval-stage-report.js",
-    "tart:manual-gui": "bash scripts/tart-gui-manual.sh",
-    "start": "electron-vite preview",
-    "test": "node --import tsx --test test/*.test.js"
+    "start": "electron-vite preview"
   },
   "keywords": [
     "electron",
@@ -58,7 +49,6 @@
     "electron": "^42.0.0",
     "electron-builder": "^26.0.12",
     "electron-vite": "^5.0.0",
-    "tsx": "^4.21.0",
     "typescript": "^6.0.3",
     "vite": "^7.3.3"
   },
@@ -74,21 +64,11 @@
   "build": {
     "appId": "ai.agent-ui.desktop",
     "artifactName": "agent-UI-${version}-${os}-${arch}.${ext}",
-    "afterPack": "scripts/sign-hermes-runtime.js",
     "asar": true,
     "files": [
       "out/**",
       "assets/**",
       "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "build/hermes-runtime",
-        "to": "hermes-runtime",
-        "filter": [
-          "**/*"
-        ]
-      }
     ],
     "mac": {
       "category": "public.app-category.productivity",

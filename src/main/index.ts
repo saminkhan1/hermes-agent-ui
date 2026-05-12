@@ -21,6 +21,9 @@ const os = require('os');
 const { fileURLToPath, pathToFileURL } = require('url');
 const { randomUUID, createHash } = require('crypto');
 const { execFile } = require('child_process');
+const { setTimeout: delay } = require('timers/promises');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFile);
 
 type IpcListener = (event: any, ...args: any[]) => void;
 type IpcHandler = (event: any, ...args: any[]) => any;
@@ -70,6 +73,7 @@ const { captureAndTranscribeVoice } = require('./hermes-runtime');
 const { clearCurrentWindow, focusWindow, isCurrentWindow, isLiveWindow, runForCurrentWindow } = require('./window-lifecycle');
 
 const IS_MAC = process.platform === 'darwin';
+const NEW_SESSION_ACCELERATOR = 'CommandOrControl+Shift+C';
 const MAC_FULL_SCREEN_WORKSPACE_OPTIONS = {
   visibleOnFullScreen: true,
   skipTransformProcessType: true,
@@ -140,13 +144,9 @@ function getCodexHomeDir() {
   return configured ? path.resolve(configured) : path.join(os.homedir(), '.codex');
 }
 
-function ensureDir(dir: any) {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-}
-
 function primaryCodexPetsDir() {
   const dir = path.join(getCodexHomeDir(), 'pets');
-  ensureDir(dir);
+  fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
@@ -204,18 +204,9 @@ function installAttachmentProtocol() {
   });
 }
 
-function execFileText(command: any, args: any, opts = {}) {
-  return new Promise((resolve, reject) => {
-    execFile(command, args, { encoding: 'utf8', timeout: 5000, ...opts }, (err: any, stdout: any, stderr: any) => {
-      if (err) {
-        err.stdout = stdout;
-        err.stderr = stderr;
-        reject(err);
-        return;
-      }
-      resolve(String(stdout || ''));
-    });
-  });
+async function execFileText(command: any, args: any, opts = {}) {
+  const { stdout } = await execFileAsync(command, args, { encoding: 'utf8', timeout: 5000, ...opts });
+  return String(stdout || '');
 }
 
 let mainWindow: any;
@@ -1493,6 +1484,22 @@ function inputModeMenuItems() {
   ];
 }
 
+function newSessionMenuItems() {
+  return [
+    newSessionMenuItem({ accelerator: NEW_SESSION_ACCELERATOR }),
+    { type: 'separator' },
+    ...inputModeMenuItems(),
+  ];
+}
+
+function petMenuItems() {
+  return [
+    petCharacterMenuItem(),
+    refreshPetMenuItem(),
+    openPetFolderMenuItem(),
+  ];
+}
+
 function appMenuItem() {
   return {
     label: 'agent-UI',
@@ -1523,14 +1530,9 @@ function petVisibilityMenuItem() {
 }
 
 function fileMenuItem() {
-  const accelerator = process.platform === 'darwin' ? 'Command+Shift+C' : 'Control+Shift+C';
   return {
     label: 'File',
-    submenu: [
-      newSessionMenuItem({ accelerator }),
-      { type: 'separator' },
-      ...inputModeMenuItems(),
-    ],
+    submenu: newSessionMenuItems(),
   };
 }
 
@@ -1546,25 +1548,16 @@ function viewMenuItem() {
 function petMenuItem() {
   return {
     label: 'Pet',
-    submenu: [
-      petCharacterMenuItem(),
-      refreshPetMenuItem(),
-      openPetFolderMenuItem(),
-    ],
+    submenu: petMenuItems(),
   };
 }
 
 function buildAppMenu() {
-  const accelerator = process.platform === 'darwin' ? 'Command+Shift+C' : 'Control+Shift+C';
   return Menu.buildFromTemplate([
-    newSessionMenuItem({ accelerator }),
-    { type: 'separator' },
-    ...inputModeMenuItems(),
+    ...newSessionMenuItems(),
     { type: 'separator' },
     petVisibilityMenuItem(),
-    petCharacterMenuItem(),
-    refreshPetMenuItem(),
-    openPetFolderMenuItem(),
+    ...petMenuItems(),
     { type: 'separator' },
     hermesLoginMenuItem(),
     { type: 'separator' },
@@ -1615,11 +1608,11 @@ function createTray() {
   const iconPng = path.join(getPackageRoot(), 'assets', 'icon.png');
   const source = nativeImage.createFromPath(iconPng);
   const image = source.isEmpty() ? source : source.resize({ width: 22, height: 22, quality: 'best' });
-  if (process.platform === 'darwin' && !image.isEmpty()) {
+  if (IS_MAC && !image.isEmpty()) {
     image.setTemplateImage(true);
   }
   tray = new Tray(image);
-  if (process.platform === 'darwin') {
+  if (IS_MAC) {
     updateTrayTitle();
   }
   tray.setToolTip('agent-UI');
@@ -1627,7 +1620,7 @@ function createTray() {
 }
 
 function updateTrayTitle() {
-  if (!tray || tray.isDestroyed() || process.platform !== 'darwin') return;
+  if (!tray || tray.isDestroyed() || !IS_MAC) return;
   const active = Number.isFinite(catCounts.active) ? catCounts.active : 0;
   const review = Number.isFinite(catCounts.inReview) ? catCounts.inReview : 0;
   let title;
@@ -1851,7 +1844,7 @@ function frontmostAppFromAppleScriptOutput(stdout: any) {
 }
 
 async function frontmostAppWithTimeout(timeoutMs = FRONTMOST_APP_LOOKUP_TIMEOUT_MS) {
-  if (process.platform !== 'darwin') return null;
+  if (!IS_MAC) return null;
   const script = [
     'tell application "System Events"',
     'set p to first application process whose frontmost is true',
@@ -1863,7 +1856,7 @@ async function frontmostAppWithTimeout(timeoutMs = FRONTMOST_APP_LOOKUP_TIMEOUT_
     .catch(() => null);
   return Promise.race([
     lookup,
-    new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+    delay(timeoutMs, null),
   ]);
 }
 
@@ -1923,7 +1916,7 @@ async function activeWindowWithTimeout(timeoutMs = ACTIVE_WINDOW_LOOKUP_TIMEOUT_
   })();
   return Promise.race([
     lookup,
-    new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+    delay(timeoutMs, null),
   ]);
 }
 
@@ -2151,17 +2144,12 @@ trustedIpcHandle('get-pet-characters', () => {
 
 trustedIpcOn('pet-context-menu', () => {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  const accelerator = process.platform === 'darwin' ? 'Command+Shift+C' : 'Control+Shift+C';
   Menu.buildFromTemplate([
-    newSessionMenuItem({ accelerator }),
-    { type: 'separator' },
-    ...inputModeMenuItems(),
+    ...newSessionMenuItems(),
     { type: 'separator' },
     petVisibilityMenuItem(),
     { type: 'separator' },
-    petCharacterMenuItem(),
-    refreshPetMenuItem(),
-    openPetFolderMenuItem(),
+    ...petMenuItems(),
     { type: 'separator' },
     hermesLoginMenuItem(),
   ]).popup({ window: mainWindow });
@@ -2412,7 +2400,7 @@ async function waitForEvalCat({ catId, timeoutMs = 180000 }: MutableJsonObject =
         };
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await delay(200);
   }
   return { ok: false, error: 'timeout', catId: id || null };
 }
@@ -2576,13 +2564,11 @@ trustedIpcOn('eval-ui-state', (_event, payload: MutableJsonObject = {}) => {
 
 function registerNewCatShortcut() {
   if (newCatShortcutRegistered) return;
-  const newCatAccelerator =
-    process.platform === 'darwin' ? 'CommandOrControl+Shift+C' : 'Control+Shift+C';
-  const registered = globalShortcut.register(newCatAccelerator, () => {
-    void handleNewCatShortcut(newCatAccelerator);
+  const registered = globalShortcut.register(NEW_SESSION_ACCELERATOR, () => {
+    void handleNewCatShortcut(NEW_SESSION_ACCELERATOR);
   });
   newCatShortcutRegistered = true;
-  telemetry.shortcutRegistered({ accelerator: newCatAccelerator, registered });
+  telemetry.shortcutRegistered({ accelerator: NEW_SESSION_ACCELERATOR, registered });
 }
 
 function startEvalServerIfNeeded() {
@@ -2653,7 +2639,7 @@ app.whenReady().then(() => {
   installAttachmentProtocol();
   refreshPetCharacterOptions();
   void loadGetWindowsModule();
-  if (process.platform === 'darwin' && app.dock && process.env.AGENT_UI_EVAL !== '1') {
+  if (IS_MAC && app.dock && process.env.AGENT_UI_EVAL !== '1') {
     app.dock.hide();
   }
   createWindow();
@@ -2748,8 +2734,8 @@ app.on('will-quit', () => {
 });
 
 app.on('window-all-closed', () => {
-  // Keep app running (tray) on non-mac, or we could quit; plan expects tray+shortcut
-  if (process.platform !== 'darwin') {
+  // Keep the macOS tray and shortcut process alive after closing windows.
+  if (!IS_MAC) {
     app.quit();
   }
 });

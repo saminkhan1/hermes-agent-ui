@@ -9,12 +9,6 @@ const APP_MODES = {
     productName: 'agent-UI for Hermes',
     hermesRuntimeIncluded: false,
   },
-  standalone: {
-    appId: 'ai.agent-ui.standalone',
-    artifactPrefix: 'agent-UI-Standalone',
-    productName: 'agent-UI Standalone',
-    hermesRuntimeIncluded: true,
-  },
 };
 
 function normalizeAppMode(value) {
@@ -29,17 +23,6 @@ function normalizeSigningMode(value) {
     throw new Error(`unknown agent-UI signing mode: ${value}`);
   }
   return mode;
-}
-
-function hermesRuntimeExtraResources(appMode) {
-  if (appMode !== 'standalone') return [];
-  return [
-    {
-      from: 'build/hermes-runtime',
-      to: 'hermes-runtime',
-      filter: ['**/*'],
-    },
-  ];
 }
 
 function makeConfig({ appMode, signingMode }) {
@@ -58,10 +41,15 @@ function makeConfig({ appMode, signingMode }) {
         releaseMode: normalizedAppMode,
         signingMode: normalizedSigningMode,
         hermesRuntimeIncluded: mode.hermesRuntimeIncluded,
-        hermesBaselineRequirement: normalizedAppMode === 'connector' ? 'v2026.4.30+' : undefined,
+        hermesBaselineRequirement: 'v2026.4.30+',
       },
     },
-    extraResources: hermesRuntimeExtraResources(normalizedAppMode),
+    extraResources: [
+      {
+        from: 'vendor/hermes-platforms',
+        to: 'hermes-platforms',
+      },
+    ],
     mac: {
       ...pkg.build.mac,
     },
@@ -70,9 +58,7 @@ function makeConfig({ appMode, signingMode }) {
     },
   };
 
-  if (!mode.hermesRuntimeIncluded) {
-    delete config.afterPack;
-  }
+  delete config.afterPack;
 
   if (bootstrap) {
     config.mac = {

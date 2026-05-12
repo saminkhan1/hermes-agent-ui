@@ -3,12 +3,7 @@
 const { spawnSync } = require('node:child_process');
 
 const signingMode = String(process.argv[2] || process.env.AGENT_UI_MAC_SIGNING_MODE || 'bootstrap').trim().toLowerCase();
-const appMode = String(process.argv[3] || process.env.AGENT_UI_RELEASE_MODE || process.env.AGENT_UI_RELEASE_FLAVOR || 'standalone').trim().toLowerCase();
-
-function hasCommand(command) {
-  const res = spawnSync(command, ['--version'], { encoding: 'utf8' });
-  return res.status === 0;
-}
+const appMode = String(process.argv[3] || process.env.AGENT_UI_RELEASE_MODE || process.env.AGENT_UI_RELEASE_FLAVOR || 'connector').trim().toLowerCase();
 
 function hasDeveloperIdIdentity() {
   if (String(process.env.CSC_LINK || '').trim()) return true;
@@ -28,12 +23,8 @@ const missing = [];
 if (process.platform !== 'darwin') {
   missing.push('macOS host for mac app packaging');
 }
-if (!['connector', 'standalone'].includes(appMode)) {
+if (appMode !== 'connector') {
   missing.push(`known app release mode, got ${appMode}`);
-}
-
-if (appMode === 'standalone' && !hasCommand('uv')) {
-  missing.push('uv for bundled Python dependency resolution');
 }
 
 if (signingMode === 'developer-id') {

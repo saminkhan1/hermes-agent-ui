@@ -1,4 +1,4 @@
-name: mac two-app bootstrap release gate
+name: mac connector bootstrap release gate
 
 on:
   workflow_dispatch:
@@ -13,14 +13,12 @@ permissions:
 
 jobs:
   mac-release:
-    name: build connector and standalone bootstrap macOS artifacts
+    name: build connector bootstrap macOS artifacts
     runs-on: macos-15
-    timeout-minutes: 90
+    timeout-minutes: 60
     env:
-      HERMES_RELEASE_TAG: v2026.4.30
-      HERMES_RELEASE_REPO: https://github.com/NousResearch/hermes-agent.git
       RELEASE_VERIFY_SIGNING_MODE: bootstrap
-      RELEASE_VERIFY_APP_MODE: all
+      RELEASE_VERIFY_APP_MODE: connector
 
     steps:
       - name: Check out agent-UI
@@ -35,18 +33,10 @@ jobs:
       - name: Install JavaScript dependencies
         run: npm ci
 
-      - name: Install uv for build-time dependency resolution
-        run: brew install uv
-
-      - name: Check out pinned Hermes release
-        run: git clone --depth 1 --branch "$HERMES_RELEASE_TAG" "$HERMES_RELEASE_REPO" "$RUNNER_TEMP/hermes-agent"
-
       - name: Ring 0 fast checks
         run: npm run verify
 
-      - name: Ring 1 package connector and standalone bootstrap DMG and zip
-        env:
-          HERMES_BUNDLE_SOURCE: ${{ runner.temp }}/hermes-agent
+      - name: Ring 1 package connector bootstrap DMG and zip
         run: npm run dist:mac
 
       - name: Record and verify bootstrap artifacts

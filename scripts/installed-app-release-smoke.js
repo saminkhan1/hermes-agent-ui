@@ -13,7 +13,7 @@ const {
   markdownReport,
 } = require('./eval-stage-report');
 
-const defaultBundle = '/Applications/agent-UI Standalone.app';
+const defaultBundle = '/Applications/agent-UI for Hermes.app';
 const appArg = String(process.argv[2] || process.env.AGENT_UI_INSTALLED_APP || defaultBundle);
 const appPath = path.resolve(appArg);
 function resolveAppExecutable(value) {
@@ -63,6 +63,12 @@ const liveSentinels = {
   initial: 'AGENT_UI_LMSTUDIO_INITIAL_OK',
   followup: 'AGENT_UI_LMSTUDIO_FOLLOWUP_OK',
   reopen: 'AGENT_UI_LMSTUDIO_REOPEN_OK',
+  postCancel: 'AGENT_UI_LMSTUDIO_POST_CANCEL_OK',
+  concurrent: [
+    'AGENT_UI_LMSTUDIO_CONCURRENT_1_OK',
+    'AGENT_UI_LMSTUDIO_CONCURRENT_2_OK',
+    'AGENT_UI_LMSTUDIO_CONCURRENT_3_OK',
+  ],
 };
 const smokePhases = new Set(
   String(process.env.AGENT_UI_INSTALLED_SMOKE_PHASES || 'first,reopen')
@@ -73,6 +79,8 @@ const smokePhases = new Set(
 
 const evidence = {
   startedAt: new Date().toISOString(),
+  command: ['node', path.relative(process.cwd(), __filename), ...process.argv.slice(2)].join(' '),
+  appPath,
   appExecutable,
   runDir,
   configDir,
@@ -281,9 +289,13 @@ async function configureProviderSmoke() {
     '  provider: lmstudio',
     `  base_url: ${lmStudioBaseUrl}`,
     '  api_mode: chat_completions',
+    '  context_length: 64000',
     'agent:',
     '  max_turns: 4',
     '  reasoning_effort: low',
+    'auxiliary:',
+    '  compression:',
+    '    context_length: 64000',
     'toolsets: []',
     'platforms:',
     '  local_desktop:',
@@ -360,9 +372,18 @@ async function gatewayReadyProbe(timeoutMs = 1000) {
 async function waitForGatewayReady(label, timeoutMs = 45000) {
   const startedAt = Date.now();
   let nextLogAt = 0;
-  while (Date.now() - startedAt <= timeoutMs) {
+  const maxAttempts = Math.max(1, Math.ceil(timeoutMs / 250) + 20);
+  let attempts = 0;
+  while (Date.now() - startedAt <= timeoutMs && attempts < maxAttempts) {
+    attempts += 1;
+    const logTail = activeApp && activeApp.logFile && fs.existsSync(activeApp.logFile)
+      ? fs.readFileSync(activeApp.logFile, 'utf8').slice(-4000)
+      : '';
+    if (/Hermes executable is missing/i.test(logTail)) {
+      throw new Error(`Hermes gateway prerequisite failed for ${label}\n--- app log ---\n${logTail}`);
+    }
     if (await gatewayReadyProbe()) {
-      evidence.checks[`gateway-${label}`] = { ok: true, waitedMs: Date.now() - startedAt };
+      evidence.checks[`gateway-${label}`] = { ok: true, waitedMs: Date.now() - startedAt, attempts };
       return;
     }
     if (Date.now() >= nextLogAt) {
@@ -371,7 +392,7 @@ async function waitForGatewayReady(label, timeoutMs = 45000) {
     }
     await sleep(250);
   }
-  throw new Error(`Hermes gateway did not become ready for ${label}`);
+  throw new Error(`Hermes gateway did not become ready for ${label} after ${Date.now() - startedAt}ms and ${attempts} probe(s)`);
 }
 
 function assertCondition(condition, message) {
@@ -444,17 +465,21 @@ async function startApp(label) {
   for (let i = 0; i < 80; i += 1) {
     if (fs.existsSync(portFile) && fs.statSync(portFile).size > 0) {
       activePort = fs.readFileSync(portFile, 'utf8').trim();
+      let evalReady = false;
       try {
         const health = await request('GET', `http://${host}:${activePort}/health`, {
           headers: { authorization: `Bearer ${evalToken}` },
         });
         if (health.status === 200) {
-          evidence.checks[`eval-${label}`] = { ok: true, port: activePort };
-          await waitForGatewayReady(label);
-          return;
+          evalReady = true;
         }
       } catch {
         // keep waiting
+      }
+      if (evalReady) {
+        evidence.checks[`eval-${label}`] = { ok: true, port: activePort };
+        await waitForGatewayReady(label);
+        return;
       }
     }
     await sleep(250);
@@ -512,6 +537,19 @@ async function waitConversation(catId, timeoutMs = conversationTimeoutMs) {
 
 async function conversation(catId) {
   return await getJson(`/conversation?catId=${encodeURIComponent(catId)}`);
+}
+
+async function waitForOverlayNotificationCount(count, label, timeoutMs = 10000) {
+  const startedAt = Date.now();
+  let latest = null;
+  while (Date.now() - startedAt <= timeoutMs) {
+    latest = await getJson('/ui-targets');
+    const notificationCount = Number(latest && latest.overlay && latest.overlay.notificationCount || 0);
+    if (notificationCount >= count) return latest;
+    await sleep(250);
+  }
+  saveJson(`ui-${label}-latest`, latest || {});
+  throw new Error(`overlay did not report ${count} session(s) for ${label}: ${JSON.stringify(latest && latest.overlay)}`);
 }
 
 async function runFirstLaunchChecks() {
@@ -586,6 +624,17 @@ async function runFirstLaunchChecks() {
   const cancelConversation = saveJson('conversation-cancel', await conversation('cancel-smoke'));
   assertCondition(itemTexts(cancelConversation, 'user').includes('Cancel requested.'), 'cancel conversation lacks Cancel requested item');
 
+  if (liveResponseSmoke) {
+    saveJson('start-post-cancel', await postJson('/start', {
+      catId: 'post-cancel-smoke',
+      prompt: `Reply exactly: ${liveSentinels.postCancel}`,
+      closeModal: true,
+    }));
+    const postCancel = saveJson('wait-post-cancel', await waitConversation('post-cancel-smoke'));
+    assertCondition(postCancel && postCancel.conversation && postCancel.conversation.runStatus === 'completed', 'post-cancel recovery did not complete');
+    assertAssistantResponse(postCancel.conversation, 'wait-post-cancel', liveSentinels.postCancel);
+  }
+
   const opened = saveJson('open-conversation', await postJson('/open-conversation', { catId: 'follow-smoke' }));
   assertCondition(opened && opened.ok === true, 'open-conversation endpoint failed');
   await sleep(1000);
@@ -629,6 +678,70 @@ async function runReopenChecks() {
   await stopApp();
 }
 
+function assistantText(conversation) {
+  return itemTexts(conversation, 'assistant').join('\n').trim();
+}
+
+async function runConcurrencyChecks() {
+  if (!liveResponseSmoke) {
+    throw new Error('concurrency phase requires AGENT_UI_INSTALLED_SMOKE_PROVIDER=lmstudio');
+  }
+  await startApp('concurrency');
+  const runs = liveSentinels.concurrent.map((sentinel, index) => ({
+    catId: `concurrent-${index + 1}`,
+    sentinel,
+    prompt: `Reply exactly: ${sentinel}`,
+  }));
+
+  const startedAt = Date.now();
+  const starts = await Promise.all(runs.map((run) => postJson('/start', {
+    catId: run.catId,
+    prompt: run.prompt,
+    closeModal: true,
+  })));
+  saveJson('concurrency-starts', { startedAt, completedAt: Date.now(), starts });
+  for (const [index, start] of starts.entries()) {
+    assertCondition(start && start.ok === true, `concurrent start failed for ${runs[index].catId}: ${JSON.stringify(start)}`);
+  }
+
+  saveJson('ui-concurrency-started', await waitForOverlayNotificationCount(runs.length, 'concurrency-started'));
+
+  const waits = await Promise.all(runs.map((run) => waitConversation(run.catId)));
+  saveJson('concurrency-waits', { waits });
+  const conversations = [];
+  for (let i = 0; i < runs.length; i += 1) {
+    const run = runs[i];
+    const waited = waits[i];
+    assertCondition(waited && waited.ok === true, `${run.catId} wait failed: ${JSON.stringify(waited)}`);
+    assertCondition(waited.conversation && waited.conversation.runStatus === 'completed', `${run.catId} did not complete`);
+    assertAssistantResponse(waited.conversation, run.catId, run.sentinel);
+    const users = itemTexts(waited.conversation, 'user');
+    assertCondition(users.includes(run.prompt), `${run.catId} missing its own user prompt`);
+    const text = assistantText(waited.conversation);
+    for (const other of runs) {
+      if (other.catId === run.catId) continue;
+      assertCondition(!text.includes(other.sentinel), `${run.catId} assistant output contains ${other.sentinel}`);
+    }
+    conversations.push(waited.conversation);
+  }
+
+  const gatewayConversationIds = conversations
+    .map((conversation) => String(conversation.gatewayConversationId || '').trim())
+    .filter(Boolean);
+  assertCondition(new Set(gatewayConversationIds).size === runs.length, `concurrent gateway ids were not distinct: ${gatewayConversationIds.join(', ')}`);
+
+  const listed = saveJson('concurrency-list', await getJson('/conversations'));
+  const listedIds = new Set(((listed && listed.conversations) || []).map((item) => String(item.catId || '')));
+  for (const run of runs) {
+    assertCondition(listedIds.has(run.catId), `${run.catId} missing from conversation list`);
+    saveJson(`conversation-${run.catId}`, await conversation(run.catId));
+  }
+
+  saveJson('trace-concurrency', await getJson('/trace'));
+  evidence.checks.concurrency3 = { ok: true, count: runs.length };
+  await stopApp();
+}
+
 async function cleanup() {
   await stopApp();
   if (portBlocker && portBlocker.server) {
@@ -656,6 +769,7 @@ async function cleanup() {
   const sealBefore = saveJson('app-seal-before', appSealSnapshot('before'));
   if (smokePhases.has('first')) await runFirstLaunchChecks();
   if (smokePhases.has('reopen')) await runReopenChecks();
+  if (smokePhases.has('concurrency')) await runConcurrencyChecks();
   const sealAfter = saveJson('app-seal-after', appSealSnapshot('after'));
   if (!sealBefore.skipped && !sealAfter.skipped) {
     assertCondition(sealBefore.sha256 === sealAfter.sha256, 'installed app bundle changed after launch');

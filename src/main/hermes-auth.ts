@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const { spawn } = require('child_process');
+const { stripVTControlCharacters } = require('util');
 const {
   defaultHermesHome,
   executableExists,
@@ -73,33 +74,13 @@ function appendOutput(current: any, chunk: any) {
   return `${current}${String(chunk || '')}`.slice(-MAX_OUTPUT_CHARS);
 }
 
-function stripAnsi(value: any) {
-  return String(value || '').replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
-}
-
 function cleanHermesOutput(value: any) {
-  return stripAnsi(value).replace(/\r/g, '');
-}
-
-function commandRoot(command: any) {
-  const resolved = path.resolve(String(command || ''));
-  if (path.basename(resolved) !== 'hermes') return '';
-  const binDir = path.dirname(resolved);
-  if (path.basename(binDir) !== 'bin') return '';
-  return path.dirname(binDir);
+  return stripVTControlCharacters(String(value || '')).replace(/\r/g, '');
 }
 
 function pythonRuntimeForHermes(command: any) {
   const resolved = path.resolve(String(command || ''));
-  const bundledRoot = commandRoot(resolved);
   const candidates = [];
-  if (bundledRoot) {
-    candidates.push({
-      root: bundledRoot,
-      agentRoot: path.join(bundledRoot, 'hermes-agent'),
-      pythonCandidates: [path.join(bundledRoot, 'python', 'bin', 'python3')],
-    });
-  }
   const parts = resolved.split(path.sep);
   const hermesAgentIdx = parts.lastIndexOf('hermes-agent');
   if (hermesAgentIdx >= 0) {
@@ -140,7 +121,7 @@ function hermesEnv(extra: Record<string, string> = {}) {
 function hermesCommandOrThrow() {
   const { command } = resolveHermesCommand();
   if (!command || !executableExists(command)) {
-    throw new Error('Hermes executable is missing. Rebuild the bundled runtime or set AGENT_UI_HERMES_BIN.');
+    throw new Error('Hermes executable is missing. Set AGENT_UI_HERMES_BIN or install Hermes in ~/Documents/hermes/hermes-agent.');
   }
   return command;
 }
@@ -149,7 +130,7 @@ function pythonRuntimeOrThrow() {
   const command = hermesCommandOrThrow();
   const runtime = pythonRuntimeForHermes(command);
   if (!runtime) {
-    throw new Error('Hermes Python runtime is missing. Rebuild the bundled runtime with npm run bundle:hermes.');
+    throw new Error('Hermes Python runtime is missing. Rebuild the local Hermes virtualenv.');
   }
   return { command, ...runtime };
 }
@@ -394,7 +375,7 @@ function isAuthErrorText(value: any) {
 
 function extractUrls(value: any) {
   const text = cleanHermesOutput(value);
-  return Array.from(new Set((text.match(/https?:\/\/[^\s)>"']+/g) || []).map((url) => url.replace(/[.,;]+$/, ''))));
+  return Array.from(new Set((text.match(/https?:\/\/[^\s)>"']+/g) || []).map((url: string) => url.replace(/[.,;]+$/, ''))));
 }
 
 function extractUserCode(value: any) {

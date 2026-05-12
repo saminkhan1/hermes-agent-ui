@@ -2,9 +2,6 @@
 export function insertNewlineAtCursor(textarea: any) {
   const start = textarea.selectionStart;
   const end = textarea.selectionEnd;
-  const value = textarea.value;
-  textarea.value = value.slice(0, start) + '\n' + value.slice(end);
-  const pos = start + 1;
-  textarea.selectionStart = textarea.selectionEnd = pos;
+  textarea.setRangeText('\n', start, end, 'end');
   textarea.dispatchEvent(new Event('input', { bubbles: true }));
 }

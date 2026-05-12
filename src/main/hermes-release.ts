@@ -5,8 +5,7 @@ const os = require('os');
 const path = require('path');
 
 const RELEASE_MODE_CONNECTOR = 'connector';
-const RELEASE_MODE_STANDALONE = 'standalone';
-const RELEASE_MODES = new Set([RELEASE_MODE_CONNECTOR, RELEASE_MODE_STANDALONE]);
+const RELEASE_MODES = new Set([RELEASE_MODE_CONNECTOR]);
 
 function realUserHomeDir() {
   try {
@@ -32,7 +31,7 @@ function readPackageJson() {
   }
 }
 
-function normalizeReleaseMode(value: any, fallback = RELEASE_MODE_STANDALONE) {
+function normalizeReleaseMode(value: any, fallback = RELEASE_MODE_CONNECTOR) {
   const mode = String(value || '').trim().toLowerCase();
   return RELEASE_MODES.has(mode) ? mode : fallback;
 }
@@ -43,12 +42,8 @@ function releaseMode() {
     process.env.AGENT_UI_RELEASE_MODE ||
     process.env.AGENT_UI_RELEASE_FLAVOR ||
     (pkg.agentUI && pkg.agentUI.releaseMode),
-    RELEASE_MODE_STANDALONE
+    RELEASE_MODE_CONNECTOR
   );
-}
-
-function isConnectorMode(mode = releaseMode()) {
-  return normalizeReleaseMode(mode) === RELEASE_MODE_CONNECTOR;
 }
 
 function getAgentUIConfigDir() {
@@ -58,24 +53,20 @@ function getAgentUIConfigDir() {
   return dir;
 }
 
-function standaloneHermesHome() {
-  return path.join(realUserHomeDir(), '.agent-ui', 'hermes-home');
-}
-
 function connectorHermesHome() {
   return path.join(realUserHomeDir(), 'Documents', 'hermes', 'hermes-home');
 }
 
-function defaultHermesHomeForMode(mode = releaseMode()) {
+function defaultHermesHomeForMode() {
   const configured = String(process.env.AGENT_UI_HERMES_HOME || '').trim();
   if (configured) return path.resolve(configured);
-  return isConnectorMode(mode) ? connectorHermesHome() : standaloneHermesHome();
+  return connectorHermesHome();
 }
 
-function defaultGatewayEnvPathForMode(mode = releaseMode()) {
+function defaultGatewayEnvPathForMode() {
   const configured = String(process.env.AGENT_UI_HERMES_ENV_PATH || '').trim();
   if (configured) return path.resolve(configured);
-  return path.join(defaultHermesHomeForMode(mode), '.env');
+  return path.join(defaultHermesHomeForMode(), '.env');
 }
 
 function connectorRuntimeStatePath() {
@@ -122,17 +113,14 @@ function defaultConnectorHermesCandidates() {
 
 module.exports = {
   RELEASE_MODE_CONNECTOR,
-  RELEASE_MODE_STANDALONE,
   connectorHermesHome,
   defaultConnectorHermesCandidates,
   defaultGatewayEnvPathForMode,
   defaultHermesHomeForMode,
   getAgentUIConfigDir,
-  isConnectorMode,
   normalizeReleaseMode,
   readConnectorRuntimeState,
   realUserHomeDir,
   releaseMode,
   rememberConnectorHermesCommand,
-  standaloneHermesHome,
 };

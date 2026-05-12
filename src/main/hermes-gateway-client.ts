@@ -12,6 +12,7 @@ import type {
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
+const { setTimeout: delay } = require('timers/promises');
 const {
   defaultGatewayEnvPathForMode,
   getAgentUIConfigDir,
@@ -58,10 +59,6 @@ type GatewayError = Error & {
   status?: number;
   body?: unknown;
 };
-
-function ensureDir(dir: any) {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-}
 
 function defaultStatePath() {
   return path.join(getAgentUIConfigDir(), 'hermes-gateway.json');
@@ -132,12 +129,8 @@ function readJsonFile(file: any, fallback: any) {
 }
 
 function writeJsonFile(file: any, value: any) {
-  ensureDir(path.dirname(file));
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(value, null, 2), 'utf8');
-}
-
-function sleep(ms: any) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isRetryableStatus(status: any) {
@@ -306,15 +299,11 @@ class HermesGatewayClient {
 
   async health({ timeoutMs = 2500 }: HealthOptions = {}): Promise<LocalDesktopHealthResponse> {
     if (!this.fetchImpl) throw new Error('fetch is not available.');
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await this.fetchImpl(`${this.baseUrl}/health`, { signal: controller.signal });
-      if (!res || !res.ok) throw new Error(`Gateway health failed: ${res ? res.status : 'no response'}`);
-      return await res.json() as LocalDesktopHealthResponse;
-    } finally {
-      clearTimeout(timer);
-    }
+    const res = await this.fetchImpl(`${this.baseUrl}/health`, {
+      signal: Number(timeoutMs) > 0 ? AbortSignal.timeout(Number(timeoutMs)) : undefined,
+    });
+    if (!res || !res.ok) throw new Error(`Gateway health failed: ${res ? res.status : 'no response'}`);
+    return await res.json() as LocalDesktopHealthResponse;
   }
 
   async postMessage({ conversationId, messageId, text, chatName, metadata = {}, retries = 1, timeoutMs = this.postTimeoutMs }: PostMessageInput): Promise<LocalDesktopMessageAcceptedResponse | JsonObject> {
@@ -380,7 +369,7 @@ class HermesGatewayClient {
       } finally {
         if (timer) clearTimeout(timer);
       }
-      await sleep(Math.min(250, 50 * (attempt + 1)));
+      await delay(Math.min(250, 50 * (attempt + 1)));
     }
     throw lastError || new Error('Gateway message failed.');
   }

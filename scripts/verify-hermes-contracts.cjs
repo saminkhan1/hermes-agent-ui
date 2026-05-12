@@ -13,26 +13,6 @@ const gatewayClientPath = path.join(repoRoot, 'src', 'main', 'hermes-gateway-cli
 const hermesRuntimePath = path.join(repoRoot, 'src', 'main', 'hermes-runtime.ts');
 const vendorAdapterPath = path.join(repoRoot, 'vendor', 'hermes-platforms', 'local_desktop', 'adapter.py');
 const vendorPluginPath = path.join(repoRoot, 'vendor', 'hermes-platforms', 'local_desktop', 'plugin.yaml');
-const bundledAdapterPath = path.join(
-  repoRoot,
-  'build',
-  'hermes-runtime',
-  'hermes-agent',
-  'plugins',
-  'platforms',
-  'local_desktop',
-  'adapter.py',
-);
-const bundledPluginPath = path.join(
-  repoRoot,
-  'build',
-  'hermes-runtime',
-  'hermes-agent',
-  'plugins',
-  'platforms',
-  'local_desktop',
-  'plugin.yaml',
-);
 
 const EXPECTED_LOCAL_DESKTOP_ROUTES = [
   'GET /events',
@@ -112,7 +92,7 @@ function assertFileSame(label, actualFile, expectedFile) {
     fail(`${label} is stale`, {
       actual: relative(actualFile),
       expected: relative(expectedFile),
-      hint: 'Run npm run bundle:hermes after changing vendored Hermes overlays.',
+      hint: 'Update the Agent UI local_desktop plugin source.',
     });
   }
 }
@@ -311,11 +291,10 @@ function parsePluginEnv(file) {
 
 function candidateHermesRoots() {
   const roots = [];
-  for (const name of ['HERMES_AGENT_ROOT', 'HERMES_AGENT_SOURCE', 'HERMES_BUNDLE_SOURCE']) {
+  for (const name of ['HERMES_AGENT_ROOT', 'HERMES_AGENT_SOURCE']) {
     if (process.env[name]) roots.push(path.resolve(process.env[name]));
   }
   roots.push(path.resolve(repoRoot, '..', 'hermes', 'hermes-agent'));
-  roots.push(path.join(repoRoot, 'build', 'hermes-runtime', 'hermes-agent'));
   return uniqueInOrder(roots);
 }
 
@@ -354,10 +333,6 @@ function adapterCandidates() {
     const adapter = firstExisting(possibleAdapterPaths(root));
     if (adapter) candidates.push({ label: `Hermes local_desktop adapter at ${relative(adapter)}`, path: adapter });
   }
-  if (exists(bundledAdapterPath)) {
-    candidates.push({ label: 'bundled local_desktop adapter', path: bundledAdapterPath });
-  }
-
   const seen = new Set();
   return candidates.filter((candidate) => {
     const key = path.resolve(candidate.path);
@@ -787,9 +762,6 @@ function verifyAgentUiSurfaces(canonicalHermes, contracts, agents, gatewayClient
 }
 
 function verify() {
-  assertFileSame('Bundled local_desktop adapter', bundledAdapterPath, vendorAdapterPath);
-  assertFileSame('Bundled local_desktop plugin.yaml', bundledPluginPath, vendorPluginPath);
-
   const contracts = parseTs(contractsPath);
   const agents = parseTs(agentsPath);
   const gatewayClient = parseTs(gatewayClientPath);
