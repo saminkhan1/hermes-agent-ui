@@ -2711,13 +2711,13 @@ app.whenReady().then(() => {
   installAttachmentProtocol();
   refreshPetCharacterOptions();
   void loadGetWindowsModule();
+  startEvalServerIfNeeded();
   if (IS_MAC && app.dock && process.env.AGENT_UI_EVAL !== '1') {
     app.dock.hide();
   }
   createWindow();
   createTray();
   registerNewCatShortcut();
-  startEvalServerIfNeeded();
   telemetry.appReady({
     uptimeMs: Math.round(process.uptime() * 1000),
     evalServer: !!closeEvalServer,
