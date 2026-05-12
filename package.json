@@ -33,6 +33,7 @@
     "verify:installed": "node scripts/installed-app-release-smoke.js",
     "verify:live:lmstudio": "node scripts/lmstudio-live-preflight.js && AGENT_UI_INSTALLED_SMOKE_PROVIDER=lmstudio AGENT_UI_LMSTUDIO_MODEL=google/gemma-4-26b-a4b node scripts/installed-app-release-smoke.js",
     "verify:concurrency:3": "node scripts/lmstudio-live-preflight.js && AGENT_UI_INSTALLED_SMOKE_PROVIDER=lmstudio AGENT_UI_INSTALLED_SMOKE_PHASES=concurrency AGENT_UI_STAGE_REPORT_MIN_RUNS=3 AGENT_UI_LMSTUDIO_MODEL=google/gemma-4-26b-a4b node scripts/installed-app-release-smoke.js",
+    "verify:interaction:lmstudio": "node scripts/lmstudio-live-preflight.js && AGENT_UI_LMSTUDIO_MODEL=google/gemma-4-26b-a4b node scripts/interaction-lmstudio-smoke.js",
     "report:stages": "node scripts/eval-stage-report.js",
     "start": "electron-vite preview"
   },

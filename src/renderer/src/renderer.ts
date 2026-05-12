@@ -132,11 +132,23 @@ function reportEvalUiState(list = notifications()) {
   if (tray && !tray.hidden && tray.dataset.collapsed !== 'true') {
     push(tray, top ? top.catId : '__pet_tray__');
   }
+  const rows = trayRows().map((row: any) => {
+    const catId = String(row.dataset.notificationId || '').trim();
+    const rect = rectForEvalElement(row);
+    if (!catId || !rect) return null;
+    const action = row.querySelector('.pet-row-action');
+    return {
+      catId,
+      rect,
+      actionRect: rectForEvalElement(action),
+    };
+  }).filter(Boolean);
   window.agentUI.reportEvalUiState('overlay', {
     layout,
     notificationCount: list.length,
     trayOpen,
     cats,
+    rows,
   });
 }
 

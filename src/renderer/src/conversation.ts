@@ -51,6 +51,7 @@ function reportEvalUiState() {
     logRect: rectForEvalElement(logEl, { includeHidden: true }),
     followupRect: rectForEvalElement(followupInput, { includeHidden: true }),
     activeElement: activeElementForEval(),
+    followupValueLength: followupInput && typeof followupInput.value === 'string' ? followupInput.value.length : 0,
     ...visibleText,
     lineEntries,
   });
@@ -416,6 +417,14 @@ if (sendBtn) {
 }
 
 if (followupInput) {
+  followupInput.addEventListener('input', () => {
+    reportEvalUiState();
+  });
+
+  followupInput.addEventListener('focus', () => {
+    reportEvalUiState();
+  });
+
   followupInput.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
     if (e.metaKey || e.ctrlKey) {

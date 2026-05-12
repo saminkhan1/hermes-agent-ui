@@ -27,6 +27,11 @@ function requireRegex(rel, regex, reason) {
   if (!regex.test(text)) fail(`${rel} missing ${reason || regex}`);
 }
 
+function requireNoText(rel, needle, reason) {
+  const text = read(rel);
+  if (text.includes(needle)) fail(`${rel} must not include ${reason || needle}`);
+}
+
 function requireFile(rel) {
   const file = path.join(repoRoot, rel);
   if (!fs.existsSync(file)) fail(`build output missing ${rel}`, 'Run npm run build before verify-source-contracts.');
@@ -64,6 +69,10 @@ function verifyPackageScripts() {
   const concurrency = packageScript('verify:concurrency:3');
   for (const token of ['lmstudio-live-preflight.js', 'AGENT_UI_INSTALLED_SMOKE_PHASES=concurrency', 'AGENT_UI_STAGE_REPORT_MIN_RUNS=3', 'AGENT_UI_LMSTUDIO_MODEL=google/gemma-4-26b-a4b']) {
     if (!concurrency.includes(token)) fail(`verify:concurrency:3 must include ${token}.`);
+  }
+  const interaction = packageScript('verify:interaction:lmstudio');
+  for (const token of ['lmstudio-live-preflight.js', 'AGENT_UI_LMSTUDIO_MODEL=google/gemma-4-26b-a4b', 'interaction-lmstudio-smoke.js']) {
+    if (!interaction.includes(token)) fail(`verify:interaction:lmstudio must include ${token}.`);
   }
 }
 
@@ -130,6 +139,31 @@ function verifyInstalledSmokeContract() {
   requireRegex('scripts/installed-app-release-smoke.js', /sealBefore\.sha256\s*===\s*sealAfter\.sha256/, 'bundle integrity comparison');
 }
 
+function verifyInteractionSmokeContract() {
+  requireText('scripts/interaction-lmstudio-smoke.js', "clickMenuItem('File', 'Use Text Input')", 'menu input-mode interaction');
+  requireText('scripts/interaction-lmstudio-smoke.js', 'pressShortcutC()', 'keyboard shortcut interaction');
+  requireText('scripts/interaction-lmstudio-smoke.js', 'clickAtRect(', 'real mouse click interaction');
+  requireText('scripts/interaction-lmstudio-smoke.js', 'CGEvent(mouseEventSource', 'native mouse event click automation');
+  requireText('scripts/interaction-lmstudio-smoke.js', 'pasteText(', 'real paste interaction');
+  requireText('scripts/interaction-lmstudio-smoke.js', 'screencapture', 'screenshot evidence');
+  requireText('scripts/interaction-lmstudio-smoke.js', 'assertRealHermesAvailable', 'real Hermes executable preflight');
+  requireText('scripts/interaction-lmstudio-smoke.js', 'https://github.com/NousResearch/hermes-agent.git', 'direct upstream Hermes clone assertion');
+  requireText('scripts/interaction-lmstudio-smoke.js', 'AGENT_UI_HERMES_BIN: evidence.realHermes.command', 'app process uses verified upstream Hermes executable');
+  requireText('scripts/interaction-lmstudio-smoke.js', 'gatewayPostEvents', 'Hermes gateway message assertions');
+  requireText('scripts/interaction-lmstudio-smoke.js', 'includeContext === true', 'normal prompt context assertion');
+  requireText('scripts/interaction-lmstudio-smoke.js', 'includeContext === false', 'follow-up no-context assertion');
+  requireText('scripts/interaction-lmstudio-smoke.js', 'AGENT_UI_INTERACTION_INITIAL_OK', 'initial live sentinel');
+  requireText('scripts/interaction-lmstudio-smoke.js', 'AGENT_UI_INTERACTION_FOLLOWUP_OK', 'follow-up live sentinel');
+  requireNoText('scripts/interaction-lmstudio-smoke.js', 'createLocalAdapterHermes', 'local adapter path');
+  requireNoText('scripts/interaction-lmstudio-smoke.js', 'fallback_adapter', 'fake gateway metadata');
+  requireNoText('scripts/interaction-lmstudio-smoke.js', 'AGENT_UI_INTERACTION_AUTH_REQUIRED', 'synthetic auth prompt');
+  requireNoText('scripts/interaction-lmstudio-smoke.js', 'AGENT_UI_INTERACTION_REPLAY_EXPIRE', 'synthetic replay prompt');
+  requireNoText('scripts/interaction-lmstudio-smoke.js', 'AGENT_UI_INTERACTION_ATTACHMENT', 'synthetic attachment prompt');
+  requireNoText('scripts/interaction-lmstudio-smoke.js', 'process.env.AGENT_UI_HERMES_BIN', 'externally selected Hermes executable');
+  requireText('src/renderer/src/renderer.ts', 'rows,', 'overlay row eval rectangles');
+  requireText('src/renderer/src/conversation.ts', 'followupValueLength', 'conversation follow-up value assertion');
+}
+
 function verifyBuildOutputs() {
   for (const rel of [
     'out/main/index.js',
@@ -172,6 +206,7 @@ verifyPackagingModes();
 verifyGatewayEnvContract();
 verifyEvalSurface();
 verifyInstalledSmokeContract();
+verifyInteractionSmokeContract();
 verifyBuildOutputs();
 verifyPublicSurface();
 
