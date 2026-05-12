@@ -8,6 +8,10 @@ const EVAL_CONFIG_TMP_FILE = path.join(
   fs.existsSync('/private/tmp') ? '/private/tmp' : process.env.TMPDIR || '/tmp',
   `agent-ui-eval-config-${typeof process.getuid === 'function' ? process.getuid() : 'user'}.json`,
 );
+const EVAL_CONFIG_TMP_USER_FILE = path.join(
+  fs.existsSync('/private/tmp') ? '/private/tmp' : process.env.TMPDIR || '/tmp',
+  'agent-ui-eval-config-user.json',
+);
 const EVAL_CONFIG_ENV_KEYS = new Set([
   'AGENT_UI_EVAL',
   'AGENT_UI_EVAL_RUN_ID',
@@ -21,14 +25,13 @@ const EVAL_CONFIG_ENV_KEYS = new Set([
 
 function applyEvalConfigArgv() {
   const arg = process.argv.find((value) => String(value || '').startsWith(EVAL_CONFIG_ARG_PREFIX));
-  const file = arg
-    ? String(arg).slice(EVAL_CONFIG_ARG_PREFIX.length).trim()
-    : String(app.commandLine.getSwitchValue('agent-ui-eval-config') || '').trim() ||
-      (fs.existsSync(path.join(process.cwd(), EVAL_CONFIG_CWD_FILE))
-        ? path.join(process.cwd(), EVAL_CONFIG_CWD_FILE)
-        : fs.existsSync(EVAL_CONFIG_TMP_FILE)
-          ? EVAL_CONFIG_TMP_FILE
-          : '');
+  let file = arg ? String(arg).slice(EVAL_CONFIG_ARG_PREFIX.length).trim() : '';
+  if (!file) file = String(app.commandLine.getSwitchValue('agent-ui-eval-config') || '').trim();
+  if (!file && fs.existsSync(path.join(process.cwd(), EVAL_CONFIG_CWD_FILE))) {
+    file = path.join(process.cwd(), EVAL_CONFIG_CWD_FILE);
+  }
+  if (!file && fs.existsSync(EVAL_CONFIG_TMP_FILE)) file = EVAL_CONFIG_TMP_FILE;
+  if (!file && fs.existsSync(EVAL_CONFIG_TMP_USER_FILE)) file = EVAL_CONFIG_TMP_USER_FILE;
   if (!file) return;
   try {
     const config = JSON.parse(fs.readFileSync(path.resolve(file), 'utf8'));

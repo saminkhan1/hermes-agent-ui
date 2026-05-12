@@ -41,6 +41,10 @@ const tmpEvalConfigFile = path.join(
   fs.existsSync('/private/tmp') ? '/private/tmp' : os.tmpdir(),
   `agent-ui-eval-config-${typeof process.getuid === 'function' ? process.getuid() : 'user'}.json`,
 );
+const tmpEvalConfigUserFile = path.join(
+  fs.existsSync('/private/tmp') ? '/private/tmp' : os.tmpdir(),
+  'agent-ui-eval-config-user.json',
+);
 const configDir = path.join(runDir, 'config');
 const hermesHome = path.join(runDir, 'hermes-home');
 const evalDir = path.join(runDir, 'eval');
@@ -451,8 +455,10 @@ async function startApp(label) {
     LM_BASE_URL: lmStudioBaseUrl,
   });
   fs.copyFileSync(evalConfigFile, tmpEvalConfigFile);
+  fs.copyFileSync(evalConfigFile, tmpEvalConfigUserFile);
   evidence.files[`eval-config-${label}.json`] = evalConfigFile;
   evidence.files[`tmp-eval-config-${label}.json`] = tmpEvalConfigFile;
+  evidence.files[`tmp-eval-config-user-${label}.json`] = tmpEvalConfigUserFile;
   const out = fs.openSync(logFile, 'a');
   const child = spawn(appExecutable, [`--agent-ui-eval-config=${evalConfigFile}`], {
     cwd: runDir,
@@ -807,6 +813,7 @@ async function cleanup() {
   await stopApp();
   try {
     fs.rmSync(tmpEvalConfigFile, { force: true });
+    fs.rmSync(tmpEvalConfigUserFile, { force: true });
   } catch {
     // ignore temp eval config cleanup failures
   }
