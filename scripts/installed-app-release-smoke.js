@@ -1,12 +1,12 @@
 'use strict';
 
 const fs = require('node:fs');
-const http = require('node:http');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
+const { setTimeout: sleep } = require('node:timers/promises');
 const {
   buildStageReportFromTraceFiles,
   discoverTraceFiles,
@@ -105,12 +105,8 @@ let activeApp = null;
 let activePort = '';
 let portBlocker = null;
 
-function ensureDir(dir) {
-  fs.mkdirSync(dir, { recursive: true });
-}
-
 function writeText(file, text) {
-  ensureDir(path.dirname(file));
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text, 'utf8');
 }
 
@@ -123,10 +119,6 @@ function saveJson(name, value) {
   writeJson(file, value);
   evidence.files[name] = file;
   return value;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function readJson(file, fallback = null) {
@@ -215,48 +207,37 @@ function appSealSnapshot(label) {
   return { label, bundle, ...tree, codesign };
 }
 
-function request(method, url, { headers = {}, body = '', timeoutMs = 5000 } = {}) {
-  return new Promise((resolve, reject) => {
-    const req = http.request(url, { method, headers, timeout: timeoutMs }, (res) => {
-      let text = '';
-      res.setEncoding('utf8');
-      res.on('data', (chunk) => {
-        text += chunk;
-      });
-      res.on('end', () => {
-        let json = null;
-        try {
-          json = text ? JSON.parse(text) : null;
-        } catch {
-          json = null;
-        }
-        resolve({ status: res.statusCode || 0, text, json });
-      });
-    });
-    req.on('timeout', () => {
-      req.destroy(new Error(`request timed out: ${url}`));
-    });
-    req.on('error', reject);
-    if (body) req.write(body);
-    req.end();
+async function request(method, url, { headers = {}, body = '', timeoutMs = 5000 } = {}) {
+  const res = await fetch(url, {
+    method,
+    headers,
+    body: body || undefined,
+    signal: Number(timeoutMs) > 0 ? AbortSignal.timeout(Number(timeoutMs)) : undefined,
   });
+  const text = await res.text();
+  let json = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    json = null;
+  }
+  return { status: res.status, text, json };
 }
 
-function eventStreamOk(url, { headers = {}, timeoutMs = 1000 } = {}) {
-  return new Promise((resolve) => {
-    const req = http.request(url, { method: 'GET', headers, timeout: timeoutMs }, (res) => {
-      const contentType = String(res.headers && res.headers['content-type'] || '');
-      const ok = !!(res.statusCode >= 200 && res.statusCode < 300 && /text\/event-stream/i.test(contentType));
-      req.destroy();
-      resolve(ok);
+async function eventStreamOk(url, { headers = {}, timeoutMs = 1000 } = {}) {
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers,
+      signal: Number(timeoutMs) > 0 ? AbortSignal.timeout(Number(timeoutMs)) : undefined,
     });
-    req.on('timeout', () => {
-      req.destroy();
-      resolve(false);
-    });
-    req.on('error', () => resolve(false));
-    req.end();
-  });
+    const contentType = String(res.headers.get('content-type') || '');
+    const ok = res.ok && /text\/event-stream/i.test(contentType);
+    if (res.body) await res.body.cancel();
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 async function discoverLmStudioModel() {
@@ -754,10 +735,10 @@ async function cleanup() {
 }
 
 (async () => {
-  ensureDir(runDir);
-  ensureDir(configDir);
-  ensureDir(hermesHome);
-  ensureDir(evalDir);
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.mkdirSync(hermesHome, { recursive: true });
+  fs.mkdirSync(evalDir, { recursive: true });
   if (!fs.existsSync(appExecutable)) {
     throw new Error(`installed app executable not found: ${appExecutable}`);
   }

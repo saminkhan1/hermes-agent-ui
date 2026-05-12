@@ -20,10 +20,7 @@ const fs = require('fs');
 const os = require('os');
 const { fileURLToPath, pathToFileURL } = require('url');
 const { randomUUID, createHash } = require('crypto');
-const { execFile } = require('child_process');
 const { setTimeout: delay } = require('timers/promises');
-const { promisify } = require('util');
-const execFileAsync = promisify(execFile);
 
 type IpcListener = (event: any, ...args: any[]) => void;
 type IpcHandler = (event: any, ...args: any[]) => any;
@@ -69,7 +66,7 @@ const {
 const petAssets = require('./pet-assets');
 const hermesAttachments = require('./hermes-attachments');
 const hermesAuth = require('./hermes-auth');
-const { captureAndTranscribeVoice } = require('./hermes-runtime');
+const { captureAndTranscribeVoice, execFileText } = require('./hermes-runtime');
 const { clearCurrentWindow, focusWindow, isCurrentWindow, isLiveWindow, runForCurrentWindow } = require('./window-lifecycle');
 
 const IS_MAC = process.platform === 'darwin';
@@ -202,11 +199,6 @@ function installAttachmentProtocol() {
       return new Response('not found', { status: 404 });
     }
   });
-}
-
-async function execFileText(command: any, args: any, opts = {}) {
-  const { stdout } = await execFileAsync(command, args, { encoding: 'utf8', timeout: 5000, ...opts });
-  return String(stdout || '');
 }
 
 let mainWindow: any;
@@ -513,9 +505,8 @@ function getAppSettingsPath() {
   return path.join(getAgentUIConfigDir(), 'settings.json');
 }
 
-function readJsonStateStore(resolveFile: any) {
+function readJsonStateFile(file: any) {
   try {
-    const file = resolveFile();
     if (!fs.existsSync(file)) return {};
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
     return data && typeof data === 'object' ? data : {};
@@ -524,10 +515,10 @@ function readJsonStateStore(resolveFile: any) {
   }
 }
 
-function writeJsonStateStore(resolveFile: any, readCurrent: any, patch = {}) {
+function writeJsonStateFile(file: any, patch = {}) {
   try {
-    const file = resolveFile();
-    const current = readCurrent();
+    const current = readJsonStateFile(file);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify({ ...current, ...patch }, null, 2), 'utf8');
   } catch {
     // ignore persistence errors
@@ -535,11 +526,11 @@ function writeJsonStateStore(resolveFile: any, readCurrent: any, patch = {}) {
 }
 
 function readAppSettings() {
-  return readJsonStateStore(getAppSettingsPath);
+  return readJsonStateFile(getAppSettingsPath());
 }
 
 function writeAppSettings(patch = {}) {
-  writeJsonStateStore(getAppSettingsPath, readAppSettings, patch);
+  writeJsonStateFile(getAppSettingsPath(), patch);
 }
 
 function normalizeInputMode(value: any) {
@@ -557,11 +548,11 @@ function setSelectedInputMode(mode: any, { persist = true } = {}) {
 }
 
 function readPetOverlayState() {
-  return readJsonStateStore(getPetOverlayStatePath);
+  return readJsonStateFile(getPetOverlayStatePath());
 }
 
 function writePetOverlayState(patch = {}) {
-  writeJsonStateStore(getPetOverlayStatePath, readPetOverlayState, patch);
+  writeJsonStateFile(getPetOverlayStatePath(), patch);
 }
 
 function normalizePetCharacterId(id: any) {
@@ -1851,13 +1842,11 @@ async function frontmostAppWithTimeout(timeoutMs = FRONTMOST_APP_LOOKUP_TIMEOUT_
     'return (name of p) & "\\n" & (bundle identifier of p) & "\\n" & ((unix id of p) as text)',
     'end tell',
   ].join('\n');
-  const lookup = execFileText('osascript', ['-e', script], { timeout: timeoutMs })
-    .then(frontmostAppFromAppleScriptOutput)
-    .catch(() => null);
-  return Promise.race([
-    lookup,
-    delay(timeoutMs, null),
-  ]);
+  try {
+    return frontmostAppFromAppleScriptOutput(await execFileText('osascript', ['-e', script], { timeout: timeoutMs }));
+  } catch {
+    return null;
+  }
 }
 
 async function readActiveWindowSnapshot() {

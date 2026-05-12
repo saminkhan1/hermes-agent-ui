@@ -1,6 +1,5 @@
 'use strict';
 
-const http = require('node:http');
 const { spawnSync } = require('node:child_process');
 
 const model = String(process.env.AGENT_UI_LMSTUDIO_MODEL || 'google/gemma-4-26b-a4b').trim();
@@ -24,26 +23,19 @@ function run(command, args) {
   });
 }
 
-function requestJson(url) {
-  return new Promise((resolve, reject) => {
-    const req = http.request(url, { method: 'GET', timeout: 5000 }, (res) => {
-      let text = '';
-      res.setEncoding('utf8');
-      res.on('data', (chunk) => { text += chunk; });
-      res.on('end', () => {
-        let json = null;
-        try {
-          json = text ? JSON.parse(text) : null;
-        } catch {
-          json = null;
-        }
-        resolve({ status: res.statusCode || 0, text, json });
-      });
-    });
-    req.on('timeout', () => req.destroy(new Error(`request timed out: ${url}`)));
-    req.on('error', reject);
-    req.end();
+async function requestJson(url) {
+  const res = await fetch(url, {
+    method: 'GET',
+    signal: AbortSignal.timeout(5000),
   });
+  const text = await res.text();
+  let json = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    json = null;
+  }
+  return { status: res.status, text, json };
 }
 
 function parseLoadedModels(stdout) {

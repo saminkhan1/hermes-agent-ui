@@ -323,27 +323,13 @@ class HermesGatewayClient {
     const attempts = Math.max(1, Math.trunc(Number(retries) || 0) + 1);
     let lastError: unknown = null;
     for (let attempt = 0; attempt < attempts; attempt++) {
-      const controller = Number(timeoutMs) > 0 ? new AbortController() : null;
-      let timer = null;
       try {
-        const request = Promise.resolve(this.fetchImpl(`${this.baseUrl}/messages`, {
+        const res = await this.fetchImpl(`${this.baseUrl}/messages`, {
           method: 'POST',
           headers: this.authHeaders({ 'content-type': 'application/json' }),
           body: bodyText,
-          signal: controller ? controller.signal : undefined,
-        }));
-        request.catch(() => {});
-        const res = controller ? await Promise.race([
-          request,
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(() => {
-              controller.abort();
-              const timeoutError: GatewayError = new Error(`Gateway message timed out after ${Number(timeoutMs)}ms`);
-              timeoutError.code = 'ETIMEDOUT';
-              reject(timeoutError);
-            }, Number(timeoutMs));
-          }),
-        ]) : await request;
+          signal: Number(timeoutMs) > 0 ? AbortSignal.timeout(Number(timeoutMs)) : undefined,
+        });
         let body: (LocalDesktopMessageAcceptedResponse | LocalDesktopErrorResponse | JsonObject | null) = null;
         try {
           body = await res.json();
@@ -362,12 +348,15 @@ class HermesGatewayClient {
         if (!isRetryableStatus(res.status) || attempt === attempts - 1) throw error;
         lastError = error;
       } catch (e: any) {
+        if (e && (e.name === 'AbortError' || e.name === 'TimeoutError')) {
+          const timeoutError: GatewayError = new Error(`Gateway message timed out after ${Number(timeoutMs)}ms`);
+          timeoutError.code = 'ETIMEDOUT';
+          e = timeoutError;
+        }
         if (e && e.status && !isRetryableStatus(e.status)) throw e;
         const actionable = e && e.status ? e : gatewayConnectionError(e, this.baseUrl);
         if (attempt === attempts - 1) throw actionable;
         lastError = actionable;
-      } finally {
-        if (timer) clearTimeout(timer);
       }
       await delay(Math.min(250, 50 * (attempt + 1)));
     }

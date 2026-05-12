@@ -49,7 +49,7 @@ function releaseMode() {
 function getAgentUIConfigDir() {
   const configured = String(process.env.AGENT_UI_CONFIG_DIR || '').trim();
   const dir = configured ? path.resolve(configured) : path.join(realUserHomeDir(), '.agent-ui');
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 

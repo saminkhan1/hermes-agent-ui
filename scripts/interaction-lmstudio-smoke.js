@@ -2,10 +2,10 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
-const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
+const { setTimeout: sleep } = require('node:timers/promises');
 
 const repoRoot = path.resolve(__dirname, '..');
 const localBundle = path.join(repoRoot, 'dist', 'mac-arm64', 'agent-UI for Hermes.app');
@@ -71,12 +71,8 @@ function assertCondition(condition, message) {
   if (!condition) fail(message);
 }
 
-function ensureDir(dir) {
-  fs.mkdirSync(dir, { recursive: true });
-}
-
 function writeText(file, text) {
-  ensureDir(path.dirname(file));
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text, 'utf8');
 }
 
@@ -89,10 +85,6 @@ function saveJson(name, value) {
   writeJson(file, value);
   evidence.files[name] = file;
   return value;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function resolveAppExecutable(value) {
@@ -147,29 +139,21 @@ function appInfo() {
 
 const appIdentity = appInfo();
 
-function request(method, url, { headers = {}, body = '', timeoutMs = 5000 } = {}) {
-  return new Promise((resolve, reject) => {
-    const req = http.request(url, { method, headers, timeout: timeoutMs }, (res) => {
-      let text = '';
-      res.setEncoding('utf8');
-      res.on('data', (chunk) => {
-        text += chunk;
-      });
-      res.on('end', () => {
-        let json = null;
-        try {
-          json = text ? JSON.parse(text) : null;
-        } catch {
-          json = null;
-        }
-        resolve({ status: res.statusCode || 0, text, json });
-      });
-    });
-    req.on('timeout', () => req.destroy(new Error(`request timed out: ${url}`)));
-    req.on('error', reject);
-    if (body) req.write(body);
-    req.end();
+async function request(method, url, { headers = {}, body = '', timeoutMs = 5000 } = {}) {
+  const res = await fetch(url, {
+    method,
+    headers,
+    body: body || undefined,
+    signal: Number(timeoutMs) > 0 ? AbortSignal.timeout(Number(timeoutMs)) : undefined,
   });
+  const text = await res.text();
+  let json = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    json = null;
+  }
+  return { status: res.status, text, json };
 }
 
 async function getJson(route) {
@@ -197,21 +181,20 @@ async function postJson(route, payload, opts = {}) {
   return res.json;
 }
 
-function eventStreamOk(url, { headers = {}, timeoutMs = 1000 } = {}) {
-  return new Promise((resolve) => {
-    const req = http.request(url, { method: 'GET', headers, timeout: timeoutMs }, (res) => {
-      const contentType = String(res.headers && res.headers['content-type'] || '');
-      const ok = !!(res.statusCode >= 200 && res.statusCode < 300 && /text\/event-stream/i.test(contentType));
-      req.destroy();
-      resolve(ok);
+async function eventStreamOk(url, { headers = {}, timeoutMs = 1000 } = {}) {
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers,
+      signal: Number(timeoutMs) > 0 ? AbortSignal.timeout(Number(timeoutMs)) : undefined,
     });
-    req.on('timeout', () => {
-      req.destroy();
-      resolve(false);
-    });
-    req.on('error', () => resolve(false));
-    req.end();
-  });
+    const contentType = String(res.headers.get('content-type') || '');
+    const ok = res.ok && /text\/event-stream/i.test(contentType);
+    if (res.body) await res.body.cancel();
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 async function discoverLmStudioModel() {
@@ -706,7 +689,7 @@ function screenshotRect(name, rect) {
   const w = Math.max(1, Math.round(Number(rect.width)));
   const h = Math.max(1, Math.round(Number(rect.height)));
   const file = path.join(screenshotsDir, `${name}.png`);
-  ensureDir(path.dirname(file));
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   const res = runCommand('screencapture', ['-x', '-R', `${x},${y},${w},${h}`, file], { timeoutMs: 15000 });
   if (!res.ok) fail(`screenshot ${name} failed: ${res.stderr || res.stdout}`);
   const size = fs.existsSync(file) ? fs.statSync(file).size : 0;
@@ -778,11 +761,11 @@ async function cleanup() {
 
 (async () => {
   if (process.platform !== 'darwin') fail('verify:interaction:lmstudio is macOS-only.');
-  ensureDir(runDir);
-  ensureDir(configDir);
-  ensureDir(hermesHome);
-  ensureDir(evalDir);
-  ensureDir(screenshotsDir);
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.mkdirSync(hermesHome, { recursive: true });
+  fs.mkdirSync(evalDir, { recursive: true });
+  fs.mkdirSync(screenshotsDir, { recursive: true });
   if (!fs.existsSync(appExecutable)) fail(`installed app executable not found: ${appExecutable}`);
 
   assertRealHermesAvailable();

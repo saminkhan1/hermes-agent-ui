@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { parseArgs } = require('node:util');
 const { EVENTS, STAGE_DEFS } = require('../src/main/reliability-schema');
 
 const DEFAULT_MIN_RUNS = 5;
@@ -263,24 +264,31 @@ function markdownReport(report) {
 }
 
 function parseCliArgs(argv) {
-  const args = { inputs: [], format: 'json', out: '', minRuns: DEFAULT_MIN_RUNS, strict: false };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === '--markdown') {
-      args.format = 'markdown';
-    } else if (arg === '--json') {
-      args.format = 'json';
-    } else if (arg === '--strict') {
-      args.strict = true;
-    } else if (arg === '--out') {
-      args.out = argv[++i] || '';
-    } else if (arg === '--min-runs') {
-      args.minRuns = Math.max(1, Math.trunc(Number(argv[++i]) || DEFAULT_MIN_RUNS));
-    } else {
-      args.inputs.push(arg);
+  const parsed = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    tokens: true,
+    options: {
+      markdown: { type: 'boolean' },
+      json: { type: 'boolean' },
+      strict: { type: 'boolean', default: false },
+      out: { type: 'string', default: '' },
+      'min-runs': { type: 'string', default: String(DEFAULT_MIN_RUNS) },
+    },
+  });
+  let format = 'json';
+  for (const token of parsed.tokens) {
+    if (token.kind === 'option' && (token.name === 'markdown' || token.name === 'json')) {
+      format = token.name === 'markdown' ? 'markdown' : 'json';
     }
   }
-  return args;
+  return {
+    inputs: parsed.positionals,
+    format,
+    out: parsed.values.out || '',
+    minRuns: Math.max(1, Math.trunc(Number(parsed.values['min-runs']) || DEFAULT_MIN_RUNS)),
+    strict: !!parsed.values.strict,
+  };
 }
 
 if (require.main === module) {

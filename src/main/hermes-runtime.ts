@@ -233,10 +233,6 @@ function execFileTextWithJsonEvents(command: any, args: any, opts: JsonEventOpti
   });
 }
 
-function ensureDir(dir: any) {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-}
-
 function absoluteCommandPath(value: any) {
   const command = String(value || '').trim();
   if (!command) return '';
@@ -618,7 +614,7 @@ function ensureLocalDesktopInYaml(text: any) {
 
 function ensureGatewayConfigFile(hermesHome = effectiveGatewayHermesHome()) {
   const home = path.resolve(hermesHome);
-  ensureDir(home);
+  fs.mkdirSync(home, { recursive: true });
   const file = path.join(home, 'config.yaml');
   const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   let next = current;
@@ -702,7 +698,7 @@ function ensureGatewayEnvFile(overrides: GatewayEnvOverrides = {}) {
     LOCAL_DESKTOP_HOME_CHANNEL: current.LOCAL_DESKTOP_HOME_CHANNEL || LOCAL_DESKTOP_HOME_CHANNEL,
     LOCAL_DESKTOP_HOME_CHANNEL_NAME: current.LOCAL_DESKTOP_HOME_CHANNEL_NAME || LOCAL_DESKTOP_HOME_CHANNEL_NAME,
   };
-  ensureDir(path.dirname(file));
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   const body = upsertGatewayEnvText(currentText, merged);
   if (body !== currentText) {
     fs.writeFileSync(file, body, { encoding: 'utf8', mode: 0o600 });
@@ -808,14 +804,10 @@ async function gatewayEventsOk(baseUrl: any, key: any, timeoutMs = 900) {
     const reader = res.body.getReader();
     const probeMs = Math.min(75, Math.max(25, Math.floor(timeoutMs / 4)));
     const read: Promise<StreamProbeResult> = reader.read().catch(() => ({ error: true }));
-    let probeTimer = null;
     const result = await Promise.race<StreamProbeResult>([
       read,
-      new Promise<StreamProbeResult>((resolve) => {
-        probeTimer = setTimeout(() => resolve({ pending: true }), probeMs);
-      }),
+      delay(probeMs, { pending: true } as StreamProbeResult),
     ]);
-    if (probeTimer) clearTimeout(probeTimer);
     if (result && result.error) return false;
     if (result && result.done) return false;
     return true;
@@ -997,7 +989,7 @@ async function ensureGatewayProcess(log = console, opts: GatewayReadyOptions = {
     if (!command || !executableExists(command)) {
       return { ok: false, error: missingHermesExecutableMessage(resolved), ...portRotation };
     }
-    ensureDir(hermesHome);
+    fs.mkdirSync(hermesHome, { recursive: true });
     const env = {
       ...process.env,
       ...gatewayEnv,
@@ -1077,6 +1069,7 @@ module.exports = {
   ensureGatewayEnvFile,
   ensureGatewayConfigFile,
   ensureGatewayProcess,
+  execFileText,
   executableExists,
   gatewayAuthOk,
   gatewayEventsOk,
