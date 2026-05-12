@@ -65,7 +65,14 @@ function providerId(provider: Provider = {}) {
 }
 
 function authenticatedProviderIds() {
-  return new Set((status?.providers || []).map((provider) => String(provider.slug || '').trim()).filter(Boolean));
+  const ids = new Set<string>();
+  for (const provider of status?.providers || []) {
+    for (const value of [provider.id, provider.slug]) {
+      const id = String(value || '').trim();
+      if (id) ids.add(id);
+    }
+  }
+  return ids;
 }
 
 function sortedCatalog() {
@@ -85,6 +92,16 @@ function sortedCatalog() {
 function selectedCatalogProvider() {
   const id = providerSelect?.value || '';
   return sortedCatalog().find((provider) => providerId(provider) === id) || null;
+}
+
+function selectedProviderIsAuthenticated() {
+  const provider = selectedCatalogProvider();
+  const id = providerId(provider || {}) || String(providerSelect?.value || '').trim();
+  return !!id && authenticatedProviderIds().has(id);
+}
+
+function selectedApiKeyEntered() {
+  return !!String(apiKeyInput?.value || '').trim();
 }
 
 function setError(message: LooseBoundaryValue) {
@@ -128,7 +145,8 @@ async function loadHeaderAppIcon() {
 }
 
 function syncFooter() {
-  const hasCredentials = Array.isArray(status?.providers) && status.providers.length > 0;
+  const selectedAuthenticated = selectedProviderIsAuthenticated();
+  const hasApiKey = selectedApiKeyEntered();
   if (backBtn) backBtn.hidden = step !== 'model';
   if (primaryBtn) {
     const waitingForOauth =
@@ -143,12 +161,14 @@ function syncFooter() {
         ? hasPendingRun
           ? 'Save & Start Task'
           : 'Save Model'
-        : hasCredentials
-          ? 'Continue'
-          : waitingForOauth
-            ? 'Waiting for Sign-In'
-            : mode === 'api'
-              ? 'Save API Key'
+        : waitingForOauth
+          ? 'Waiting for Sign-In'
+          : mode === 'api'
+            ? selectedAuthenticated && !hasApiKey
+              ? 'Continue'
+              : 'Save API Key'
+            : selectedAuthenticated
+              ? 'Continue'
               : 'Open Browser Sign-In';
   }
   if (hintEl) {
@@ -231,7 +251,20 @@ function syncProviderMode() {
 }
 
 function providerBySlug(slug: LooseBoundaryValue) {
-  return (status?.providers || []).find((provider) => String(provider.slug || '') === String(slug || '')) || null;
+  const id = String(slug || '').trim();
+  return (
+    (status?.providers || []).find(
+      (provider) => provider.id === id || provider.slug === id || providerId(provider) === id,
+    ) || null
+  );
+}
+
+function selectModelProvider(provider: LooseBoundaryValue) {
+  const id = String(provider || '').trim();
+  if (!id || !modelProviderSelect) return;
+  if (!Array.from(modelProviderSelect.options).some((option) => option.value === id)) return;
+  modelProviderSelect.value = id;
+  populateModelsForSelectedProvider();
 }
 
 function populateModelProviders() {
@@ -322,6 +355,7 @@ async function saveApiKey() {
     }
     if (apiKeyInput) apiKeyInput.value = '';
     await refreshStatus();
+    selectModelProvider(provider);
     showStep('model');
   } finally {
     setBusy(false);
@@ -457,7 +491,9 @@ async function applyAuthFlowSnapshot(flow: AuthFlow = {}, reason = '') {
     activeOauthSessionId = '';
     setOauthStatus('Sign-in completed.');
     setOauthMessage('Loading models.');
+    const completedProvider = String(flow.provider || providerSelect?.value || '').trim();
     const current = await refreshStatus();
+    selectModelProvider(completedProvider);
     if (current?.ready || current?.needs_model || (Array.isArray(current?.providers) && current.providers.length > 0)) {
       showStep('model');
     }
@@ -547,7 +583,7 @@ async function saveModelAndFinish() {
 }
 
 async function continueFromConnect() {
-  if (status?.providers && status.providers.length > 0) {
+  if (selectedProviderIsAuthenticated() && (mode !== 'api' || !selectedApiKeyEntered())) {
     showStep('model');
     return;
   }
@@ -580,6 +616,8 @@ providerSelect?.addEventListener('change', () => {
   syncProviderMode();
   syncFooter();
 });
+
+apiKeyInput?.addEventListener('input', syncFooter);
 
 openLinkBtn?.addEventListener('click', () => {
   if (latestOauthUrl && typeof window.agentUI.openExternalUrl === 'function') {

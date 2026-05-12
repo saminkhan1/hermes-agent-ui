@@ -99,6 +99,50 @@ function attachmentName(item: Partial<ConversationItem> = {}) {
   return String(descriptor.fileName || item.caption || `${item.attachmentType || 'file'} attachment`);
 }
 
+type AttachmentDescriptor = NonNullable<ConversationItem['attachment']>;
+
+function isRemoteAttachmentUrl(value: LooseBoundaryValue) {
+  try {
+    const protocol = new URL(String(value || '')).protocol;
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function isRemoteAttachmentDescriptor(descriptor: Partial<AttachmentDescriptor> = {}) {
+  return descriptor.source === 'remote' || isRemoteAttachmentUrl(descriptor.url);
+}
+
+function appendAttachmentOpenCard(
+  wrap: HTMLElement,
+  item: Partial<ConversationItem>,
+  descriptor: Partial<AttachmentDescriptor>,
+) {
+  const file = document.createElement('div');
+  file.className = 'attachment-file';
+  const name = document.createElement('span');
+  name.className = 'attachment-file-name';
+  name.textContent = attachmentName(item);
+  const open = document.createElement('button');
+  open.type = 'button';
+  open.className = 'attachment-open';
+  open.textContent = 'Open';
+  open.addEventListener('click', async () => {
+    if (typeof window.agentUI?.openAgentAttachment !== 'function') return;
+    setComposerError('');
+    try {
+      const result = await window.agentUI.openAgentAttachment(descriptor.url);
+      if (result && result.ok === false) setComposerError(result.error || 'Unable to open attachment.');
+    } catch {
+      setComposerError('Unable to open attachment.');
+    }
+  });
+  file.append(name, open);
+  wrap.appendChild(file);
+  return wrap;
+}
+
 function renderAttachmentContent(item: Partial<ConversationItem> = {}) {
   const descriptor = item.attachment || {};
   const type = String(item.attachmentType || '').toLowerCase();
@@ -114,6 +158,9 @@ function renderAttachmentContent(item: Partial<ConversationItem> = {}) {
   }
 
   if (descriptor.status === 'ready' && descriptor.url) {
+    if (isRemoteAttachmentDescriptor(descriptor)) {
+      return appendAttachmentOpenCard(wrap, item, descriptor);
+    }
     if (type === 'image') {
       const img = document.createElement('img');
       img.className = 'attachment-media';
@@ -142,28 +189,7 @@ function renderAttachmentContent(item: Partial<ConversationItem> = {}) {
       return wrap;
     }
 
-    const file = document.createElement('div');
-    file.className = 'attachment-file';
-    const name = document.createElement('span');
-    name.className = 'attachment-file-name';
-    name.textContent = attachmentName(item);
-    const open = document.createElement('button');
-    open.type = 'button';
-    open.className = 'attachment-open';
-    open.textContent = 'Open';
-    open.addEventListener('click', async () => {
-      if (typeof window.agentUI?.openAgentAttachment !== 'function') return;
-      setComposerError('');
-      try {
-        const result = await window.agentUI.openAgentAttachment(descriptor.url);
-        if (result && result.ok === false) setComposerError(result.error || 'Unable to open attachment.');
-      } catch {
-        setComposerError('Unable to open attachment.');
-      }
-    });
-    file.append(name, open);
-    wrap.appendChild(file);
-    return wrap;
+    return appendAttachmentOpenCard(wrap, item, descriptor);
   }
 
   const state = document.createElement('div');

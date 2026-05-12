@@ -294,6 +294,22 @@ function verifyInteractionSmokeContract() {
   requireText('src/renderer/src/conversation.ts', 'followupValueLength', 'conversation follow-up value assertion');
 }
 
+function verifyRendererSecurityContract() {
+  const conversationHtml = read('src/renderer/conversation.html');
+  const csp = (conversationHtml.match(/Content-Security-Policy"\s+content="([^"]+)"/s) || [])[1] || '';
+  for (const directive of ['img-src', 'media-src']) {
+    const match = csp.match(new RegExp(`${directive}([^;]*)`));
+    if (!match) fail(`conversation CSP missing ${directive}`);
+    if (/\bhttps?:/.test(match[1])) {
+      fail(`conversation CSP must not allow remote ${directive} media`);
+    }
+  }
+  requireText('src/renderer/src/conversation.ts', 'isRemoteAttachmentDescriptor', 'remote attachment autoload guard');
+  requireText('src/renderer/src/conversation.ts', 'appendAttachmentOpenCard', 'click-to-open attachment card');
+  requireText('src/renderer/src/auth.ts', 'selectedProviderIsAuthenticated', 'selected provider auth gating');
+  requireText('src/renderer/src/auth.ts', 'selectModelProvider(provider)', 'new API-key provider model selection');
+}
+
 function verifyBuildOutputs() {
   for (const rel of [
     'out/main/index.js',
@@ -338,6 +354,7 @@ verifyGatewayEnvContract();
 verifyEvalSurface();
 verifyInstalledSmokeContract();
 verifyInteractionSmokeContract();
+verifyRendererSecurityContract();
 verifyBuildOutputs();
 verifyPublicSurface();
 
