@@ -7,6 +7,7 @@ const RENDERER_DEV_PORT = 56247;
 const MAIN_ENTRIES = {
   index: 'src/main/index.ts',
   agents: 'src/main/agents.ts',
+  'eval-config': 'src/main/eval-config.ts',
   'eval-server': 'src/main/eval-server.ts',
   'eval-trace': 'src/main/eval-trace.ts',
   'hermes-attachments': 'src/main/hermes-attachments.ts',

@@ -33,6 +33,7 @@ type PreparedCatRun = MutableJsonObject & {
   closeModal?: boolean;
 };
 
+import './eval-config';
 import { getTrace, runDir as evalRunDir, runId as evalRunId, enabled as evalTraceEnabled } from './eval-trace';
 import { telemetry } from './reliability-telemetry';
 import {
