@@ -211,13 +211,15 @@ function runHermesPythonJson(
 
 const STATUS_SCRIPT = String.raw`
 import json
+import os
 import sys
 
 payload = json.loads(sys.stdin.read() or "{}")
 
-from hermes_cli.auth import PROVIDER_REGISTRY, _load_auth_store
+from hermes_cli.auth import AuthError, PROVIDER_REGISTRY, _load_auth_store
 from hermes_cli.auth_commands import _OAUTH_CAPABLE_PROVIDERS
-from hermes_cli.config import load_config, get_config_path, get_env_path
+from hermes_cli.config import load_config, get_config_path, get_env_path, get_env_value
+from hermes_cli.models import fetch_lmstudio_models
 from hermes_cli.model_switch import list_authenticated_providers
 
 cfg = load_config()
@@ -242,13 +244,53 @@ providers = list_authenticated_providers(
     max_models=50,
 )
 
+current_is_lmstudio = current_provider.strip().lower() == "lmstudio"
+lmstudio_auth_required = False
+if not any(
+    str(provider.get("slug") or provider.get("id") or "").strip().lower() == "lmstudio"
+    for provider in providers
+    if isinstance(provider, dict)
+):
+    lmstudio_base_url = (
+        current_base_url if current_is_lmstudio and current_base_url else
+        get_env_value("LM_BASE_URL") or os.environ.get("LM_BASE_URL", "") or "http://127.0.0.1:1234/v1"
+    ).rstrip("/")
+    try:
+        models = fetch_lmstudio_models(
+            api_key=get_env_value("LM_API_KEY") or os.environ.get("LM_API_KEY", ""),
+            base_url=lmstudio_base_url,
+            timeout=1.5,
+        )
+    except AuthError:
+        lmstudio_auth_required = True
+        models = []
+
+    if not lmstudio_auth_required and not models and current_is_lmstudio and current_model:
+        models = [current_model]
+
+    if not lmstudio_auth_required:
+        providers.append({
+            "slug": "lmstudio",
+            "id": "lmstudio",
+            "name": "LM Studio",
+            "source": "hermes",
+            "is_current": current_is_lmstudio,
+            "auth_type": "none",
+            "base_url": lmstudio_base_url,
+            "models": models[:50],
+            "total_models": len(models),
+        })
+
 catalog = []
 for provider_id, pconfig in sorted(PROVIDER_REGISTRY.items()):
     env_vars = list(getattr(pconfig, "api_key_env_vars", ()) or ())
+    auth_type = getattr(pconfig, "auth_type", "api_key") or "api_key"
+    if provider_id == "lmstudio" and not lmstudio_auth_required:
+        auth_type = "none"
     catalog.append({
         "id": provider_id,
         "name": getattr(pconfig, "name", provider_id) or provider_id,
-        "auth_type": getattr(pconfig, "auth_type", "api_key") or "api_key",
+        "auth_type": auth_type,
         "oauth_capable": provider_id in _OAUTH_CAPABLE_PROVIDERS,
         "api_key_env_vars": env_vars,
     })

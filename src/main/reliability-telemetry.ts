@@ -2,10 +2,10 @@
 
 import type { MutableJsonObject } from '../shared/contracts.ts';
 
+import * as reliabilitySchema from './reliability-schema.js';
 import { recordTrace } from './eval-trace';
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { EVENTS, SCHEMA_VERSION } = require('./reliability-schema');
+const { EVENTS, SCHEMA_VERSION } = reliabilitySchema;
 
 function emit(type: string, payload: MutableJsonObject = {}) {
   const tracePayload = {

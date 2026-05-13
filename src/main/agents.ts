@@ -83,10 +83,6 @@ function setOnAuthRequired(fn: LooseBoundaryValue) {
   onAuthRequired = typeof fn === 'function' ? fn : () => {};
 }
 
-function now() {
-  return Date.now();
-}
-
 function gatewayStreamDisconnectGraceMs() {
   const configured = Number(process.env.AGENT_UI_GATEWAY_STREAM_DISCONNECT_GRACE_MS);
   return Number.isFinite(configured) && configured >= 0
@@ -126,7 +122,7 @@ function writeDismissedGatewayConversations() {
 
 function pruneDismissedGatewayConversations() {
   const state = dismissedGatewayConversations || {};
-  const cutoff = now() - DISMISSED_RETENTION_MS;
+  const cutoff = Date.now() - DISMISSED_RETENTION_MS;
   let changed = false;
   for (const [catId, dismissedAt] of Object.entries(state)) {
     const ts = Number(dismissedAt || 0);
@@ -143,14 +139,14 @@ function isDismissedGatewayConversation(catId: LooseBoundaryValue) {
   if (!id) return false;
   const state = readDismissedGatewayConversations();
   const ts = Number(state![id] || 0);
-  return Number.isFinite(ts) && ts > 0 && now() - ts <= DISMISSED_RETENTION_MS;
+  return Number.isFinite(ts) && ts > 0 && Date.now() - ts <= DISMISSED_RETENTION_MS;
 }
 
 function rememberDismissedGatewayConversation(catId: LooseBoundaryValue) {
   const id = String(catId || '').trim();
   if (!id) return;
   const state = readDismissedGatewayConversations();
-  state![id] = now();
+  state![id] = Date.now();
   writeDismissedGatewayConversations();
 }
 
@@ -218,7 +214,7 @@ function eventTimeMs(event: MutableJsonObject = {}) {
   if (Number.isFinite(createdAt) && createdAt > 0) {
     return createdAt < 100000000000 ? Math.round(createdAt * 1000) : Math.round(createdAt);
   }
-  return now();
+  return Date.now();
 }
 
 function safeText(value: LooseBoundaryValue, max = 200000) {
@@ -231,7 +227,7 @@ function normalizeConversationItem(item: AgentConversationItem | MutableJsonObje
   if (!['user', 'assistant', 'error', 'attachment'].includes(kind)) return null;
   const out: AgentConversationItem = {
     kind,
-    at: Number(item.at || 0) || now(),
+    at: Number(item.at || 0) || Date.now(),
   };
   if (item.text != null) out.text = safeText(item.text);
   if (item.messageId != null) out.messageId = String(item.messageId);
@@ -272,7 +268,7 @@ function conversationSnapshot(
     endResult: rec.endResult,
     durationMs: rec.durationMs,
     gatewayConversationId: rec.gatewayConversationId || String(catId),
-    startedAt: Number(rec.startedAt || 0) || now(),
+    startedAt: Number(rec.startedAt || 0) || Date.now(),
     lastGatewayStopSeq: Number(rec.lastGatewayStopSeq || 0) || undefined,
     typing:
       rec.typing && typeof rec.typing === 'object'
@@ -361,7 +357,7 @@ function appendConversationError(rec: LooseBoundaryValue, message: LooseBoundary
   if (!text) return;
   const last = rec.items.at(-1);
   if (last && last.kind === 'error' && last.text === text) return;
-  rec.items.push({ kind: 'error', text, at: now() });
+  rec.items.push({ kind: 'error', text, at: Date.now() });
 }
 
 function terminalizeGatewayConversation(
@@ -376,12 +372,12 @@ function terminalizeGatewayConversation(
   appendConversationError(rec, message);
   rec.runStatus = 'error';
   rec.endResult = message;
-  rec.durationMs = rec.startedAt ? now() - rec.startedAt : 0;
+  rec.durationMs = rec.startedAt ? Date.now() - rec.startedAt : 0;
   rec.activeAssistantBubble = false;
   rec.typing = {
     ...(rec.typing || {}),
     active: false,
-    stoppedAt: now(),
+    stoppedAt: Date.now(),
   };
   persistConversation(catId);
   onConversationPushed({ catId });
@@ -510,7 +506,7 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
     return;
   const rec = ensureConversationForGatewayEvent(catId, event);
   if (!rec) return;
-  const receivedAt = now();
+  const receivedAt = Date.now();
   if (!rec.firstGatewayEventAt) {
     rec.firstGatewayEventAt = receivedAt;
     telemetry.gatewayFirstEvent({
@@ -575,7 +571,7 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
     const status = statusFromGatewayOutcome(typingEvent.outcome);
     rec.runStatus = status;
     rec.endResult = typingEvent.outcome ? `gateway ${typingEvent.outcome}` : 'gateway completed';
-    rec.durationMs = rec.startedAt ? now() - rec.startedAt : undefined;
+    rec.durationMs = rec.startedAt ? Date.now() - rec.startedAt : undefined;
     rec.activeAssistantBubble = false;
     rec.typing = {
       ...(rec.typing || {}),
@@ -672,7 +668,7 @@ function ensureGatewayClient(opts: AgentOptions = {}) {
 
 function recentGatewayReady() {
   if (!gatewayReadySnapshot || !gatewayReadySnapshot.result || !gatewayReadySnapshot.result.ok) return null;
-  if (now() - gatewayReadySnapshot.checkedAt > GATEWAY_READY_REUSE_MS) return null;
+  if (Date.now() - gatewayReadySnapshot.checkedAt > GATEWAY_READY_REUSE_MS) return null;
   return gatewayReadySnapshot.result;
 }
 
@@ -692,7 +688,7 @@ async function ensureGatewayReady(log = console, opts: GatewayReadyRequest = {})
     telemetry.gatewayReadyCheckJoined({ reason });
     return gatewayReadyPromise;
   }
-  const startedAt = now();
+  const startedAt = Date.now();
   telemetry.gatewayReadyCheckStarted({ reason });
   gatewayReadyPromise = (async () => {
     const result = await ensureGatewayProcess(log);
@@ -704,7 +700,7 @@ async function ensureGatewayReady(log = console, opts: GatewayReadyRequest = {})
       portRotated: !!(result && result.portRotated),
       previousBaseUrl: result && result.previousBaseUrl ? result.previousBaseUrl : null,
       baseUrl: result && result.baseUrl ? result.baseUrl : null,
-      durationMs: now() - startedAt,
+      durationMs: Date.now() - startedAt,
       reason,
       error: result && result.error ? result.error : null,
     };
@@ -719,7 +715,7 @@ async function ensureGatewayReady(log = console, opts: GatewayReadyRequest = {})
       throw err;
     }
     gatewayReadySnapshot = {
-      checkedAt: now(),
+      checkedAt: Date.now(),
       result,
     };
     return result;
@@ -732,7 +728,7 @@ async function ensureGatewayReady(log = console, opts: GatewayReadyRequest = {})
       telemetry.gatewayReadyCheckCompleted({
         ok: false,
         reason,
-        durationMs: now() - startedAt,
+        durationMs: Date.now() - startedAt,
         error: error && error.message ? error.message : String(error || 'Hermes gateway did not become ready.'),
       });
     }
@@ -744,13 +740,13 @@ async function ensureGatewayReady(log = console, opts: GatewayReadyRequest = {})
 
 function prewarmGatewayReady(opts: AgentOptions = {}) {
   const { log = console } = opts;
-  const startedAt = now();
+  const startedAt = Date.now();
   telemetry.gatewayPrewarmStarted({});
   return ensureGatewayReady(log, { reason: 'prewarm' })
     .then((result) => {
       telemetry.gatewayPrewarmCompleted({
         ok: !!(result && result.ok),
-        durationMs: now() - startedAt,
+        durationMs: Date.now() - startedAt,
         alreadyRunning: !!(result && result.alreadyRunning),
         started: !!(result && result.started),
         skipped: !!(result && result.skipped),
@@ -761,7 +757,7 @@ function prewarmGatewayReady(opts: AgentOptions = {}) {
       const message = error && error.message ? error.message : String(error || 'Hermes gateway did not become ready.');
       telemetry.gatewayPrewarmCompleted({
         ok: false,
-        durationMs: now() - startedAt,
+        durationMs: Date.now() - startedAt,
         error: message,
       });
       return { ok: false, error: message };
@@ -771,7 +767,7 @@ function prewarmGatewayReady(opts: AgentOptions = {}) {
 async function hydrateGatewayConversations(opts: AgentOptions = {}) {
   const { getMainWindow, log = console } = opts;
   const resetLastSeq = !gatewayClient && conversations.size === 0;
-  const startedAt = now();
+  const startedAt = Date.now();
   telemetry.gatewayHydrationStarted({ resetLastSeq });
   try {
     await ensureGatewayReady(log, { reason: 'hydrate' });
@@ -779,7 +775,7 @@ async function hydrateGatewayConversations(opts: AgentOptions = {}) {
     telemetry.gatewayHydrationCompleted({
       ok: true,
       resetLastSeq,
-      durationMs: now() - startedAt,
+      durationMs: Date.now() - startedAt,
     });
     return { ok: true, resetLastSeq };
   } catch (e: LooseBoundaryValue) {
@@ -788,7 +784,7 @@ async function hydrateGatewayConversations(opts: AgentOptions = {}) {
     telemetry.gatewayHydrationCompleted({
       ok: false,
       resetLastSeq,
-      durationMs: now() - startedAt,
+      durationMs: Date.now() - startedAt,
       error,
     });
     return { ok: false, error };
@@ -902,12 +898,12 @@ function initConversationState(catId: LooseBoundaryValue, { prompt, pointerConte
   conversations.set(id, {
     prompt: String(prompt || ''),
     pointerContext: pointerContext || null,
-    items: prompt ? [{ kind: 'user', text: String(prompt), at: now() }] : [],
+    items: prompt ? [{ kind: 'user', text: String(prompt), at: Date.now() }] : [],
     runStatus: 'running',
     activeAssistantBubble: false,
     artifactDir: evalTraceEnabled ? getCatArtifactDir(id) : null,
     gatewayConversationId: id,
-    startedAt: now(),
+    startedAt: Date.now(),
     typing: { active: false },
   });
   persistConversation(id);
@@ -1121,7 +1117,7 @@ async function runOnGateway(
     onConversationPushed({ catId: id });
   }
 
-  const postStartedAt = now();
+  const postStartedAt = Date.now();
   if (rec) rec.gatewayPostRequestedAt = postStartedAt;
   telemetry.gatewayMessagePostRequested({
     catId: id,
@@ -1142,7 +1138,7 @@ async function runOnGateway(
     },
   });
 
-  const acceptedAt = now();
+  const acceptedAt = Date.now();
   if (rec) rec.gatewayPostAcceptedAt = acceptedAt;
   telemetry.gatewayMessagePostAccepted({
     catId: id,
@@ -1164,10 +1160,10 @@ function markGatewayError(
   const rec = conversations.get(id);
   const message = error && error.message ? error.message : String(error || 'Hermes gateway is unavailable.');
   if (rec) {
-    rec.items.push({ kind: 'error', text: message, at: now() });
+    rec.items.push({ kind: 'error', text: message, at: Date.now() });
     rec.runStatus = 'error';
     rec.endResult = message;
-    rec.durationMs = rec.startedAt ? now() - rec.startedAt : 0;
+    rec.durationMs = rec.startedAt ? Date.now() - rec.startedAt : 0;
     rec.activeAssistantBubble = false;
     persistConversation(id);
     onConversationPushed({ catId: id });
@@ -1248,7 +1244,7 @@ async function sendFollowup(catId: LooseBoundaryValue, text: LooseBoundaryValue,
   }
 
   if (opts.recordUserItem !== false) {
-    rec.items.push({ kind: 'user', text: t, at: now() });
+    rec.items.push({ kind: 'user', text: t, at: Date.now() });
   }
   rec.runStatus = 'running';
   rec.endResult = undefined;
@@ -1280,7 +1276,7 @@ async function cancelAgent(catId: LooseBoundaryValue, opts: AgentOptions = {}) {
   if (status !== 'running') {
     return { ok: false, error: 'Cancel is available while Hermes is running.' };
   }
-  rec.items.push({ kind: 'user', text: 'Cancel requested.', at: now(), metadata: { command: '/stop' } });
+  rec.items.push({ kind: 'user', text: 'Cancel requested.', at: Date.now(), metadata: { command: '/stop' } });
   persistConversation(id);
   onConversationPushed({ catId: id });
 

@@ -29,12 +29,12 @@
     "verify": "npm run verify:source",
     "release:verify": "RELEASE_VERIFY_SIGNING_MODE=bootstrap RELEASE_VERIFY_APP_MODE=connector node scripts/release-manifest.js",
     "release:verify:developer-id": "RELEASE_VERIFY_SIGNING_MODE=developer-id RELEASE_VERIFY_APP_MODE=connector node scripts/release-manifest.js",
-    "smoke:installed-release": "node scripts/installed-app-release-smoke.js",
+    "release:github:refresh": "node scripts/github-release-refresh.js",
     "verify:installed": "node scripts/installed-app-release-smoke.js",
     "verify:live:lmstudio": "node scripts/lmstudio-live-preflight.js && AGENT_UI_INSTALLED_SMOKE_PROVIDER=lmstudio AGENT_UI_LMSTUDIO_MODEL=google/gemma-4-26b-a4b node scripts/installed-app-release-smoke.js",
     "verify:concurrency:3": "node scripts/lmstudio-live-preflight.js && AGENT_UI_INSTALLED_SMOKE_PROVIDER=lmstudio AGENT_UI_INSTALLED_SMOKE_PHASES=concurrency AGENT_UI_STAGE_REPORT_MIN_RUNS=3 AGENT_UI_LMSTUDIO_MODEL=google/gemma-4-26b-a4b node scripts/installed-app-release-smoke.js",
+    "verify:live:release": "node scripts/lmstudio-live-preflight.js && AGENT_UI_INSTALLED_SMOKE_PROVIDER=lmstudio AGENT_UI_INSTALLED_SMOKE_PHASES=first,reopen,concurrency AGENT_UI_STAGE_REPORT_MIN_RUNS=3 AGENT_UI_LMSTUDIO_MODEL=google/gemma-4-26b-a4b node scripts/installed-app-release-smoke.js",
     "verify:interaction:lmstudio": "node scripts/lmstudio-live-preflight.js && AGENT_UI_LMSTUDIO_MODEL=google/gemma-4-26b-a4b node scripts/interaction-lmstudio-smoke.js",
-    "report:stages": "node scripts/eval-stage-report.js",
     "start": "electron-vite preview"
   },
   "keywords": [

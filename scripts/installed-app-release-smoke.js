@@ -7,6 +7,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
 const { setTimeout: sleep } = require('node:timers/promises');
+const { parseEnv } = require('node:util');
 const { buildStageReportFromTraceFiles, discoverTraceFiles, markdownReport } = require('./eval-stage-report');
 
 const defaultBundle = '/Applications/agent-UI for Hermes.app';
@@ -21,7 +22,8 @@ function resolveAppExecutable(value) {
       .map((name) => path.join(macosDir, name))
       .find((file) => {
         try {
-          return fs.statSync(file).isFile() && fs.statSync(file).mode & 0o111;
+          const stat = fs.statSync(file);
+          return stat.isFile() && stat.mode & 0o111;
         } catch {
           return false;
         }
@@ -128,20 +130,12 @@ function readJson(file, fallback = null) {
 }
 
 function readEnvFile(file) {
-  const out = {};
   try {
-    const text = fs.readFileSync(file, 'utf8');
-    for (const line of text.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const idx = trimmed.indexOf('=');
-      if (idx <= 0) continue;
-      out[trimmed.slice(0, idx).trim()] = trimmed.slice(idx + 1).trim();
-    }
+    return parseEnv(fs.readFileSync(file, 'utf8'));
   } catch {
     // The app creates the gateway env entries during startup.
+    return {};
   }
-  return out;
 }
 
 function runCommand(command, args, opts = {}) {

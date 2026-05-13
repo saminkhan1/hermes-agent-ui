@@ -56,6 +56,14 @@ let oauthCancelRequested = false;
 let oauthMonitorState = 'idle';
 let autoStartedOAuth = false;
 
+function providerAuthMode(provider: Provider | null = selectedCatalogProvider()) {
+  const type = String(provider?.auth_type || '')
+    .trim()
+    .toLowerCase();
+  if (type === 'none' || type === 'local') return 'none';
+  return provider && (provider.oauth_capable || type !== 'api_key') ? 'oauth' : 'api';
+}
+
 function providerLabel(provider: Provider = {}) {
   return String(provider.name || provider.id || provider.slug || '').trim();
 }
@@ -96,6 +104,7 @@ function selectedCatalogProvider() {
 
 function selectedProviderIsAuthenticated() {
   const provider = selectedCatalogProvider();
+  if (providerAuthMode(provider) === 'none') return true;
   const id = providerId(provider || {}) || String(providerSelect?.value || '').trim();
   return !!id && authenticatedProviderIds().has(id);
 }
@@ -163,13 +172,15 @@ function syncFooter() {
           : 'Save Model'
         : waitingForOauth
           ? 'Waiting for Sign-In'
-          : mode === 'api'
-            ? selectedAuthenticated && !hasApiKey
-              ? 'Continue'
-              : 'Save API Key'
-            : selectedAuthenticated
-              ? 'Continue'
-              : 'Open Browser Sign-In';
+          : mode === 'none'
+            ? 'Continue'
+            : mode === 'api'
+              ? selectedAuthenticated && !hasApiKey
+                ? 'Continue'
+                : 'Save API Key'
+              : selectedAuthenticated
+                ? 'Continue'
+                : 'Open Browser Sign-In';
   }
   if (hintEl) {
     const escLabel =
@@ -242,12 +253,8 @@ function populateProviderSelect() {
 
 function syncProviderMode() {
   const provider = selectedCatalogProvider();
-  const oauthCapable = !!(provider && (provider.oauth_capable || provider.auth_type !== 'api_key'));
-  if (!mode) {
-    setMode(oauthCapable ? 'oauth' : 'api');
-  } else if (mode === 'oauth' && !oauthCapable) {
-    setMode('api');
-  }
+  const nextMode = providerAuthMode(provider);
+  if (!mode || mode !== nextMode) setMode(nextMode);
 }
 
 function providerBySlug(slug: LooseBoundaryValue) {
@@ -334,8 +341,8 @@ async function refreshStatus() {
         : 'Choose the model Hermes should use.';
     } else {
       subtitleEl.textContent = hasPendingRun
-        ? 'Sign in once and your task will continue automatically.'
-        : 'Sign in once, choose a model, then start working from the desktop shortcut.';
+        ? 'Connect once and your task will continue automatically.'
+        : 'Connect once, choose a model, then start working from the desktop shortcut.';
     }
   }
   return status;
@@ -583,6 +590,11 @@ async function saveModelAndFinish() {
 }
 
 async function continueFromConnect() {
+  if (mode === 'none') {
+    selectModelProvider(providerSelect?.value || '');
+    showStep('model');
+    return;
+  }
   if (selectedProviderIsAuthenticated() && (mode !== 'api' || !selectedApiKeyEntered())) {
     showStep('model');
     return;

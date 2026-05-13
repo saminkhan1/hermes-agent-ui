@@ -156,14 +156,14 @@ Known first-run cases to check:
 Use the four-ring release workflow for user-downloadable macOS artifacts:
 
 1. Ring 0, local fast checks: `npm run verify:source`. No VMs.
-2. Ring 1, GitHub Actions build gate: `.github/workflows/mac-release.yml` runs on pinned `macos-15`, builds connector bootstrap DMG + zip artifacts, verifies manifests plus artifact hashes, and uploads artifacts. GitHub runners are only a build gate, not clean-install proof.
+2. Ring 1, GitHub Actions build gate: `.github/workflows/mac-release.yml` runs on pinned `macos-15`, verifies source contracts against a real Hermes checkout, builds connector bootstrap DMG + zip artifacts once, verifies manifests plus artifact hashes, and uploads artifacts. GitHub runners are only a build gate, not clean-install proof.
 3. Ring 2, installed-app automation: install or extract the exact connector artifact, run the smoke against `/Applications/agent-UI for Hermes.app`, and preserve its evidence directory.
 4. Ring 3, manual customer pass: mount the DMG, drag to `/Applications`, launch from Finder, approve the bootstrap Gatekeeper prompt with right-click Open if needed, confirm TCC microphone prompts, tray/menu behavior, text/voice sessions, follow-up, cancel, background mode, quit/reopen, and clear first-run errors for missing credentials, offline mode, port conflicts, and denied permissions.
 
 After installing a release candidate into `/Applications`, run the installed-app automation before the human Ring 3 pass:
 
 ```bash
-npm run smoke:installed-release -- "/Applications/agent-UI for Hermes.app"
+npm run verify:installed -- "/Applications/agent-UI for Hermes.app"
 ```
 
 The smoke launches the installed app in eval mode with isolated config/Hermes home directories, blocks the default gateway port to exercise port-conflict recovery, drives background mode, follow-up, cancel, conversation-window, and quit/reopen checks, then writes JSON evidence to `/private/tmp/agent-ui-installed-release-smoke-*`.
@@ -177,6 +177,11 @@ npm run release:verify
 This writes `dist/release-manifest.json` with app mode, app version, git SHA, app source dirty status, connector Hermes baseline, whether Hermes runtime is included, packaged `local_desktop` source-match status, signing identity, notarization status, and SHA-256 hashes for every DMG/zip artifact. In bootstrap signing mode, `notarizationStatus` is recorded as `not_applicable_bootstrap`; `spctl` and stapler results are still captured as evidence but are not required to pass.
 
 The customer-facing download link should be the GitHub Release page, not a GitHub Actions artifact link.
+After all local and GitHub gates pass, refresh the GitHub Release assets from the verified manifest:
+
+```bash
+npm run release:github:refresh -- v1.0.0-beta.1
+```
 
 ## Verify
 
@@ -184,16 +189,17 @@ The customer-facing download link should be the GitHub Release page, not a GitHu
 npm run verify:source
 npm run dist:mac
 npm run release:verify
+npm run verify:live:release -- "/Applications/agent-UI for Hermes.app"
 npm run verify:interaction:lmstudio -- "/Applications/agent-UI for Hermes.app"
-npm run verify:live:lmstudio -- "/Applications/agent-UI for Hermes.app"
-npm run verify:concurrency:3 -- "/Applications/agent-UI for Hermes.app"
 ```
 
 `verify:source` is the fast app-owned contract gate: Hermes contract drift, TypeScript, build output, packaging mode, gateway env, eval server auth, and installed-smoke wiring. It is not a fake user-flow pass.
 
 `verify:interaction:lmstudio` is the narrow macOS user-flow gate. It requires Accessibility permission plus the direct NousResearch Hermes clone, launches the installed app with isolated config, uses the real menu/shortcut/paste/click/Enter path, sends an initial prompt plus follow-up through real Hermes and real LM Studio, and saves screenshots plus JSON evidence under `/private/tmp/agent-ui-interaction-lmstudio-*`. Eval mode is only used for observation, coordinates, trace evidence, and shutdown; no local adapter or synthetic gateway is allowed.
 
-`verify:live:lmstudio` and `verify:concurrency:3` are the demo gates. They require LM Studio serving `google/gemma-4-26b-a4b` at `http://127.0.0.1:1234/v1`, loaded with at least 64K context and parallelism for three requests, then drive the installed app through real Hermes and real model responses.
+`verify:live:release` is the preferred release gate for the live installed-app path. It runs the same first-launch, follow-up, cancel, post-cancel, reopen, and three-session concurrency checks in one installed-app smoke run, after one LM Studio preflight.
+
+`verify:live:lmstudio` and `verify:concurrency:3` remain targeted demo gates. They require LM Studio serving `google/gemma-4-26b-a4b` at `http://127.0.0.1:1234/v1`, loaded with at least 64K context and parallelism for three requests, then drive the installed app through real Hermes and real model responses.
 
 The gateway client/runtime are part of the Electron main process bundle. `npm run verify:source` checks that the build emits:
 

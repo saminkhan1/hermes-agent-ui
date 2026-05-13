@@ -9,9 +9,8 @@ import net from 'node:net';
 import { spawn, execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { promisify } from 'node:util';
+import { parseEnv, promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
-import { parseGatewayEnvText } from './hermes-gateway-client';
 import {
   defaultConnectorHermesCandidates,
   defaultGatewayEnvPathForMode,
@@ -733,7 +732,7 @@ function upsertGatewayEnvText(current: LooseBoundaryValue, gatewayEnv: LooseBoun
 function ensureGatewayEnvFile(overrides: GatewayEnvOverrides = {}) {
   const file = defaultGatewayEnvPathForMode();
   const currentText = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-  const current = parseGatewayEnvText(currentText);
+  const current = parseEnv(currentText);
   const nextPort = overrides.LOCAL_DESKTOP_PORT || overrides.port || current.LOCAL_DESKTOP_PORT || '8766';
   const nextHost = overrides.LOCAL_DESKTOP_HOST || overrides.host || current.LOCAL_DESKTOP_HOST || '127.0.0.1';
   const merged = {

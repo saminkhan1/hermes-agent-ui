@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
+import { parseEnv } from 'node:util';
 import { defaultGatewayEnvPathForMode, getAgentUIConfigDir } from './hermes-release';
 
 const DEFAULT_POST_TIMEOUT_MS = 15000;
@@ -60,29 +61,9 @@ function defaultStatePath() {
   return path.join(getAgentUIConfigDir(), 'hermes-gateway.json');
 }
 
-function unquoteEnvValue(value: LooseBoundaryValue) {
-  const text = String(value || '').trim();
-  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
-    return text.slice(1, -1);
-  }
-  return text;
-}
-
-function parseGatewayEnvText(text = ''): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const line of String(text || '').split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const match = trimmed.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-    if (!match) continue;
-    out[match[1]] = unquoteEnvValue(match[2]);
-  }
-  return out;
-}
-
-function readGatewayEnvFile(file = defaultGatewayEnvPathForMode()): Record<string, string> {
+function readGatewayEnvFile(file = defaultGatewayEnvPathForMode()) {
   try {
-    return parseGatewayEnvText(fs.readFileSync(file, 'utf8'));
+    return parseEnv(fs.readFileSync(file, 'utf8'));
   } catch {
     return {};
   }
@@ -479,6 +460,5 @@ export {
   gatewayBaseUrlFromEnv,
   gatewayKeyFromEnv,
   parseSseFrame,
-  parseGatewayEnvText,
   readGatewayEnvFile,
 };

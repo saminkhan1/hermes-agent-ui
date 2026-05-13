@@ -1,16 +1,12 @@
 'use strict';
 
-import { nativeImage } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 
 const CUSTOM_PET_PREFIX = 'custom:';
 const PET_ASSET_SCHEME = 'agent-ui-pet';
 const PET_MANIFEST_FILE = 'pet.json';
-const LEGACY_AVATAR_MANIFEST_FILE = 'avatar.json';
 const PET_DEFAULT_SPRITESHEET = 'spritesheet.webp';
-const PET_SPRITESHEET_WIDTH = 1536;
-const PET_SPRITESHEET_HEIGHT = 1872;
 
 function readJsonFile(file: LooseBoundaryValue) {
   const data = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -39,14 +35,6 @@ function spritesheetMimeType(file: LooseBoundaryValue) {
   return '';
 }
 
-function readSpritesheetDimensions(file: LooseBoundaryValue) {
-  if (!spritesheetMimeType(file)) return null;
-  const image = nativeImage.createFromPath(String(file || ''));
-  if (image.isEmpty()) return null;
-  const { width, height } = image.getSize();
-  return Number.isFinite(width) && Number.isFinite(height) ? { width, height } : null;
-}
-
 function petSpriteUrl(id: LooseBoundaryValue) {
   return `${PET_ASSET_SCHEME}://sprite/${encodeURIComponent(String(id || ''))}`;
 }
@@ -70,9 +58,8 @@ function loadPetPackage(packageDir: LooseBoundaryValue, manifestFile: LooseBound
   const manifest = readJsonFile(manifestPath);
   const spritesheetPath = resolvePetSpritesheetPath(packageDir, manifest);
   if (!spritesheetPath || !fs.existsSync(spritesheetPath)) return null;
-  const dimensions = readSpritesheetDimensions(spritesheetPath);
-  if (!dimensions || dimensions.width !== PET_SPRITESHEET_WIDTH || dimensions.height !== PET_SPRITESHEET_HEIGHT)
-    return null;
+  const mimeType = spritesheetMimeType(spritesheetPath);
+  if (!mimeType) return null;
   const directoryId = path.basename(packageDir);
   const id = `${CUSTOM_PET_PREFIX}${directoryId}`;
   const displayName = safeManifestString(manifest.displayName) || safeManifestString(manifest.id) || directoryId;
@@ -84,7 +71,7 @@ function loadPetPackage(packageDir: LooseBoundaryValue, manifestFile: LooseBound
     id,
     label: displayName,
     sourceDirectory: packageDir,
-    spritesheetMimeType: spritesheetMimeType(spritesheetPath),
+    spritesheetMimeType: mimeType,
     spritesheetPath,
   };
 }
@@ -114,7 +101,6 @@ function loadPetCharacterOptions({ codexHome, packageRoot }: LooseBoundaryValue)
   const byId = new Map();
   const roots = [
     { dir: path.join(packageRoot, 'assets', 'pets'), manifestFile: PET_MANIFEST_FILE, create: false },
-    { dir: path.join(codexHome, 'avatars'), manifestFile: LEGACY_AVATAR_MANIFEST_FILE, create: false },
     { dir: path.join(codexHome, 'pets'), manifestFile: PET_MANIFEST_FILE, create: true },
   ];
   for (const root of roots) {
@@ -137,12 +123,4 @@ function petCharactersPayload({ options, selectedId }: LooseBoundaryValue) {
   };
 }
 
-export {
-  CUSTOM_PET_PREFIX,
-  PET_ASSET_SCHEME,
-  PET_MANIFEST_FILE,
-  LEGACY_AVATAR_MANIFEST_FILE,
-  loadPetCharacterOptions,
-  petCharactersPayload,
-  petSpriteUrl,
-};
+export { CUSTOM_PET_PREFIX, PET_ASSET_SCHEME, loadPetCharacterOptions, petCharactersPayload, petSpriteUrl };

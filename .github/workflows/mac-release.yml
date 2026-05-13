@@ -35,14 +35,31 @@ jobs:
           node-version: '22'
           cache: npm
 
+      - name: Restore Electron builder caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+          key: ${{ runner.os }}-${{ runner.arch }}-electron-builder-${{ hashFiles('package-lock.json', 'packaging/*.cjs') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-electron-builder-
+
       - name: Install JavaScript dependencies
         run: npm ci
 
-      - name: Ring 0 fast checks
-        run: npm run verify
+      - name: Ring 0 source checks
+        run: |
+          npm run verify:hermes-contracts
+          npm run typecheck
+          npm run format:check
+          npm run lint
 
       - name: Ring 1 package connector bootstrap DMG and zip
         run: npm run dist:mac
+
+      - name: Verify post-build source contracts
+        run: npm run verify:source-contracts
 
       - name: Record and verify bootstrap artifacts
         run: npm run release:verify

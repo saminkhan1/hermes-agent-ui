@@ -526,9 +526,13 @@ function onPetPointerMove(e: LooseBoundaryValue) {
   petDrag.hasMoved = true;
   petDrag.screenX = e.screenX;
   petDrag.screenY = e.screenY;
+  const previousState = petDrag.transientState;
+  if (deltaX >= DRAG_THRESHOLD_PX) petDrag.transientState = 'running-right';
+  else if (deltaX <= -DRAG_THRESHOLD_PX) petDrag.transientState = 'running-left';
   if (window.agentUI && typeof window.agentUI.movePetDrag === 'function') {
     window.agentUI.movePetDrag();
   }
+  if (petDrag.transientState !== previousState) renderMascot(notifications());
 }
 
 function openSessionConversation(catId: LooseBoundaryValue) {
@@ -574,7 +578,7 @@ function ensureMascotAvatar() {
 function renderMascot(list: LooseBoundaryValue) {
   const top = list[0] || null;
   const meta = statusMeta(top ? top.level : 'idle');
-  const state: LooseBoundaryValue = mascotHover ? 'jumping' : meta.mascotState;
+  const state: LooseBoundaryValue = petDrag?.transientState || (mascotHover ? 'jumping' : meta.mascotState);
   const pet = currentPetOption();
   const stage = mascot ? mascot.closest<HTMLElement>('.pet-stage') : null;
   styleBox(stage, layout.mascot);

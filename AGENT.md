@@ -100,8 +100,8 @@ npm run verify:hermes-contracts
 npm run verify:source-contracts
 npm run dist:mac
 npm run release:verify
+npm run release:github:refresh -- v1.0.0-beta.1
 npm run verify:installed -- "/Applications/agent-UI for Hermes.app"
-npm run smoke:installed-release -- "/Applications/agent-UI for Hermes.app"
 ```
 
 Real LM Studio gates require LM Studio serving `google/gemma-4-26b-a4b` on
@@ -109,6 +109,7 @@ Real LM Studio gates require LM Studio serving `google/gemma-4-26b-a4b` on
 macOS Accessibility permission and the direct NousResearch Hermes clone:
 
 ```bash
+npm run verify:live:release -- "/Applications/agent-UI for Hermes.app"
 npm run verify:interaction:lmstudio -- "/Applications/agent-UI for Hermes.app"
 npm run verify:live:lmstudio -- "/Applications/agent-UI for Hermes.app"
 npm run verify:concurrency:3 -- "/Applications/agent-UI for Hermes.app"
@@ -123,6 +124,9 @@ npm run verify:concurrency:3 -- "/Applications/agent-UI for Hermes.app"
 - For release, packaging, signing, or app-mode changes, run `npm run dist:mac`
   and `npm run release:verify`; then use the installed-app smoke against the
   actual app path.
+- For full live release proof, prefer `npm run verify:live:release` over
+  separately running `verify:live:lmstudio` plus `verify:concurrency:3`. The
+  targeted scripts stay available for narrower reruns.
 - For Hermes boundary changes, run `npm run verify:hermes-contracts` and verify
   against `/Users/saminkhan1/Documents/hermes/hermes-agent`.
 - For menu, shortcut, modal, paste, click, or follow-up/cancel user-flow

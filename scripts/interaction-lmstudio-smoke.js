@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { setTimeout: sleep } = require('node:timers/promises');
+const { parseEnv } = require('node:util');
 
 const repoRoot = path.resolve(__dirname, '..');
 const localBundle = path.join(repoRoot, 'dist', 'mac-arm64', 'agent-UI for Hermes.app');
@@ -285,20 +286,12 @@ function assertRealHermesAvailable() {
 }
 
 function readEnvFile(file) {
-  const out = {};
   try {
-    const text = fs.readFileSync(file, 'utf8');
-    for (const line of text.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const idx = trimmed.indexOf('=');
-      if (idx <= 0) continue;
-      out[trimmed.slice(0, idx).trim()] = trimmed.slice(idx + 1).trim();
-    }
+    return parseEnv(fs.readFileSync(file, 'utf8'));
   } catch {
     // The app writes the gateway env during startup.
+    return {};
   }
-  return out;
 }
 
 async function gatewayReadyProbe(timeoutMs = 1000) {

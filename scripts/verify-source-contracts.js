@@ -78,6 +78,7 @@ function verifyPackageScripts() {
       'release:verify:developer-id',
       ['RELEASE_VERIFY_SIGNING_MODE=developer-id', 'RELEASE_VERIFY_APP_MODE=connector', 'release-manifest.js'],
     ],
+    ['release:github:refresh', ['github-release-refresh.js']],
   ]) {
     const script = packageScript(name);
     for (const token of tokens) {
@@ -95,8 +96,16 @@ function verifyPackageScripts() {
     requireNoPackageScript(removed, 'Use the direct connector release scripts instead.');
   }
   requireNoPackageScript(
+    'smoke:installed-release',
+    'Use verify:installed so the installed-app gate has one supported name.',
+  );
+  requireNoPackageScript(
     'smoke:installed-release:lmstudio',
     'Use verify:live:lmstudio so LM Studio preflight cannot be skipped.',
+  );
+  requireNoPackageScript(
+    'report:stages',
+    'Installed-app smoke writes stage reports directly; keep eval-stage-report as a helper.',
   );
   if (packageScript('verify:installed') !== 'node scripts/installed-app-release-smoke.js') {
     fail('verify:installed must be the black-box installed-app smoke.');
@@ -118,6 +127,17 @@ function verifyPackageScripts() {
     'AGENT_UI_LMSTUDIO_MODEL=google/gemma-4-26b-a4b',
   ]) {
     if (!concurrency.includes(token)) fail(`verify:concurrency:3 must include ${token}.`);
+  }
+  const liveRelease = packageScript('verify:live:release');
+  for (const token of [
+    'lmstudio-live-preflight.js',
+    'AGENT_UI_INSTALLED_SMOKE_PROVIDER=lmstudio',
+    'AGENT_UI_INSTALLED_SMOKE_PHASES=first,reopen,concurrency',
+    'AGENT_UI_STAGE_REPORT_MIN_RUNS=3',
+    'AGENT_UI_LMSTUDIO_MODEL=google/gemma-4-26b-a4b',
+    'installed-app-release-smoke.js',
+  ]) {
+    if (!liveRelease.includes(token)) fail(`verify:live:release must include ${token}.`);
   }
   const interaction = packageScript('verify:interaction:lmstudio');
   for (const token of [
