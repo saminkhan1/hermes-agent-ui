@@ -19,14 +19,15 @@ jobs:
     env:
       RELEASE_VERIFY_SIGNING_MODE: bootstrap
       RELEASE_VERIFY_APP_MODE: connector
-      HERMES_AGENT_ROOT: ${{ runner.temp }}/hermes-agent
 
     steps:
       - name: Check out agent-UI
         uses: actions/checkout@v4
 
       - name: Check out Hermes Agent contracts
-        run: git clone --depth 1 https://github.com/NousResearch/hermes-agent.git "$HERMES_AGENT_ROOT"
+        run: |
+          git clone --depth 1 https://github.com/NousResearch/hermes-agent.git "$RUNNER_TEMP/hermes-agent"
+          echo "HERMES_AGENT_ROOT=$RUNNER_TEMP/hermes-agent" >> "$GITHUB_ENV"
 
       - name: Set up Node
         uses: actions/setup-node@v4
