@@ -1,4 +1,9 @@
-import { activeElementForEval, rectForEvalElement, visibleTextForEval } from './eval-ui-state.ts';
+import {
+  activeElementForEval,
+  rectForEvalElement,
+  textControlValueForEval,
+  visibleTextForEval,
+} from './eval-ui-state.ts';
 import { insertNewlineAtCursor } from './insert-newline-at-cursor.ts';
 import type {
   AgentConversationItem as ConversationItem,
@@ -32,10 +37,23 @@ type ConversationUpdatedEvent = {
 
 let unsubUpdated: null | (() => void) = null;
 let lastData: ConversationData | null = null;
+const CONVERSATION_ITEM_KINDS = new Set(['user', 'assistant', 'error', 'attachment']);
+const AUTH_ERROR_MARKERS = [
+  'provider authentication failed',
+  'no inference provider configured',
+  'run `hermes model`',
+  "run 'hermes model'",
+  'hermes model',
+  'primary provider auth failed',
+  'no api key',
+  'api key is missing',
+  'authentication failed',
+];
 
 function reportEvalUiState() {
   if (!window.agentUI || typeof window.agentUI.reportEvalUiState !== 'function') return;
   const visibleText = visibleTextForEval();
+  const followupValue = textControlValueForEval(followupInput);
   const lineEntries = Array.from(document.querySelectorAll('.line'))
     .slice(0, 20)
     .map((line) => {
@@ -51,7 +69,8 @@ function reportEvalUiState() {
     logRect: rectForEvalElement(logEl, { includeHidden: true }),
     followupRect: rectForEvalElement(followupInput, { includeHidden: true }),
     activeElement: activeElementForEval(),
-    followupValueLength: followupInput && typeof followupInput.value === 'string' ? followupInput.value.length : 0,
+    followupValueLength: followupValue.length,
+    followupValuePreview: followupValue.preview,
     ...visibleText,
     lineEntries,
   });
@@ -204,17 +223,7 @@ function renderAttachmentContent(item: Partial<ConversationItem> = {}) {
 
 function isAuthErrorText(value: LooseBoundaryValue) {
   const text = String(value || '').toLowerCase();
-  return [
-    'provider authentication failed',
-    'no inference provider configured',
-    'run `hermes model`',
-    "run 'hermes model'",
-    'hermes model',
-    'primary provider auth failed',
-    'no api key',
-    'api key is missing',
-    'authentication failed',
-  ].some((marker) => text.includes(marker));
+  return AUTH_ERROR_MARKERS.some((marker) => text.includes(marker));
 }
 
 function renderAuthErrorAction() {
@@ -236,7 +245,7 @@ function renderAuthErrorAction() {
 function renderLogItems(items: ConversationItem[] = []) {
   logEl!.replaceChildren();
   for (const item of items || []) {
-    if (!item || !['user', 'assistant', 'error', 'attachment'].includes(item.kind)) continue;
+    if (!item || !CONVERSATION_ITEM_KINDS.has(item.kind)) continue;
 
     const line = document.createElement('div');
     line.className = `line ${kindClass(item.kind)}`;
@@ -455,6 +464,10 @@ if (followupInput) {
     reportEvalUiState();
   });
 
+  followupInput.addEventListener('paste', () => {
+    window.setTimeout(reportEvalUiState, 0);
+  });
+
   followupInput.addEventListener('focus', () => {
     reportEvalUiState();
   });
@@ -490,4 +503,7 @@ window.addEventListener('beforeunload', () => {
 });
 
 window.addEventListener('resize', reportEvalUiState);
-window.addEventListener('load', reportEvalUiState);
+window.addEventListener('load', () => {
+  if (followupInput && !followupInput.disabled) followupInput.focus();
+  reportEvalUiState();
+});

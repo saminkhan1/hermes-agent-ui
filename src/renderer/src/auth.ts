@@ -72,6 +72,11 @@ function providerId(provider: Provider = {}) {
   return String(provider.id || provider.slug || '').trim();
 }
 
+function selectHasValue(select: HTMLSelectElement | null, value: LooseBoundaryValue) {
+  const target = String(value || '').trim();
+  return !!target && !!select && Array.from(select.options).some((option) => option.value === target);
+}
+
 function authenticatedProviderIds() {
   const ids = new Set<string>();
   for (const provider of status?.providers || []) {
@@ -232,6 +237,7 @@ function setMode(nextMode: string) {
 function populateProviderSelect() {
   if (!providerSelect) return;
   const prior = providerSelect.value;
+  const currentProvider = status?.current_provider || '';
   providerSelect.replaceChildren();
   for (const provider of sortedCatalog()) {
     const option = document.createElement('option');
@@ -239,13 +245,10 @@ function populateProviderSelect() {
     option.textContent = providerLabel(provider);
     providerSelect.appendChild(option);
   }
-  if (prior && Array.from(providerSelect.options).some((option) => option.value === prior)) {
+  if (selectHasValue(providerSelect, prior)) {
     providerSelect.value = prior;
-  } else if (
-    status?.current_provider &&
-    Array.from(providerSelect.options).some((option) => option.value === status!.current_provider)
-  ) {
-    providerSelect.value = status.current_provider;
+  } else if (selectHasValue(providerSelect, currentProvider)) {
+    providerSelect.value = currentProvider;
   }
   syncProviderMode();
   syncSetupChrome();
@@ -269,7 +272,7 @@ function providerBySlug(slug: LooseBoundaryValue) {
 function selectModelProvider(provider: LooseBoundaryValue) {
   const id = String(provider || '').trim();
   if (!id || !modelProviderSelect) return;
-  if (!Array.from(modelProviderSelect.options).some((option) => option.value === id)) return;
+  if (!selectHasValue(modelProviderSelect, id)) return;
   modelProviderSelect.value = id;
   populateModelsForSelectedProvider();
 }
@@ -285,7 +288,7 @@ function populateModelProviders() {
     option.textContent = String(provider.name || provider.slug || '');
     modelProviderSelect.appendChild(option);
   }
-  if (prior && Array.from(modelProviderSelect.options).some((option) => option.value === prior)) {
+  if (selectHasValue(modelProviderSelect, prior)) {
     modelProviderSelect.value = prior;
   }
   populateModelsForSelectedProvider();
@@ -466,12 +469,9 @@ async function applyAuthFlowSnapshot(flow: AuthFlow = {}, reason = '') {
   latestOauthUrl = String(flow.latestUrl || '');
   if (!latestOauthUrl) openedOauthUrl = '';
   latestUserCode = String(flow.userCode || '');
-  if (
-    flow.provider &&
-    providerSelect &&
-    Array.from(providerSelect.options).some((option) => option.value === flow.provider)
-  ) {
-    providerSelect.value = flow.provider;
+  const flowProvider = flow.provider || '';
+  if (providerSelect && selectHasValue(providerSelect, flowProvider)) {
+    providerSelect.value = flowProvider;
   }
   if (nextState !== 'idle') setMode('oauth');
   updateOauthSummary();

@@ -4,12 +4,11 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { AgentUIPayload, MutableJsonObject } from '../shared/contracts.ts';
 
 import { EventEmitter } from 'node:events';
-import fs from 'node:fs';
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { stripVTControlCharacters } from 'node:util';
 import {
+  connectorHermesRuntimeForCommand,
   defaultHermesHome,
   executableExists,
   hermesCwd,
@@ -24,6 +23,17 @@ const MAX_LABEL_CHARS = 80;
 const MAX_API_KEY_CHARS = 20000;
 const MAX_MODEL_CHARS = 256;
 const MAX_OUTPUT_CHARS = 120000;
+const AUTH_ERROR_MARKERS = [
+  'provider authentication failed',
+  'no inference provider configured',
+  'run `hermes model`',
+  "run 'hermes model'",
+  'hermes model',
+  'primary provider auth failed',
+  'no api key',
+  'api key is missing',
+  'authentication failed',
+];
 
 const events = new EventEmitter();
 
@@ -78,33 +88,6 @@ function cleanHermesOutput(value: LooseBoundaryValue) {
   return stripVTControlCharacters(String(value || '')).replace(/\r/g, '');
 }
 
-function pythonRuntimeForHermes(command: LooseBoundaryValue) {
-  const resolved = path.resolve(String(command || ''));
-  const candidates = [];
-  const parts = resolved.split(path.sep);
-  const hermesAgentIdx = parts.lastIndexOf('hermes-agent');
-  if (hermesAgentIdx >= 0) {
-    const agentRoot = parts.slice(0, hermesAgentIdx + 1).join(path.sep) || path.sep;
-    candidates.push({
-      root: path.dirname(agentRoot),
-      agentRoot,
-      pythonCandidates: [
-        path.join(agentRoot, 'venv', 'bin', 'python3'),
-        path.join(agentRoot, '.venv', 'bin', 'python3'),
-        path.join(path.dirname(resolved), 'python3'),
-      ],
-    });
-  }
-
-  for (const candidate of candidates) {
-    const python = candidate.pythonCandidates.find(executableExists) || '';
-    if (!python) continue;
-    if (!fs.existsSync(path.join(candidate.agentRoot, 'hermes_cli', 'main.py'))) continue;
-    return { python, agentRoot: candidate.agentRoot, root: candidate.root };
-  }
-  return null;
-}
-
 function hermesEnv(extra: Record<string, string> = {}) {
   return {
     ...process.env,
@@ -130,7 +113,7 @@ function hermesCommandOrThrow() {
 
 function pythonRuntimeOrThrow() {
   const command = hermesCommandOrThrow();
-  const runtime = pythonRuntimeForHermes(command);
+  const runtime = connectorHermesRuntimeForCommand(command);
   if (!runtime) {
     throw new Error('Hermes Python runtime is missing. Rebuild the local Hermes virtualenv.');
   }
@@ -507,17 +490,7 @@ function readinessFromSnapshot(snapshot: ReadinessSnapshot = {}) {
 
 function isAuthErrorText(value: LooseBoundaryValue) {
   const text = String(value || '').toLowerCase();
-  return [
-    'provider authentication failed',
-    'no inference provider configured',
-    'run `hermes model`',
-    "run 'hermes model'",
-    'hermes model',
-    'primary provider auth failed',
-    'no api key',
-    'api key is missing',
-    'authentication failed',
-  ].some((marker) => text.includes(marker));
+  return AUTH_ERROR_MARKERS.some((marker) => text.includes(marker));
 }
 
 function extractUrls(value: LooseBoundaryValue) {

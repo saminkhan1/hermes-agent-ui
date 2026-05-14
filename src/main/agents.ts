@@ -66,6 +66,8 @@ const DISMISSED_RETENTION_MS = 8 * 24 * 60 * 60 * 1000;
 const DEFAULT_GATEWAY_STREAM_DISCONNECT_GRACE_MS = 15000;
 const GATEWAY_READY_REUSE_MS = 3000;
 const TYPING_STARTED_PUSH_INTERVAL_MS = 5000;
+const CONVERSATION_ITEM_KINDS = new Set(['user', 'assistant', 'error', 'attachment']);
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'error', 'failed', 'cancelled', 'canceled']);
 
 let gatewayClient: LooseBoundaryValue = null;
 let gatewayNotify: (payload: NotifyPayload) => void = () => {};
@@ -98,11 +100,10 @@ function readDismissedGatewayConversations() {
   if (dismissedGatewayConversations) return dismissedGatewayConversations;
   dismissedGatewayConversations = {};
   try {
-    if (fs.existsSync(dismissedStatePath())) {
-      const parsed = JSON.parse(fs.readFileSync(dismissedStatePath(), 'utf8'));
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        dismissedGatewayConversations = parsed;
-      }
+    const file = dismissedStatePath();
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      dismissedGatewayConversations = parsed;
     }
   } catch {
     dismissedGatewayConversations = {};
@@ -113,8 +114,9 @@ function readDismissedGatewayConversations() {
 
 function writeDismissedGatewayConversations() {
   try {
-    fs.mkdirSync(path.dirname(dismissedStatePath()), { recursive: true });
-    fs.writeFileSync(dismissedStatePath(), `${JSON.stringify(readDismissedGatewayConversations(), null, 2)}\n`, 'utf8');
+    const file = dismissedStatePath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${JSON.stringify(readDismissedGatewayConversations(), null, 2)}\n`, 'utf8');
   } catch {
     // Dismissal tombstones are a UX guard, not critical state.
   }
@@ -224,7 +226,7 @@ function safeText(value: LooseBoundaryValue, max = 200000) {
 
 function normalizeConversationItem(item: AgentConversationItem | MutableJsonObject = {}): AgentConversationItem | null {
   const kind = String(item.kind || '').trim() as AgentConversationItemKind;
-  if (!['user', 'assistant', 'error', 'attachment'].includes(kind)) return null;
+  if (!CONVERSATION_ITEM_KINDS.has(kind)) return null;
   const out: AgentConversationItem = {
     kind,
     at: Number(item.at || 0) || Date.now(),
@@ -957,7 +959,7 @@ async function dismissAgent(catId: LooseBoundaryValue, opts: AgentOptions = {}) 
   if (isRunning) {
     return { ok: false, error: 'Cannot dismiss a running Hermes session.' };
   }
-  const isTerminal = ['completed', 'error', 'failed', 'cancelled', 'canceled'].includes(runStatus);
+  const isTerminal = TERMINAL_RUN_STATUSES.has(runStatus);
   if (rec && !isTerminal) {
     return { ok: false, error: 'Dismiss is available after Hermes finishes.' };
   }

@@ -76,7 +76,9 @@ const STAGE_DEFS = Object.freeze([
   { id: 'conversation_terminal_ms', label: 'Conversation terminal', owner: OWNER.HERMES_PROVIDER },
 ]);
 
-exports.EVENTS = EVENTS;
-exports.OWNER = OWNER;
-exports.STAGE_DEFS = STAGE_DEFS;
-exports.SCHEMA_VERSION = 1;
+module.exports = {
+  EVENTS,
+  OWNER,
+  STAGE_DEFS,
+  SCHEMA_VERSION: 1,
+};

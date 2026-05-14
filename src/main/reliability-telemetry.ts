@@ -2,10 +2,15 @@
 
 import type { MutableJsonObject } from '../shared/contracts.ts';
 
-import * as reliabilitySchema from './reliability-schema.js';
+import { createRequire } from 'node:module';
 import { recordTrace } from './eval-trace';
 
-const { EVENTS, SCHEMA_VERSION } = reliabilitySchema;
+const nodeRequire = createRequire(__filename);
+const schema = nodeRequire('./reliability-schema.js') as {
+  EVENTS: Record<string, string>;
+  SCHEMA_VERSION: number;
+};
+const { EVENTS, SCHEMA_VERSION } = schema;
 
 function emit(type: string, payload: MutableJsonObject = {}) {
   const tracePayload = {

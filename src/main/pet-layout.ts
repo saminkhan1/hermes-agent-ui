@@ -9,6 +9,7 @@ const PET_TRAY_GAP = 4;
 const PET_PLACEMENT_STICKINESS = 96;
 const PET_DEFAULT_MASCOT_SIZE = { width: 112, height: 121 };
 const PET_DEFAULT_TRAY_SIZE = { width: 276, height: 131 };
+const PET_PLACEMENTS = ['top-start', 'top-end', 'bottom-start', 'bottom-end'];
 
 function rectCenterX(rect: LooseBoundaryValue) {
   return rect.x + rect.width / 2;
@@ -91,15 +92,13 @@ function preferredPlacement(anchor: LooseBoundaryValue, displayBounds: LooseBoun
 
 function choosePlacement({ anchor, displayBounds, previousPlacement, traySize }: LooseBoundaryValue) {
   const preferred = preferredPlacement(anchor, displayBounds);
-  const placements = ['top-start', 'top-end', 'bottom-start', 'bottom-end']
-    .map((placement) => ({
-      placement,
-      score:
-        overflowScore(trayBoundsForPlacement(anchor, traySize, placement), displayBounds) +
-        (placement === preferred ? 0 : 32) +
-        (placement === previousPlacement ? -PET_PLACEMENT_STICKINESS : 0),
-    }))
-    .sort((a, b) => a.score - b.score);
+  const placements = PET_PLACEMENTS.map((placement) => ({
+    placement,
+    score:
+      overflowScore(trayBoundsForPlacement(anchor, traySize, placement), displayBounds) +
+      (placement === preferred ? 0 : 32) +
+      (placement === previousPlacement ? -PET_PLACEMENT_STICKINESS : 0),
+  })).sort((a, b) => a.score - b.score);
   return placements[0] ? placements[0].placement : preferred;
 }
 

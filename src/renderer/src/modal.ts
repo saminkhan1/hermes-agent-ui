@@ -1,4 +1,9 @@
-import { activeElementForEval, rectForEvalElement, visibleTextForEval } from './eval-ui-state.ts';
+import {
+  activeElementForEval,
+  rectForEvalElement,
+  textControlValueForEval,
+  visibleTextForEval,
+} from './eval-ui-state.ts';
 import { insertNewlineAtCursor } from './insert-newline-at-cursor.ts';
 import type { AgentUIPayload } from '../../shared/contracts.ts';
 
@@ -51,13 +56,14 @@ function traceEvalEvent(type: string, payload: AgentUIPayload = {}) {
 function reportEvalUiState() {
   if (!window.agentUI || typeof window.agentUI.reportEvalUiState !== 'function') return;
   const visibleText = visibleTextForEval();
+  const promptValue = textControlValueForEval(promptEl);
   window.agentUI.reportEvalUiState('modal', {
     modalContextId: modalContextId || null,
     promptRect: rectForEvalElement(promptEl, { includeHidden: true }),
     createButtonRect: rectForEvalElement(btnCreateCat, { includeHidden: true }),
     activeElement: activeElementForEval(),
-    promptValueLength: promptEl && typeof promptEl.value === 'string' ? promptEl.value.length : 0,
-    promptValuePreview: promptEl && typeof promptEl.value === 'string' ? promptEl.value.slice(0, 120) : '',
+    promptValueLength: promptValue.length,
+    promptValuePreview: promptValue.preview,
     ...visibleText,
   });
 }

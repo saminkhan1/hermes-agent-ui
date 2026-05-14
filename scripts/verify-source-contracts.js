@@ -223,7 +223,15 @@ function verifyEvalSurface() {
   requireText('src/main/eval-config.ts', 'AGENT_UI_EVAL_BOOT_FILE', 'eval boot evidence allowlist');
   requireText('src/main/eval-server.ts', 'timingSafeEqual', 'constant-time eval auth compare');
   requireText('src/main/eval-server.ts', "server.listen(port, '127.0.0.1'", 'loopback-only eval server');
-  for (const route of ['/start', '/followup', '/cancel', '/open-conversation', '/wait', '/ui-targets']) {
+  for (const route of [
+    '/start',
+    '/submit-modal',
+    '/followup',
+    '/cancel',
+    '/open-conversation',
+    '/wait',
+    '/ui-targets',
+  ]) {
     requireText('src/main/eval-server.ts', `url.pathname === '${route}'`, `eval route ${route}`);
   }
 }
@@ -248,6 +256,8 @@ function verifyInstalledSmokeContract() {
   );
   requireText('scripts/installed-app-release-smoke.js', 'AGENT_UI_LMSTUDIO_INITIAL_OK', 'initial live sentinel');
   requireText('scripts/installed-app-release-smoke.js', 'AGENT_UI_LMSTUDIO_FOLLOWUP_OK', 'follow-up live sentinel');
+  requireText('scripts/installed-app-release-smoke.js', 'AGENT_UI_LMSTUDIO_VOICE_OK', 'voice live sentinel');
+  requireText('scripts/installed-app-release-smoke.js', "'/submit-modal'", 'voice modal submit path');
   requireText('scripts/installed-app-release-smoke.js', 'AGENT_UI_LMSTUDIO_REOPEN_OK', 'reopen live sentinel');
   requireText(
     'scripts/installed-app-release-smoke.js',
@@ -260,6 +270,9 @@ function verifyInstalledSmokeContract() {
     'concurrency live sentinel',
   );
   requireText('scripts/installed-app-release-smoke.js', 'runConcurrencyChecks', 'three-conversation live stress phase');
+  requireText('scripts/installed-app-release-smoke.js', 'runOnboardingChecks', 'no-provider onboarding phase');
+  requireText('scripts/installed-app-release-smoke.js', 'requiredStageIds', 'release-blocking stage coverage');
+  requireText('scripts/installed-app-release-smoke.js', 'assertHermesLogsClean', 'Hermes log blocker');
   requireText('scripts/installed-app-release-smoke.js', 'appSealSnapshot', 'installed app mutation guard');
   requireRegex(
     'scripts/installed-app-release-smoke.js',
@@ -282,6 +295,7 @@ function verifyInteractionSmokeContract() {
     'native mouse event click automation',
   );
   requireText('scripts/interaction-lmstudio-smoke.js', 'pasteText(', 'real paste interaction');
+  requireText('scripts/interaction-lmstudio-smoke.js', 'saveInteractionSnapshot', 'paste failure evidence');
   requireText('scripts/interaction-lmstudio-smoke.js', 'screencapture', 'screenshot evidence');
   requireText('scripts/interaction-lmstudio-smoke.js', 'assertRealHermesAvailable', 'real Hermes executable preflight');
   requireText(
@@ -299,6 +313,7 @@ function verifyInteractionSmokeContract() {
   requireText('scripts/interaction-lmstudio-smoke.js', 'includeContext === false', 'follow-up no-context assertion');
   requireText('scripts/interaction-lmstudio-smoke.js', 'AGENT_UI_INTERACTION_INITIAL_OK', 'initial live sentinel');
   requireText('scripts/interaction-lmstudio-smoke.js', 'AGENT_UI_INTERACTION_FOLLOWUP_OK', 'follow-up live sentinel');
+  requireText('scripts/interaction-lmstudio-smoke.js', 'assertHermesLogsClean', 'Hermes log blocker');
   requireNoText('scripts/interaction-lmstudio-smoke.js', 'createLocalAdapterHermes', 'local adapter path');
   requireNoText('scripts/interaction-lmstudio-smoke.js', 'fallback_adapter', 'fake gateway metadata');
   requireNoText('scripts/interaction-lmstudio-smoke.js', 'AGENT_UI_INTERACTION_AUTH_REQUIRED', 'synthetic auth prompt');
@@ -346,6 +361,8 @@ function verifyBuildOutputs() {
     'out/main/hermes-gateway-client.js',
     'out/main/hermes-runtime.js',
     'out/main/hermes-release.js',
+    'out/main/reliability-schema.js',
+    'out/main/reliability-telemetry.js',
     'out/preload/index.js',
     'out/renderer/index.html',
     'out/renderer/modal.html',
@@ -354,6 +371,11 @@ function verifyBuildOutputs() {
   ]) {
     requireFile(rel);
   }
+  requireNoText(
+    'out/main/reliability-telemetry.js',
+    'reliabilitySchema.reliabilitySchema',
+    'empty generated telemetry schema namespace',
+  );
 }
 
 function verifyPublicSurface() {

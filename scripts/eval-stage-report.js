@@ -9,6 +9,11 @@ const DEFAULT_MIN_RUNS = 5;
 const APP_P50_THRESHOLD_MS = 500;
 const APP_P95_THRESHOLD_MS = 1500;
 
+function listFromCsv(value) {
+  const items = Array.isArray(value) ? value : String(value || '').split(',');
+  return items.map((item) => String(item).trim()).filter(Boolean);
+}
+
 function numberOrNull(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
@@ -177,10 +182,11 @@ function collectSamples(runs) {
         });
       }
       if (event.type === EVENTS.VOICE_SESSION_TRANSCRIPT_READY) {
-        addSample(samples, 'voice_recording_ms', run, event.recordingMs, {
+        const deterministic = event.deterministic === true;
+        addSample(samples, 'voice_recording_ms', run, event.recordingMs ?? (deterministic ? 0 : null), {
           modalContextId: event.modalContextId || null,
         });
-        addSample(samples, 'voice_transcribing_ms', run, event.transcribingMs, {
+        addSample(samples, 'voice_transcribing_ms', run, event.transcribingMs ?? (deterministic ? 0 : null), {
           modalContextId: event.modalContextId || null,
         });
         addSample(samples, 'voice_transcript_ms', run, event.durationMs, {
@@ -254,10 +260,12 @@ function stageStatus(def, summary, opts) {
 }
 
 function buildStageReportFromRuns(inputRuns, opts = {}) {
+  const requiredStageIds = new Set(listFromCsv(opts.requiredStageIds));
   const options = {
     minRuns: Math.max(1, Math.trunc(Number(opts.minRuns) || DEFAULT_MIN_RUNS)),
     appP50ThresholdMs: Math.max(0, Number(opts.appP50ThresholdMs) || APP_P50_THRESHOLD_MS),
     appP95ThresholdMs: Math.max(0, Number(opts.appP95ThresholdMs) || APP_P95_THRESHOLD_MS),
+    requiredStageIds: [...requiredStageIds],
   };
   const runs = inputRuns.map((run) => normalizeRun(run.file || 'trace.jsonl', run.events || []));
   const samples = collectSamples(runs);
@@ -271,6 +279,7 @@ function buildStageReportFromRuns(inputRuns, opts = {}) {
     return {
       ...def,
       ...summary,
+      required: requiredStageIds.has(def.id),
       status: stageStatus(def, summary, options),
       scenarios,
       samples: stageSamples,
@@ -279,7 +288,11 @@ function buildStageReportFromRuns(inputRuns, opts = {}) {
   const findings = [];
   for (const stage of stages) {
     if (stage.status === 'missing') {
-      findings.push({ severity: 'info', stageId: stage.id, message: `${stage.label} has no samples.` });
+      findings.push({
+        severity: stage.required ? 'error' : 'info',
+        stageId: stage.id,
+        message: `${stage.label} has no samples.`,
+      });
     } else if (stage.status === 'slow_p50') {
       findings.push({
         severity: 'warning',
@@ -301,8 +314,9 @@ function buildStageReportFromRuns(inputRuns, opts = {}) {
       });
     }
   }
+  const ok = !findings.some((finding) => finding.severity === 'error');
   return {
-    ok: true,
+    ok,
     generatedAt: new Date().toISOString(),
     thresholds: options,
     runCount: runs.length,
@@ -352,6 +366,7 @@ function parseCliArgs(argv) {
       strict: { type: 'boolean', default: false },
       out: { type: 'string', default: '' },
       'min-runs': { type: 'string', default: String(DEFAULT_MIN_RUNS) },
+      'require-stage': { type: 'string', default: process.env.AGENT_UI_REQUIRED_STAGE_IDS || '' },
     },
   });
   let format = 'json';
@@ -365,6 +380,7 @@ function parseCliArgs(argv) {
     format,
     out: parsed.values.out || '',
     minRuns: Math.max(1, Math.trunc(Number(parsed.values['min-runs']) || DEFAULT_MIN_RUNS)),
+    requiredStageIds: listFromCsv(parsed.values['require-stage']),
     strict: !!parsed.values.strict,
   };
 }
@@ -372,7 +388,10 @@ function parseCliArgs(argv) {
 if (require.main === module) {
   const args = parseCliArgs(process.argv.slice(2));
   const files = discoverTraceFiles(args.inputs);
-  const report = buildStageReportFromTraceFiles(files, { minRuns: args.minRuns });
+  const report = buildStageReportFromTraceFiles(files, {
+    minRuns: args.minRuns,
+    requiredStageIds: args.requiredStageIds,
+  });
   const output = args.format === 'markdown' ? markdownReport(report) : `${JSON.stringify(report, null, 2)}\n`;
   if (args.out) {
     fs.mkdirSync(path.dirname(path.resolve(args.out)), { recursive: true });
@@ -380,7 +399,10 @@ if (require.main === module) {
   } else {
     process.stdout.write(output);
   }
-  if (args.strict && report.findings.some((finding) => finding.severity === 'warning')) {
+  if (
+    args.strict &&
+    report.findings.some((finding) => finding.severity === 'warning' || finding.severity === 'error')
+  ) {
     process.exitCode = 1;
   }
 }
@@ -390,6 +412,7 @@ module.exports = {
   buildStageReportFromTraceFiles,
   collectSamples,
   discoverTraceFiles,
+  listFromCsv,
   markdownReport,
   readTraceFile,
   summarizeValues,

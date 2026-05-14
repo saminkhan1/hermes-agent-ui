@@ -97,19 +97,21 @@ function resolveAppExecutable(value) {
     const executable = fs
       .readdirSync(macosDir)
       .map((name) => path.join(macosDir, name))
-      .find((file) => {
-        try {
-          const stat = fs.statSync(file);
-          return stat.isFile() && stat.mode & 0o111;
-        } catch {
-          return false;
-        }
-      });
+      .find(executableFile);
     if (executable) return executable;
   } catch {
     // Fall through to the packaged executable name.
   }
   return path.join(macosDir, 'agent-UI');
+}
+
+function executableFile(file) {
+  try {
+    const stat = fs.statSync(file);
+    return stat.isFile() && (stat.mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
 }
 
 function runCommand(command, args, opts = {}) {
@@ -219,7 +221,6 @@ async function configureLmStudioProvider() {
       'auxiliary:',
       '  compression:',
       '    context_length: 64000',
-      'toolsets: []',
       'platforms:',
       '  local_desktop:',
       '    enabled: true',
@@ -567,6 +568,50 @@ async function uiTargets() {
   return getJson('/ui-targets');
 }
 
+function editMenuState() {
+  const script = appProcessBlock([
+    'set frontmost to true',
+    'delay 0.1',
+    'set pasteItem to menu item "Paste" of menu "Edit" of menu bar 1',
+    'return "paste_enabled=" & ((enabled of pasteItem) as text)',
+  ]);
+  const res = runCommand('osascript', ['-e', script], { timeoutMs: 10000 });
+  return {
+    ok: res.ok,
+    status: res.status,
+    stdout: res.stdout,
+    stderr: res.stderr,
+  };
+}
+
+async function saveInteractionSnapshot(name) {
+  let ui;
+  try {
+    ui = await uiTargets();
+  } catch (error) {
+    ui = { ok: false, error: error && error.message ? error.message : String(error) };
+  }
+  const clipboard = runCommand('pbpaste', [], { timeoutMs: 5000 });
+  const snapshot = saveJson(name, {
+    ui,
+    editMenu: editMenuState(),
+    clipboard: {
+      ok: clipboard.ok,
+      length: clipboard.stdout.length,
+      preview: clipboard.stdout.slice(0, 120),
+    },
+  });
+  const bounds = ui && ui.conversation && ui.conversation.bounds;
+  if (bounds) {
+    try {
+      screenshotRect(name, bounds);
+    } catch {
+      // JSON evidence is still useful if screenshot capture is denied.
+    }
+  }
+  return snapshot;
+}
+
 async function listConversations() {
   const out = await getJson('/conversations');
   return Array.isArray(out && out.conversations) ? out.conversations : [];
@@ -597,6 +642,39 @@ function itemTexts(conv, kind) {
 function assertNoErrorItems(conv, label) {
   const errors = (conv && Array.isArray(conv.items) ? conv.items : []).filter((item) => item.kind === 'error');
   assertCondition(errors.length === 0, `${label} contains error items: ${JSON.stringify(errors)}`);
+}
+
+function expectedHermesLogLine(line) {
+  return /Shutdown context: signal=SIGTERM/.test(line) || /Title generation failed: Request timed out/.test(line);
+}
+
+function unexpectedHermesLogLines() {
+  const logsDir = path.join(hermesHome, 'logs');
+  const findings = [];
+  if (!fs.existsSync(logsDir)) return findings;
+  for (const file of fs.readdirSync(logsDir).sort()) {
+    if (!file.endsWith('.log')) continue;
+    const full = path.join(logsDir, file);
+    const text = fs.readFileSync(full, 'utf8');
+    for (const [idx, line] of text.split(/\r?\n/).entries()) {
+      if (!line.trim()) continue;
+      if (!/(ERROR|WARNING|Traceback|OperationalError|returned error|command not found|unavailable)/.test(line))
+        continue;
+      if (expectedHermesLogLine(line)) continue;
+      findings.push({ file: full, line: idx + 1, text: line.slice(0, 1000) });
+    }
+  }
+  return findings;
+}
+
+function assertHermesLogsClean() {
+  const findings = unexpectedHermesLogLines();
+  if (!findings.length) {
+    evidence.checks.hermesLogs = { ok: true };
+    return;
+  }
+  saveJson('unexpected-hermes-logs', { findings });
+  fail(`Hermes logs contain unexpected release-blocking warnings/errors: ${findings[0].file}:${findings[0].line}`);
 }
 
 async function waitModalVisible(label) {
@@ -706,6 +784,22 @@ async function focusConversationFollowup(label) {
   );
 }
 
+async function waitForFollowupValue(followup, label) {
+  try {
+    return await waitUntil(
+      label,
+      async () => {
+        const ui = await uiTargets();
+        return ui.conversation && ui.conversation.followupValueLength === followup.length ? ui : null;
+      },
+      5000,
+    );
+  } catch (error) {
+    await saveInteractionSnapshot(label.replace(/[^a-z0-9-]+/gi, '-').toLowerCase());
+    throw error;
+  }
+}
+
 function screenshotRect(name, rect) {
   if (!rect || !Number.isFinite(Number(rect.width)) || !Number.isFinite(Number(rect.height))) return null;
   const x = Math.max(0, Math.round(Number(rect.x ?? rect.left ?? 0)));
@@ -759,14 +853,13 @@ async function runMenuShortcutPromptFollowupJourney() {
 
   const followup = `Reply exactly: ${sentinels.followup}`;
   pasteText(followup);
-  await waitUntil(
-    'follow-up text pasted',
-    async () => {
-      const ui = await uiTargets();
-      return ui.conversation && ui.conversation.followupValueLength === followup.length ? ui : null;
-    },
-    5000,
-  );
+  try {
+    await waitForFollowupValue(followup, 'follow-up text pasted');
+  } catch {
+    await focusConversationFollowup('follow-up retry');
+    pasteText(followup);
+    await waitForFollowupValue(followup, 'follow-up text pasted after retry');
+  }
   pressKeyCode(36);
 
   const followupPosts = await waitGatewayPostCount(catId, 2, 'follow-up');
@@ -819,6 +912,7 @@ async function cleanup() {
   await runMenuShortcutPromptFollowupJourney();
 
   saveJson('trace', await getJson('/trace'));
+  assertHermesLogsClean();
   evidence.finishedAt = new Date().toISOString();
   evidence.ok = true;
   writeJson(path.join(runDir, 'interaction-lmstudio-summary.json'), evidence);

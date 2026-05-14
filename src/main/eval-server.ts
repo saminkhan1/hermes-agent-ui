@@ -96,6 +96,10 @@ async function handleEvalRequest(req: LooseBoundaryValue, res: LooseBoundaryValu
       sendEvalJson(res, 200, await handlers.openLauncher(await readEvalJson(req)));
       return;
     }
+    if (req.method === 'POST' && url.pathname === '/submit-modal') {
+      sendEvalJson(res, 200, await handlers.submitModal(await readEvalJson(req)));
+      return;
+    }
     if (req.method === 'POST' && url.pathname === '/followup') {
       sendEvalJson(res, 200, await handlers.followup(await readEvalJson(req)));
       return;

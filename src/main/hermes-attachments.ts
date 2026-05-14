@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 const ATTACHMENT_SCHEME = 'agent-ui-attachment';
 const DEFAULT_MAX_BYTES = 100 * 1024 * 1024;
@@ -103,7 +104,7 @@ function fileNameForRef(ref: LooseBoundaryValue) {
   if (!raw) return '';
   try {
     const parsed = new URL(raw);
-    if (parsed.protocol === 'file:') return path.basename(decodeURIComponent(parsed.pathname || ''));
+    if (parsed.protocol === 'file:') return path.basename(fileURLToPath(parsed));
     if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
       return path.basename(decodeURIComponent(parsed.pathname || '')) || parsed.hostname;
     }
@@ -120,7 +121,7 @@ function pathFromLocalRef(ref: LooseBoundaryValue) {
   try {
     const parsed = new URL(raw);
     if (parsed.protocol !== 'file:') return '';
-    return decodeURIComponent(parsed.pathname || '');
+    return fileURLToPath(parsed);
   } catch {
     // Not a URL.
   }

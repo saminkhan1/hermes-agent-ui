@@ -126,7 +126,10 @@ npm run verify:concurrency:3 -- "/Applications/agent-UI for Hermes.app"
   actual app path.
 - For full live release proof, prefer `npm run verify:live:release` over
   separately running `verify:live:lmstudio` plus `verify:concurrency:3`. The
-  targeted scripts stay available for narrower reruns.
+  combined gate also requires deterministic voice transcript coverage,
+  no-provider onboarding with an actionable setup state or auth handoff, clean
+  required stage coverage, and no unexpected Hermes `ERROR`/`WARNING` log lines.
+  The targeted scripts stay available for narrower reruns.
 - For Hermes boundary changes, run `npm run verify:hermes-contracts` and verify
   against `/Users/saminkhan1/Documents/hermes/hermes-agent`.
 - For menu, shortcut, modal, paste, click, or follow-up/cancel user-flow

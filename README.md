@@ -197,7 +197,9 @@ npm run verify:interaction:lmstudio -- "/Applications/agent-UI for Hermes.app"
 
 `verify:interaction:lmstudio` is the narrow macOS user-flow gate. It requires Accessibility permission plus the direct NousResearch Hermes clone, launches the installed app with isolated config, uses the real menu/shortcut/paste/click/Enter path, sends an initial prompt plus follow-up through real Hermes and real LM Studio, and saves screenshots plus JSON evidence under `/private/tmp/agent-ui-interaction-lmstudio-*`. Eval mode is only used for observation, coordinates, trace evidence, and shutdown; no local adapter or synthetic gateway is allowed.
 
-`verify:live:release` is the preferred release gate for the live installed-app path. It runs the same first-launch, follow-up, cancel, post-cancel, reopen, and three-session concurrency checks in one installed-app smoke run, after one LM Studio preflight.
+`verify:live:release` is the preferred release gate for the live installed-app path. It runs first-launch, deterministic voice transcript insertion, live voice-submit, follow-up, cancel, post-cancel, reopen, three-session concurrency, no-provider onboarding with an actionable setup state or auth handoff, required stage coverage, and Hermes log-blocker checks in one installed-app smoke run, after one LM Studio preflight.
+
+The live gate is intentionally stricter than the stage report table alone: required customer stages cannot be missing, and unexpected Hermes `ERROR`/`WARNING` log lines fail the run instead of being buried in the evidence directory. Bootstrap artifacts remain ad-hoc signed, so a passing live gate still assumes the documented Gatekeeper right-click Open flow unless a Developer ID/notarized build is produced.
 
 `verify:live:lmstudio` and `verify:concurrency:3` remain targeted demo gates. They require LM Studio serving `google/gemma-4-26b-a4b` at `http://127.0.0.1:1234/v1`, loaded with at least 64K context and parallelism for three requests, then drive the installed app through real Hermes and real model responses.
 

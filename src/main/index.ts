@@ -98,6 +98,8 @@ const INPUT_MODE_TEXT = 'text';
 const INPUT_MODE_VOICE = 'voice';
 const AUTH_MONITOR_INTERVAL_MS = 2500;
 const AUTH_STALE_MS = 25000;
+const BROWSER_APP_MARKERS = ['safari', 'firefox', 'chrome', 'chromium', 'arc', 'brave', 'edge', 'opera', 'vivaldi'];
+const EVAL_TERMINAL_STATUSES = new Set(['completed', 'error', 'cancelled']);
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -1622,6 +1624,12 @@ function buildAppMenu() {
 }
 
 function editMenuItem(): MenuItemConstructorOptions {
+  const pasteIntoFocusedOverlay = () => {
+    const target = [BrowserWindow.getFocusedWindow(), modalWindow, conversationWindow].find(isLiveWindow) || null;
+    if (!target || !target.webContents || target.webContents.isDestroyed()) return;
+    focusWindow(target);
+    target.webContents.paste();
+  };
   return {
     label: 'Edit',
     submenu: [
@@ -1630,7 +1638,7 @@ function editMenuItem(): MenuItemConstructorOptions {
       { type: 'separator' },
       { role: 'cut' },
       { role: 'copy' },
-      { role: 'paste' },
+      { label: 'Paste', accelerator: 'CommandOrControl+V', click: pasteIntoFocusedOverlay },
       { type: 'separator' },
       { role: 'selectAll' },
     ],
@@ -1720,9 +1728,7 @@ function isBrowserLikeWindow(win: LooseBoundaryValue) {
     .filter(Boolean)
     .join(' ')
     .toLowerCase();
-  return ['safari', 'firefox', 'chrome', 'chromium', 'arc', 'brave', 'edge', 'opera', 'vivaldi'].some((marker) =>
-    haystack.includes(marker),
-  );
+  return BROWSER_APP_MARKERS.some((marker) => haystack.includes(marker));
 }
 
 function screenContextHintForWindow(win: LooseBoundaryValue) {
@@ -2414,6 +2420,9 @@ async function getEvalUiTargets() {
       ...conversation,
       ...evalWindowState(conversationWindow),
     },
+    auth: {
+      ...evalWindowState(authWindow),
+    },
     overlay: {
       ...overlay,
       ...evalWindowState(mainWindow),
@@ -2436,6 +2445,16 @@ async function closeEvalModal() {
   return { ok: true };
 }
 
+async function submitEvalModal() {
+  if (!modalWindow || modalWindow.isDestroyed()) {
+    return { ok: false, error: 'launcher modal is not open' };
+  }
+  focusWindow(modalWindow);
+  modalWindow.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+  modalWindow.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
+  return { ok: true, modalContextId: activeModalContextId || null };
+}
+
 async function waitForEvalCat({ catId, timeoutMs = 180000 }: MutableJsonObject = {}) {
   const started = Date.now();
   const id = catId ? String(catId) : '';
@@ -2444,11 +2463,11 @@ async function waitForEvalCat({ catId, timeoutMs = 180000 }: MutableJsonObject =
     const rec = id
       ? conversations.find((c: LooseBoundaryValue) => String(c.catId) === id)
       : conversations.find((c: LooseBoundaryValue) =>
-          ['completed', 'error', 'cancelled'].includes(String(c.runStatus || '').toLowerCase()),
+          EVAL_TERMINAL_STATUSES.has(String(c.runStatus || '').toLowerCase()),
         );
     if (rec) {
       const status = String(rec.runStatus || '').toLowerCase();
-      if (['completed', 'error', 'cancelled'].includes(status)) {
+      if (EVAL_TERMINAL_STATUSES.has(status)) {
         return {
           ok: true,
           catId: rec.catId,
@@ -2690,6 +2709,7 @@ function startEvalServerIfNeeded() {
       wait: async (payload: MutableJsonObject = {}) => waitForEvalCat(payload),
       getTrace: async () => getTrace(),
       closeModal: async () => closeEvalModal(),
+      submitModal: async () => submitEvalModal(),
       dismiss: async ({ catId }: MutableJsonObject = {}) => {
         if (!catId) return { ok: false, error: 'missing cat id' };
         const result: LooseBoundaryValue = await dismissAgent(String(catId), {

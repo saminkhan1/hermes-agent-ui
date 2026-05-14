@@ -19,6 +19,14 @@ export function activeElementForEval(activeElement: Element | null = document.ac
   return activeElement ? { id: activeElement.id || '', tag: activeElement.tagName || '' } : null;
 }
 
+export function textControlValueForEval(el: HTMLInputElement | HTMLTextAreaElement | null, maxPreviewLength = 120) {
+  const value = typeof el?.value === 'string' ? el.value : '';
+  return {
+    length: value.length,
+    preview: value.slice(0, maxPreviewLength),
+  };
+}
+
 export function visibleTextForEval({
   root = document.body,
   maxPreviewLength = 4000,

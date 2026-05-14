@@ -29,7 +29,9 @@ const LOCAL_DESKTOP_HOME_CHANNEL_NAME = 'Agent UI';
 const BASE_RUNTIME_PATH = '/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin';
 
 function safeRuntimePath() {
-  return `${BASE_RUNTIME_PATH}:${path.join(realUserHomeDir(), '.local', 'bin')}`;
+  const candidateDirs = defaultConnectorHermesCandidates().map((candidate) => path.dirname(candidate));
+  const dirs = [BASE_RUNTIME_PATH, path.join(realUserHomeDir(), '.local', 'bin'), ...candidateDirs];
+  return [...new Set(dirs.filter(Boolean))].join(':');
 }
 
 function localDesktopPluginRoot() {
@@ -43,12 +45,12 @@ function localDesktopPluginRoot() {
   return '';
 }
 
+type ExecTextOptions = ExecFileOptionsWithStringEncoding & {
+  timeout?: number;
+};
 type CommandError = Error & {
   stdout?: string;
   stderr?: string;
-};
-type ExecTextOptions = ExecFileOptionsWithStringEncoding & {
-  timeout?: number;
 };
 type JsonEventOptions = {
   cwd?: string;
@@ -248,14 +250,15 @@ function absoluteCommandPath(value: LooseBoundaryValue) {
 function resolveConnectorHermesCommand(configured = '') {
   const configuredPath = absoluteCommandPath(configured);
   if (configuredPath) {
-    if (executableExists(configuredPath)) rememberConnectorHermesCommand(configuredPath);
+    const configuredExists = executableExists(configuredPath);
+    if (configuredExists) rememberConnectorHermesCommand(configuredPath);
     return {
       command: configuredPath,
       configured: true,
       bundled: false,
       releaseMode: 'connector',
       remembered: false,
-      needsOnboarding: !executableExists(configuredPath),
+      needsOnboarding: !configuredExists,
     };
   }
 
@@ -321,38 +324,24 @@ function hermesCwd(command: LooseBoundaryValue) {
 
 function connectorHermesRuntimeForCommand(command: LooseBoundaryValue) {
   const resolved = path.resolve(String(command || ''));
-  const candidates = [];
-
   const parts = resolved.split(path.sep);
   const hermesAgentIdx = parts.lastIndexOf('hermes-agent');
-  if (hermesAgentIdx >= 0) {
-    const agentRoot = parts.slice(0, hermesAgentIdx + 1).join(path.sep) || path.sep;
-    candidates.push({
-      agentRoot,
-      hermesHome: defaultHermesHome(),
-      projectRoot: agentRoot,
-    });
-  }
+  if (hermesAgentIdx < 0) return null;
 
-  for (const candidate of candidates) {
-    const pyCandidates = [
-      path.join(candidate.agentRoot, 'venv', 'bin', 'python3'),
-      path.join(candidate.agentRoot, '.venv', 'bin', 'python3'),
+  const agentRoot = parts.slice(0, hermesAgentIdx + 1).join(path.sep) || path.sep;
+  const python =
+    [
+      path.join(agentRoot, 'venv', 'bin', 'python3'),
+      path.join(agentRoot, '.venv', 'bin', 'python3'),
       path.join(path.dirname(resolved), 'python3'),
-    ];
-    const python = pyCandidates.find(executableExists) || '';
-    if (!python) continue;
-    if (!fs.existsSync(path.join(candidate.agentRoot, 'hermes_cli', 'main.py'))) continue;
-    return { ...candidate, python };
-  }
-
-  return null;
-}
-
-async function hermesPythonRuntimeForCommand(command: LooseBoundaryValue) {
-  const connector = connectorHermesRuntimeForCommand(command);
-  if (!connector || !(await voiceDependenciesAvailable(connector.python))) return null;
-  return connector;
+    ].find(executableExists) || '';
+  if (!python || !fs.existsSync(path.join(agentRoot, 'hermes_cli', 'main.py'))) return null;
+  return {
+    agentRoot,
+    hermesHome: defaultHermesHome(),
+    projectRoot: agentRoot,
+    python,
+  };
 }
 
 function parseTranscriptionJson(stdout: LooseBoundaryValue) {
@@ -371,26 +360,9 @@ function parseTranscriptionJson(stdout: LooseBoundaryValue) {
   return null;
 }
 
-async function voiceDependenciesAvailable(python: LooseBoundaryValue) {
-  if (!executableExists(python)) return false;
-  try {
-    const stdout = await execFileText(
-      python,
-      [
-        '-c',
-        [
-          'import importlib.util, json',
-          'missing = [name for name in ("sounddevice", "numpy", "faster_whisper") if importlib.util.find_spec(name) is None]',
-          'print(json.dumps({"ok": not missing, "missing": missing}))',
-        ].join('\n'),
-      ],
-      { timeout: 10000, env: pythonNoBytecodeEnv() },
-    );
-    const result = parseTranscriptionJson(stdout);
-    return !!(result && result.ok);
-  } catch {
-    return false;
-  }
+async function hermesPythonRuntimeForCommand(command: LooseBoundaryValue) {
+  const connector = connectorHermesRuntimeForCommand(command);
+  return connector && executableExists(connector.python) ? connector : null;
 }
 
 function formatVoiceCaptureErrorForUser(value: LooseBoundaryValue) {
@@ -418,7 +390,11 @@ async function captureAndTranscribeVoice(opts: CaptureVoiceOptions = {}) {
   try {
     const onStatus = typeof opts.onStatus === 'function' ? opts.onStatus : null;
     const runtime = await hermesPythonRuntimeForCommand(command);
-    if (!runtime) throw new Error('Hermes Python runtime is not available.');
+    if (!runtime) {
+      throw new Error(
+        `Hermes Python runtime is not available for ${command}. Voice input requires a local Hermes source checkout with venv/bin/python3 or .venv/bin/python3.`,
+      );
+    }
     const code = [
       'import json, os, sys, threading, time',
       'from pathlib import Path',
@@ -1116,6 +1092,7 @@ function stopGatewayProcess() {
 }
 
 export {
+  connectorHermesRuntimeForCommand,
   defaultHermesHome,
   effectiveGatewayHermesHome,
   ensureGatewayEnvFile,
