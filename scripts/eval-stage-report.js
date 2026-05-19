@@ -173,11 +173,11 @@ function collectSamples(runs) {
       if (event.type === EVENTS.GATEWAY_READY_CHECK_COMPLETED)
         addSample(samples, 'gateway_ready_ms', run, event.durationMs, { ok: event.ok !== false });
       if (event.type === EVENTS.GATEWAY_MESSAGE_POST_ACCEPTED) {
-        addSample(samples, 'gateway_post_ms', run, event.durationMs, { catId: event.catId || null });
+        addSample(samples, 'gateway_post_ms', run, event.durationMs, { conversationId: event.conversationId || null });
       }
       if (event.type === EVENTS.GATEWAY_FIRST_EVENT) {
         addSample(samples, 'first_gateway_event_ms', run, event.msSincePostAccepted, {
-          catId: event.catId || null,
+          conversationId: event.conversationId || null,
           gatewayEventType: event.gatewayEventType || null,
         });
       }
@@ -195,7 +195,7 @@ function collectSamples(runs) {
       }
       if (event.type === EVENTS.TERMINAL_STATE_RENDERED)
         addSample(samples, 'conversation_terminal_ms', run, event.durationMs, {
-          catId: event.catId || null,
+          conversationId: event.conversationId || null,
           status: event.status || null,
         });
       if (event.type === EVENTS.GATEWAY_HYDRATION_COMPLETED)
@@ -220,14 +220,21 @@ function collectSamples(runs) {
       EVENTS.MODAL_SHOWN_AND_FOCUSED,
       'modalContextId',
     );
-    addPairedSamples(samples, run, 'submit_to_pet_ms', EVENTS.SUBMIT_REQUESTED, EVENTS.CAT_SPAWN_RENDERED, 'catId');
+    addPairedSamples(
+      samples,
+      run,
+      'submit_to_session_visible_ms',
+      EVENTS.SUBMIT_REQUESTED,
+      EVENTS.SESSION_ROW_RENDERED,
+      'conversationId',
+    );
     addPairedSamples(
       samples,
       run,
       'submit_to_gateway_accepted_ms',
       EVENTS.SUBMIT_REQUESTED,
       EVENTS.GATEWAY_MESSAGE_POST_ACCEPTED,
-      'catId',
+      'conversationId',
     );
     addPairedSamples(
       samples,
@@ -235,7 +242,7 @@ function collectSamples(runs) {
       'auth_window_visible_ms',
       EVENTS.AUTH_WINDOW_REQUESTED,
       EVENTS.AUTH_WINDOW_SHOWN_AND_FOCUSED,
-      'catId',
+      'conversationId',
     );
     addPairedSamples(
       samples,
@@ -243,7 +250,7 @@ function collectSamples(runs) {
       'auth_handoff_ms',
       EVENTS.GATEWAY_MESSAGE_POST_FAILED,
       EVENTS.AUTH_HANDOFF_REQUESTED,
-      'catId',
+      'conversationId',
     );
   }
   return samples;

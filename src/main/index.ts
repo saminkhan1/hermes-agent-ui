@@ -25,8 +25,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 type IpcListener = (event: LooseBoundaryValue, ...args: LooseBoundaryValue[]) => void;
 type IpcHandler = (event: LooseBoundaryValue, ...args: LooseBoundaryValue[]) => LooseBoundaryValue;
-type PreparedCatRun = MutableJsonObject & {
-  catId?: string;
+type PreparedConversationRun = MutableJsonObject & {
+  conversationId?: string;
   prompt?: string;
   modalContextId?: string;
   launchContext?: MutableJsonObject | null;
@@ -37,7 +37,7 @@ import { applyEvalConfigArgv, recordEvalBoot } from './eval-config';
 import { getTrace, runDir as evalRunDir, runId as evalRunId, enabled as evalTraceEnabled } from './eval-trace';
 import { telemetry } from './reliability-telemetry';
 import {
-  startAgentForCat,
+  startAgentForConversation,
   cancelAllAgents,
   getAgentConversation,
   listAgentConversations,
@@ -85,7 +85,7 @@ const CUSTOM_PET_PREFIX = petAssets.CUSTOM_PET_PREFIX;
 const FALLBACK_PET_CHARACTER_ID = `${CUSTOM_PET_PREFIX}goblin`;
 const PET_ASSET_SCHEME = petAssets.PET_ASSET_SCHEME;
 const ATTACHMENT_SCHEME = hermesAttachments.ATTACHMENT_SCHEME;
-const MAX_CAT_ID_LENGTH = 128;
+const MAX_CONVERSATION_ID_LENGTH = 128;
 const MAX_PROMPT_CHARS = 200000;
 const MAX_EVAL_PAYLOAD_BYTES = 65536;
 const MAX_DRAG_COORDINATE = 10000;
@@ -211,22 +211,22 @@ let mainWindow: LooseBoundaryValue;
 let modalWindow: LooseBoundaryValue;
 let conversationWindow: LooseBoundaryValue;
 let authWindow: LooseBoundaryValue;
-let activeConversationCatId: LooseBoundaryValue = null;
+let activeConversationId: LooseBoundaryValue = null;
 /** Square conversation panel — content dimensions (px). */
 const CONVERSATION_WINDOW_SIDE = 800;
-/** When true, the overlay is accepting mouse (cursor over a cat). */
+/** When true, the overlay is accepting mouse. */
 let mainWindowMouseable = false;
 let tray: LooseBoundaryValue;
 let closeEvalServer: LooseBoundaryValue = null;
-let newCatShortcutRegistered = false;
+let newSessionShortcutRegistered = false;
 /** Latest overlay session counts from renderer (dock / tray menu). */
-let catCounts = { active: 0, inReview: 0 };
+let sessionCounts = { active: 0, inReview: 0 };
 let overlayReady = false;
-const pendingSpawnCats: LooseBoundaryValue[] = [];
+const pendingSpawnSessions: LooseBoundaryValue[] = [];
 let activeModalContextId: LooseBoundaryValue = null;
 const modalContexts = new Map();
 const launchContextCaptures = new Map();
-const pendingAuthRuns = new Map<string, PreparedCatRun>();
+const pendingAuthRuns = new Map<string, PreparedConversationRun>();
 let authMonitorTimer: LooseBoundaryValue = null;
 let authFlow = idleAuthFlow();
 const ignoredAuthSessionIds = new Set();
@@ -254,17 +254,17 @@ hermesAuth.onSessionEvent((payload: LooseBoundaryValue) => {
 });
 
 setOnAuthRequired((payload: MutableJsonObject = {}) => {
-  const catId = normalizeCatId(payload.catId);
+  const conversationId = normalizeConversationId(payload.conversationId);
   const prompt = boundedText(payload.prompt || '');
-  if (!catId || !prompt.trim()) return;
+  if (!conversationId || !prompt.trim()) return;
   telemetry.authHandoffOpening({
-    catId,
+    conversationId,
     reason: payload.reason || 'gateway-auth-error',
     retryKind: String(payload.retryKind || 'initial'),
   });
   openHermesAuthWindow({
     pendingRun: {
-      catId,
+      conversationId,
       prompt,
       modalContextId: '',
       launchContext: payload.launchContext || null,
@@ -369,10 +369,10 @@ function primaryPendingAuthRun() {
 
 function rememberPendingAuthRun(pendingRun: LooseBoundaryValue) {
   if (!pendingRun || typeof pendingRun !== 'object') return null;
-  const catId = normalizeCatId(pendingRun.catId);
-  if (!catId) return null;
-  const run = { ...pendingRun, catId } as PreparedCatRun;
-  pendingAuthRuns.set(catId, run);
+  const conversationId = normalizeConversationId(pendingRun.conversationId);
+  if (!conversationId) return null;
+  const run = { ...pendingRun, conversationId } as PreparedConversationRun;
+  pendingAuthRuns.set(conversationId, run);
   return run;
 }
 
@@ -628,9 +628,9 @@ function boundedText(value: LooseBoundaryValue, maxChars = MAX_PROMPT_CHARS) {
   return text.length > maxChars ? text.slice(0, maxChars) : text;
 }
 
-function normalizeCatId(value: LooseBoundaryValue) {
+function normalizeConversationId(value: LooseBoundaryValue) {
   const id = String(value || '').trim();
-  if (!id || id.length > MAX_CAT_ID_LENGTH) return '';
+  if (!id || id.length > MAX_CONVERSATION_ID_LENGTH) return '';
   return /^[A-Za-z0-9_.:-]+$/.test(id) ? id : '';
 }
 
@@ -1145,40 +1145,40 @@ function ensureOverlayVisibleForSpawn() {
   openPetOverlay({ persist: true });
 }
 
-function flushPendingSpawnCats() {
+function flushPendingSpawnSessions() {
   if (!mainWindow || mainWindow.isDestroyed() || !overlayReady) return;
   ensureOverlayVisibleForSpawn();
   applyPetLayout(undefined, { persist: false });
-  while (pendingSpawnCats.length > 0) {
-    mainWindow.webContents.send('spawn-cat', pendingSpawnCats.shift());
+  while (pendingSpawnSessions.length > 0) {
+    mainWindow.webContents.send('session-started', pendingSpawnSessions.shift());
   }
 }
 
-function sendSpawnCatToOverlay(payload: LooseBoundaryValue) {
+function sendSessionToOverlay(payload: LooseBoundaryValue) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   ensureOverlayVisibleForSpawn();
   if (!overlayReady) {
-    pendingSpawnCats.push(payload);
+    pendingSpawnSessions.push(payload);
     return;
   }
-  mainWindow.webContents.send('spawn-cat', payload);
+  mainWindow.webContents.send('session-started', payload);
 }
 
-function conversationSpawnPayload(catId: LooseBoundaryValue) {
-  const id = normalizeCatId(catId);
+function conversationSpawnPayload(conversationId: LooseBoundaryValue) {
+  const id = normalizeConversationId(conversationId);
   if (!id) return null;
-  const rec = listAgentConversations().find((item: LooseBoundaryValue) => String(item.catId) === id);
+  const rec = listAgentConversations().find((item: LooseBoundaryValue) => String(item.conversationId) === id);
   if (!rec) return null;
   return {
-    catId: id,
+    conversationId: id,
     prompt: rec.prompt || '',
     status: rec.runStatus || 'running',
   };
 }
 
-function sendConversationToOverlay(catId: LooseBoundaryValue) {
-  const payload = conversationSpawnPayload(catId);
-  if (payload) sendSpawnCatToOverlay(payload);
+function sendConversationToOverlay(conversationId: LooseBoundaryValue) {
+  const payload = conversationSpawnPayload(conversationId);
+  if (payload) sendSessionToOverlay(payload);
 }
 
 function closeWindowOnEscape(win: LooseBoundaryValue, closeFn: LooseBoundaryValue) {
@@ -1198,7 +1198,7 @@ function focusExistingSessionWindow(reason: LooseBoundaryValue) {
   if (isLiveWindow(conversationWindow)) {
     focusWindow(conversationWindow);
     telemetry.sessionWindowOpenBlocked({
-      catId: activeConversationCatId || null,
+      conversationId: activeConversationId || null,
       reason,
       surface: 'conversation',
     });
@@ -1239,7 +1239,7 @@ function loadTrustedRendererPage(win: LooseBoundaryValue, pageName: LooseBoundar
   return win.loadFile(path.join(__dirname, `../renderer/${pageName}`), { query });
 }
 
-function openNewCatModal(modalContextId: LooseBoundaryValue, inputMode = selectedInputMode) {
+function openNewSessionModal(modalContextId: LooseBoundaryValue, inputMode = selectedInputMode) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const normalizedInputMode = normalizeInputMode(inputMode);
   telemetry.modalShowRequested({ modalContextId: modalContextId || null, inputMode: normalizedInputMode });
@@ -1307,34 +1307,34 @@ function showConversationWindow(win: LooseBoundaryValue) {
   focusWindow(win);
 }
 
-function showExistingConversationWindow(catId: LooseBoundaryValue) {
+function showExistingConversationWindow(conversationId: LooseBoundaryValue) {
   if (!isLiveWindow(conversationWindow)) return false;
-  const id = String(catId || '');
-  const previousCatId: LooseBoundaryValue = activeConversationCatId || null;
-  if (id && previousCatId !== id) {
-    activeConversationCatId = id;
-    void loadTrustedRendererPage(conversationWindow, 'conversation.html', { catId: id });
+  const id = String(conversationId || '');
+  const previousConversationId: LooseBoundaryValue = activeConversationId || null;
+  if (id && previousConversationId !== id) {
+    activeConversationId = id;
+    void loadTrustedRendererPage(conversationWindow, 'conversation.html', { conversationId: id });
   }
   focusWindow(conversationWindow);
   telemetry.sessionWindowOpenBlocked({
-    catId: id || previousCatId,
-    previousCatId,
+    conversationId: id || previousConversationId,
+    previousConversationId,
     reason: 'conversation_requested',
     surface: 'conversation',
-    switched: !!(id && previousCatId !== id),
+    switched: !!(id && previousConversationId !== id),
   });
   return true;
 }
 
-function openConversationWindow(catId: LooseBoundaryValue) {
-  if (!mainWindow || mainWindow.isDestroyed() || !catId) return;
+function openConversationWindow(conversationId: LooseBoundaryValue) {
+  if (!mainWindow || mainWindow.isDestroyed() || !conversationId) return;
 
-  const q = { catId: String(catId) };
+  const q = { conversationId: String(conversationId) };
   if (isLiveWindow(modalWindow)) {
     focusExistingSessionWindow('conversation_requested');
     return;
   }
-  if (showExistingConversationWindow(q.catId)) {
+  if (showExistingConversationWindow(q.conversationId)) {
     return;
   }
 
@@ -1346,7 +1346,7 @@ function openConversationWindow(catId: LooseBoundaryValue) {
 
   const win = new BrowserWindow(overlaySessionWindowOptions(conversationBounds));
   conversationWindow = win;
-  activeConversationCatId = q.catId;
+  activeConversationId = q.conversationId;
   applyTrustedWebContentsPolicy(win);
   applyOverlayWindowPolicy(win, { level: FOCUSED_OVERLAY_WINDOW_LEVEL });
 
@@ -1368,7 +1368,7 @@ function openConversationWindow(catId: LooseBoundaryValue) {
         conversationWindow = next;
       },
     );
-    if (cleared) activeConversationCatId = null;
+    if (cleared) activeConversationId = null;
   });
 
   void loadTrustedRendererPage(win, 'conversation.html', q);
@@ -1389,7 +1389,7 @@ function openHermesAuthWindow({ pendingRun = null, reason = '' }: LooseBoundaryV
     reason: String(reason || ''),
     hasPendingRun: pendingAuthRuns.size > 0,
     pendingRunCount: pendingAuthRuns.size,
-    catId: primaryPending && primaryPending.catId ? String(primaryPending.catId) : null,
+    conversationId: primaryPending && primaryPending.conversationId ? String(primaryPending.conversationId) : null,
   });
   if (authWindow && !authWindow.isDestroyed()) {
     authFlow.hidden = false;
@@ -1416,7 +1416,7 @@ function openHermesAuthWindow({ pendingRun = null, reason = '' }: LooseBoundaryV
       reason: String(reason || ''),
       hasPendingRun: pendingAuthRuns.size > 0,
       pendingRunCount: pendingAuthRuns.size,
-      catId: primaryPending && primaryPending.catId ? String(primaryPending.catId) : null,
+      conversationId: primaryPending && primaryPending.conversationId ? String(primaryPending.conversationId) : null,
     });
     sendHermesAuthContext(reason);
   });
@@ -1434,7 +1434,8 @@ function openHermesAuthWindow({ pendingRun = null, reason = '' }: LooseBoundaryV
           reason: String(reason || ''),
           hasPendingRun: pendingAuthRuns.size > 0,
           pendingRunCount: pendingAuthRuns.size,
-          catId: primaryPending && primaryPending.catId ? String(primaryPending.catId) : null,
+          conversationId:
+            primaryPending && primaryPending.conversationId ? String(primaryPending.conversationId) : null,
           bounds: currentWindow.getBounds(),
         });
       },
@@ -1465,7 +1466,7 @@ function closeHermesAuthWindow() {
   }
 }
 
-function setCatsVisible(visible: LooseBoundaryValue) {
+function setSessionsVisible(visible: LooseBoundaryValue) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (visible) {
     openPetOverlay({ persist: true });
@@ -1525,7 +1526,7 @@ function newSessionMenuItem({ accelerator = undefined }: { accelerator?: string 
     label: 'New Session…',
     accelerator,
     click: () => {
-      void handleNewCatShortcut('menu');
+      void handleNewSessionShortcut('menu');
     },
   };
 }
@@ -1574,11 +1575,15 @@ function appMenuItem(): MenuItemConstructorOptions {
 }
 
 function petVisibilityMenuItem(): MenuItemConstructorOptions {
-  const catsVisible: LooseBoundaryValue = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible());
+  const conversationsVisible: LooseBoundaryValue = !!(
+    mainWindow &&
+    !mainWindow.isDestroyed() &&
+    mainWindow.isVisible()
+  );
   return {
-    label: catsVisible ? 'Hide Pet' : 'Show Pet',
+    label: conversationsVisible ? 'Hide Pet' : 'Show Pet',
     click: () => {
-      setCatsVisible(!catsVisible);
+      setSessionsVisible(!conversationsVisible);
     },
   };
 }
@@ -1681,8 +1686,8 @@ function createTray() {
 
 function updateTrayTitle() {
   if (!tray || tray.isDestroyed() || !IS_MAC) return;
-  const active = Number.isFinite(catCounts.active) ? catCounts.active : 0;
-  const review = Number.isFinite(catCounts.inReview) ? catCounts.inReview : 0;
+  const active = Number.isFinite(sessionCounts.active) ? sessionCounts.active : 0;
+  const review = Number.isFinite(sessionCounts.inReview) ? sessionCounts.inReview : 0;
   let title;
   if (active > 0 && review > 0) {
     title = `${active}·${review}`;
@@ -2064,7 +2069,7 @@ function startLaunchContextCapture(source: LooseBoundaryValue, modalContextId: L
   return promise;
 }
 
-async function handleNewCatShortcut(source = 'shortcut') {
+async function handleNewSessionShortcut(source = 'shortcut') {
   if (focusExistingSessionWindow('new_session_shortcut')) return;
   const modalContextId = randomUUID();
   activeModalContextId = modalContextId;
@@ -2085,7 +2090,7 @@ async function handleNewCatShortcut(source = 'shortcut') {
     screenContextHint: launchContext.screenContextHint || null,
     inputMode,
   });
-  const newModalWindow = openNewCatModal(modalContextId, inputMode);
+  const newModalWindow = openNewSessionModal(modalContextId, inputMode);
   if (!newModalWindow) {
     modalContexts.delete(modalContextId);
     launchContextCaptures.delete(modalContextId);
@@ -2104,18 +2109,18 @@ async function handleNewCatShortcut(source = 'shortcut') {
 trustedIpcOn('overlay-ready', () => {
   overlayReady = true;
   sendPetCharacterToRenderer();
-  flushPendingSpawnCats();
+  flushPendingSpawnSessions();
 });
 
-async function startCatRunFromPayload(payload: MutableJsonObject = {}, opts: MutableJsonObject = {}) {
-  const catId = opts.catId ? normalizeCatId(opts.catId) : randomUUID();
+async function startConversationRunFromPayload(payload: MutableJsonObject = {}, opts: MutableJsonObject = {}) {
+  const conversationId = opts.conversationId ? normalizeConversationId(opts.conversationId) : randomUUID();
   const modalContextId: LooseBoundaryValue =
-    normalizeCatId(opts.modalContextId) ||
-    normalizeCatId(payload && payload.modalContextId) ||
+    normalizeConversationId(opts.modalContextId) ||
+    normalizeConversationId(payload && payload.modalContextId) ||
     activeModalContextId ||
     '';
   const prompt = boundedText(payload && payload.prompt);
-  if (!catId) {
+  if (!conversationId) {
     return { ok: false, error: 'Invalid session id.' };
   }
   const launchContext = currentLaunchContext(modalContextId);
@@ -2123,49 +2128,49 @@ async function startCatRunFromPayload(payload: MutableJsonObject = {}, opts: Mut
   if (!prompt.trim()) {
     const error = 'Missing task prompt.';
     telemetry.submitRejected({
-      catId,
+      conversationId,
       modalContextId: modalContextId || null,
       reason: 'missing_prompt',
     });
     return { ok: false, error };
   }
   telemetry.submitContextReady({
-    catId,
+    conversationId,
     modalContextId: modalContextId || null,
     pendingCapture: contextPending,
     contextQuality: launchContext ? launchContext.contextQuality : 'missing',
     missingContext: launchContext ? launchContext.missingContext : ['launch_context'],
   });
   telemetry.submitRequested({
-    catId,
+    conversationId,
     modalContextId: modalContextId || null,
     promptLength: prompt.length,
     pendingCapture: contextPending,
     contextQuality: launchContext ? launchContext.contextQuality : 'missing',
   });
 
-  const prepared = { catId, prompt, modalContextId, launchContext };
-  launchPreparedCatRun(prepared, { closeModal: opts.closeModal !== false });
-  return { ok: true, catId };
+  const prepared = { conversationId, prompt, modalContextId, launchContext };
+  launchPreparedConversationRun(prepared, { closeModal: opts.closeModal !== false });
+  return { ok: true, conversationId };
 }
 
-function launchPreparedCatRun(prepared: PreparedCatRun = {}, opts: MutableJsonObject = {}) {
-  const catId = normalizeCatId(prepared.catId) || randomUUID();
+function launchPreparedConversationRun(prepared: PreparedConversationRun = {}, opts: MutableJsonObject = {}) {
+  const conversationId = normalizeConversationId(prepared.conversationId) || randomUUID();
   const prompt = boundedText(prepared.prompt);
-  const modalContextId = normalizeCatId(prepared.modalContextId);
+  const modalContextId = normalizeConversationId(prepared.modalContextId);
   const launchContext = prepared.launchContext || null;
-  const out = { catId, prompt, modalContextId };
+  const out = { conversationId, prompt, modalContextId };
   if (modalContextId) modalContexts.delete(modalContextId);
   if (modalContextId) launchContextCaptures.delete(modalContextId);
   if (activeModalContextId === modalContextId) activeModalContextId = null;
   if (opts.closeModal !== false && modalWindow && !modalWindow.isDestroyed()) {
     modalWindow.close();
   }
-  sendSpawnCatToOverlay(out);
-  telemetry.catSpawnSent({ catId, modalContextId: modalContextId || null });
-  startAgentForCat(
+  sendSessionToOverlay(out);
+  telemetry.sessionRowSent({ conversationId, modalContextId: modalContextId || null });
+  startAgentForConversation(
     {
-      catId,
+      conversationId,
       prompt,
       pointerContext: launchContext,
     },
@@ -2173,23 +2178,23 @@ function launchPreparedCatRun(prepared: PreparedCatRun = {}, opts: MutableJsonOb
   );
 }
 
-trustedIpcOn('new-cat-submit', (_event, payload) => {
-  void startCatRunFromPayload(payload, { closeModal: true });
+trustedIpcOn('new-session-submit', (_event, payload) => {
+  void startConversationRunFromPayload(payload, { closeModal: true });
 });
 
-trustedIpcOn('new-cat-cancel', () => {
+trustedIpcOn('new-session-cancel', () => {
   cancelActiveVoiceCapture('cancelled');
   if (modalWindow && !modalWindow.isDestroyed()) {
     modalWindow.close();
   }
 });
 
-trustedIpcOn('cat-counts', (_event, payload) => {
+trustedIpcOn('session-counts', (_event, payload) => {
   if (!payload || typeof payload !== 'object') return;
   const active = Number(payload.active);
   const inReview = Number(payload.inReview);
   if (!Number.isFinite(active) || !Number.isFinite(inReview)) return;
-  catCounts = {
+  sessionCounts = {
     active: Math.min(1000, Math.max(0, Math.floor(active))),
     inReview: Math.min(1000, Math.max(0, Math.floor(inReview))),
   };
@@ -2248,8 +2253,8 @@ trustedIpcOn('pet-element-size-changed', (_event, payload: MutableJsonObject = {
   applyPetLayout(undefined, { persist: false });
 });
 
-trustedIpcOn('open-cat-conversation', (_e, { catId }: MutableJsonObject = {}) => {
-  const id = normalizeCatId(catId);
+trustedIpcOn('open-conversation', (_e, { conversationId }: MutableJsonObject = {}) => {
+  const id = normalizeConversationId(conversationId);
   if (!id) return;
   openConversationWindow(id);
 });
@@ -2260,8 +2265,8 @@ trustedIpcOn('close-conversation-window', () => {
   }
 });
 
-trustedIpcOn('dismiss-cat', async (_e, { catId }: MutableJsonObject = {}) => {
-  const id = normalizeCatId(catId);
+trustedIpcOn('dismiss-session', async (_e, { conversationId }: MutableJsonObject = {}) => {
+  const id = normalizeConversationId(conversationId);
   if (!id) return;
   const result: LooseBoundaryValue = await dismissAgent(id, { getMainWindow: () => mainWindow, log: console });
   if (!result || result.ok === false) return;
@@ -2270,15 +2275,15 @@ trustedIpcOn('dismiss-cat', async (_e, { catId }: MutableJsonObject = {}) => {
   }
 });
 
-trustedIpcHandle('agent-followup', (_e, { catId, text }: MutableJsonObject = {}) => {
-  const id = normalizeCatId(catId);
-  if (!id) return { ok: false, error: 'Missing session id.' };
+trustedIpcHandle('agent-followup', (_e, { conversationId, text }: MutableJsonObject = {}) => {
+  const id = normalizeConversationId(conversationId);
+  if (!id) return { ok: false, error: 'Missing conversation id.' };
   return sendFollowup(id, boundedText(text), { getMainWindow: () => mainWindow, log: console });
 });
 
-trustedIpcHandle('agent-cancel', (_e, { catId }: MutableJsonObject = {}) => {
-  const id = normalizeCatId(catId);
-  if (!id) return { ok: false, error: 'Missing session id.' };
+trustedIpcHandle('agent-cancel', (_e, { conversationId }: MutableJsonObject = {}) => {
+  const id = normalizeConversationId(conversationId);
+  if (!id) return { ok: false, error: 'Missing conversation id.' };
   return cancelAgent(id, { getMainWindow: () => mainWindow, log: console });
 });
 
@@ -2325,8 +2330,8 @@ trustedIpcHandle('clipboard-write-text', (_e, { text }: MutableJsonObject = {}) 
   return { ok: true };
 });
 
-trustedIpcHandle('get-agent-conversation', (_e, catId) => {
-  const id = normalizeCatId(catId);
+trustedIpcHandle('get-agent-conversation', (_e, conversationId) => {
+  const id = normalizeConversationId(conversationId);
   return id ? getAgentConversation(id) : { found: false, items: [] };
 });
 
@@ -2368,20 +2373,20 @@ trustedIpcHandle('hermes-auth-finish', () => {
   closeHermesAuthWindow();
   for (const pending of pendingRuns) {
     if (String(pending.retryKind || '') === 'followup') {
-      void sendFollowup(pending.catId, boundedText(pending.prompt), {
+      void sendFollowup(pending.conversationId, boundedText(pending.prompt), {
         getMainWindow: () => mainWindow,
         log: console,
         recordUserItem: false,
       });
     } else {
-      launchPreparedCatRun(pending, { closeModal: false });
+      launchPreparedConversationRun(pending, { closeModal: false });
     }
   }
   return {
     ok: true,
     started: pendingRuns.length > 0,
-    catId: pendingRuns.length === 1 ? pendingRuns[0].catId || null : null,
-    catIds: pendingRuns.map((pending) => pending.catId).filter(Boolean),
+    conversationId: pendingRuns.length === 1 ? pendingRuns[0].conversationId || null : null,
+    conversationIds: pendingRuns.map((pending) => pending.conversationId).filter(Boolean),
   };
 });
 
@@ -2427,7 +2432,7 @@ async function getEvalUiTargets() {
       ...overlay,
       ...evalWindowState(mainWindow),
     },
-    cats: Array.isArray(overlay.cats) ? overlay.cats.slice() : [],
+    conversations: Array.isArray(overlay.conversations) ? overlay.conversations.slice() : [],
     configDir: getAgentUIConfigDir(),
     trace: {
       enabled: evalTraceEnabled,
@@ -2455,13 +2460,13 @@ async function submitEvalModal() {
   return { ok: true, modalContextId: activeModalContextId || null };
 }
 
-async function waitForEvalCat({ catId, timeoutMs = 180000 }: MutableJsonObject = {}) {
+async function waitForEvalConversation({ conversationId, timeoutMs = 180000 }: MutableJsonObject = {}) {
   const started = Date.now();
-  const id = catId ? String(catId) : '';
+  const id = conversationId ? String(conversationId) : '';
   while (Date.now() - started <= Number(timeoutMs || 180000)) {
     const conversations = listAgentConversations();
     const rec = id
-      ? conversations.find((c: LooseBoundaryValue) => String(c.catId) === id)
+      ? conversations.find((c: LooseBoundaryValue) => String(c.conversationId) === id)
       : conversations.find((c: LooseBoundaryValue) =>
           EVAL_TERMINAL_STATUSES.has(String(c.runStatus || '').toLowerCase()),
         );
@@ -2470,16 +2475,16 @@ async function waitForEvalCat({ catId, timeoutMs = 180000 }: MutableJsonObject =
       if (EVAL_TERMINAL_STATUSES.has(status)) {
         return {
           ok: true,
-          catId: rec.catId,
+          conversationId: rec.conversationId,
           status,
-          conversation: getAgentConversation(rec.catId),
-          artifacts: getAgentArtifacts(rec.catId),
+          conversation: getAgentConversation(rec.conversationId),
+          artifacts: getAgentArtifacts(rec.conversationId),
         };
       }
     }
     await delay(200);
   }
-  return { ok: false, error: 'timeout', catId: id || null };
+  return { ok: false, error: 'timeout', conversationId: id || null };
 }
 
 async function readDeterministicTranscript() {
@@ -2651,12 +2656,12 @@ trustedIpcOn('eval-ui-state', (_event, payload: MutableJsonObject = {}) => {
   });
 });
 
-function registerNewCatShortcut() {
-  if (newCatShortcutRegistered) return;
+function registerNewSessionShortcut() {
+  if (newSessionShortcutRegistered) return;
   const registered = globalShortcut.register(NEW_SESSION_ACCELERATOR, () => {
-    void handleNewCatShortcut(NEW_SESSION_ACCELERATOR);
+    void handleNewSessionShortcut(NEW_SESSION_ACCELERATOR);
   });
-  newCatShortcutRegistered = true;
+  newSessionShortcutRegistered = true;
   telemetry.shortcutRegistered({ accelerator: NEW_SESSION_ACCELERATOR, registered });
 }
 
@@ -2668,56 +2673,56 @@ function startEvalServerIfNeeded() {
   });
   closeEvalServer = startAgentUIEvalServer(
     {
-      getConversation: async (catId: LooseBoundaryValue) => {
-        if (!catId) return { found: false, items: [] };
-        return getAgentConversation(String(catId));
+      getConversation: async (conversationId: LooseBoundaryValue) => {
+        if (!conversationId) return { found: false, items: [] };
+        return getAgentConversation(String(conversationId));
       },
       listConversations: async () => ({ ok: true, conversations: listAgentConversations() }),
       getUiTargets: async () => getEvalUiTargets(),
       openLauncher: async (payload: MutableJsonObject = {}) => {
         const source = String(payload.source || 'eval-open-launcher').slice(0, 128);
-        await handleNewCatShortcut(source);
+        await handleNewSessionShortcut(source);
         return { ok: true, source };
       },
       start: async (payload: MutableJsonObject = {}) => {
-        const catId = normalizeCatId(payload.catId);
-        return startCatRunFromPayload(payload, {
-          catId: catId || undefined,
+        const conversationId = normalizeConversationId(payload.conversationId);
+        return startConversationRunFromPayload(payload, {
+          conversationId: conversationId || undefined,
           closeModal: payload.closeModal !== false,
         });
       },
-      followup: async ({ catId, text }: MutableJsonObject = {}) => {
-        const id = normalizeCatId(catId);
-        if (!id) return { ok: false, error: 'missing cat id' };
+      followup: async ({ conversationId, text }: MutableJsonObject = {}) => {
+        const id = normalizeConversationId(conversationId);
+        if (!id) return { ok: false, error: 'missing conversation id' };
         return sendFollowup(id, boundedText(text), { getMainWindow: () => mainWindow, log: console });
       },
-      cancel: async ({ catId }: MutableJsonObject = {}) => {
-        const id = normalizeCatId(catId);
-        if (!id) return { ok: false, error: 'missing cat id' };
+      cancel: async ({ conversationId }: MutableJsonObject = {}) => {
+        const id = normalizeConversationId(conversationId);
+        if (!id) return { ok: false, error: 'missing conversation id' };
         return cancelAgent(id, { getMainWindow: () => mainWindow, log: console });
       },
-      openConversation: async ({ catId }: MutableJsonObject = {}) => {
-        const id = normalizeCatId(catId);
-        if (!id) return { ok: false, error: 'missing cat id' };
+      openConversation: async ({ conversationId }: MutableJsonObject = {}) => {
+        const id = normalizeConversationId(conversationId);
+        if (!id) return { ok: false, error: 'missing conversation id' };
         openConversationWindow(id);
-        return { ok: true, catId: id };
+        return { ok: true, conversationId: id };
       },
       setInputMode: async ({ mode }: MutableJsonObject = {}) => {
         setSelectedInputMode(mode);
         return { ok: true, inputMode: selectedInputMode };
       },
-      wait: async (payload: MutableJsonObject = {}) => waitForEvalCat(payload),
+      wait: async (payload: MutableJsonObject = {}) => waitForEvalConversation(payload),
       getTrace: async () => getTrace(),
       closeModal: async () => closeEvalModal(),
       submitModal: async () => submitEvalModal(),
-      dismiss: async ({ catId }: MutableJsonObject = {}) => {
-        if (!catId) return { ok: false, error: 'missing cat id' };
-        const result: LooseBoundaryValue = await dismissAgent(String(catId), {
+      dismiss: async ({ conversationId }: MutableJsonObject = {}) => {
+        if (!conversationId) return { ok: false, error: 'missing conversation id' };
+        const result: LooseBoundaryValue = await dismissAgent(String(conversationId), {
           getMainWindow: () => mainWindow,
           log: console,
         });
         telemetry.cleanupDismissCompleted({
-          catId: String(catId),
+          conversationId: String(conversationId),
           ok: !!(result && result.ok),
           error: result && result.error ? result.error : null,
         });
@@ -2745,7 +2750,7 @@ app.whenReady().then(() => {
   }
   createWindow();
   createTray();
-  registerNewCatShortcut();
+  registerNewSessionShortcut();
   telemetry.appReady({
     uptimeMs: Math.round(process.uptime() * 1000),
     evalServer: !!closeEvalServer,
@@ -2755,8 +2760,8 @@ app.whenReady().then(() => {
   /** Throttle overlay speech bubbles so streaming tokens do not flood IPC. */
   const streamBubbleThrottle = new Map();
 
-  function sendStreamBubbleThrottled(catId: LooseBoundaryValue, text: LooseBoundaryValue) {
-    const id = String(catId);
+  function sendStreamBubbleThrottled(conversationId: LooseBoundaryValue, text: LooseBoundaryValue) {
+    const id = String(conversationId);
     const msg = String(text || '').trim();
     if (!msg) return;
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -2768,7 +2773,7 @@ app.whenReady().then(() => {
     slot.text = msg;
     if (!slot.sentFirst) {
       slot.sentFirst = true;
-      mainWindow.webContents.send('agent-stream-bubble', { catId: id, text: msg });
+      mainWindow.webContents.send('agent-stream-bubble', { conversationId: id, text: msg });
       return;
     }
     if (slot.timer) return;
@@ -2776,15 +2781,15 @@ app.whenReady().then(() => {
       slot.timer = null;
       const t = slot.text;
       if (!t || !mainWindow || mainWindow.isDestroyed()) return;
-      mainWindow.webContents.send('agent-stream-bubble', { catId: id, text: t });
+      mainWindow.webContents.send('agent-stream-bubble', { conversationId: id, text: t });
     }, 120);
   }
 
-  setOnConversationPushed(({ catId, streamBubble }: LooseBoundaryValue) => {
-    const _id = String(catId);
+  setOnConversationPushed(({ conversationId, streamBubble }: LooseBoundaryValue) => {
+    const _id = String(conversationId);
     sendConversationToOverlay(_id);
     if (conversationWindow && !conversationWindow.isDestroyed()) {
-      conversationWindow.webContents.send('conversation-updated', { catId: _id });
+      conversationWindow.webContents.send('conversation-updated', { conversationId: _id });
     }
     if (streamBubble) sendStreamBubbleThrottled(_id, streamBubble);
   });

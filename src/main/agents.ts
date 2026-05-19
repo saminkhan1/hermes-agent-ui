@@ -21,7 +21,7 @@ import { attachmentDescriptor, normalizeAttachmentType } from './hermes-attachme
 import { isAuthErrorText } from './hermes-auth';
 import { ensureGatewayEnvFile, ensureGatewayProcess, stopGatewayProcess } from './hermes-runtime';
 import { getAgentUIConfigDir } from './hermes-release';
-import { enabled as evalTraceEnabled, getCatArtifactDir, writeArtifactJson } from './eval-trace';
+import { enabled as evalTraceEnabled, getConversationArtifactDir, writeArtifactJson } from './eval-trace';
 import { telemetry } from './reliability-telemetry';
 
 type ConversationRecord = MutableJsonObject & {
@@ -38,10 +38,10 @@ type ConversationRecord = MutableJsonObject & {
   firstGatewayEventAt?: number;
 };
 type NotifyPayload = MutableJsonObject & {
-  catId: string;
+  conversationId: string;
 };
 type ConversationPushInfo = {
-  catId: string;
+  conversationId: string;
   streamBubble?: string | null;
 };
 type AgentOptions = {
@@ -126,26 +126,26 @@ function pruneDismissedGatewayConversations() {
   const state = dismissedGatewayConversations || {};
   const cutoff = Date.now() - DISMISSED_RETENTION_MS;
   let changed = false;
-  for (const [catId, dismissedAt] of Object.entries(state)) {
+  for (const [conversationId, dismissedAt] of Object.entries(state)) {
     const ts = Number(dismissedAt || 0);
     if (!Number.isFinite(ts) || ts <= cutoff) {
-      delete state[catId];
+      delete state[conversationId];
       changed = true;
     }
   }
   if (changed) writeDismissedGatewayConversations();
 }
 
-function isDismissedGatewayConversation(catId: LooseBoundaryValue) {
-  const id = String(catId || '').trim();
+function isDismissedGatewayConversation(conversationId: LooseBoundaryValue) {
+  const id = String(conversationId || '').trim();
   if (!id) return false;
   const state = readDismissedGatewayConversations();
   const ts = Number(state![id] || 0);
   return Number.isFinite(ts) && ts > 0 && Date.now() - ts <= DISMISSED_RETENTION_MS;
 }
 
-function rememberDismissedGatewayConversation(catId: LooseBoundaryValue) {
-  const id = String(catId || '').trim();
+function rememberDismissedGatewayConversation(conversationId: LooseBoundaryValue) {
+  const id = String(conversationId || '').trim();
   if (!id) return;
   const state = readDismissedGatewayConversations();
   state![id] = Date.now();
@@ -256,11 +256,11 @@ function publicItem(item: AgentConversationItem | MutableJsonObject = {}) {
 }
 
 function conversationSnapshot(
-  catId: LooseBoundaryValue,
+  conversationId: LooseBoundaryValue,
   rec: ConversationRecord = { items: [] },
 ): AgentConversationSnapshot {
   return {
-    catId: String(catId),
+    conversationId: String(conversationId),
     prompt: safeText(rec.prompt),
     pointerContext: jsonClone(rec.pointerContext || null, null),
     items: Array.isArray(rec.items)
@@ -269,7 +269,7 @@ function conversationSnapshot(
     runStatus: rec.runStatus || 'running',
     endResult: rec.endResult,
     durationMs: rec.durationMs,
-    gatewayConversationId: rec.gatewayConversationId || String(catId),
+    gatewayConversationId: rec.gatewayConversationId || String(conversationId),
     startedAt: Number(rec.startedAt || 0) || Date.now(),
     lastGatewayStopSeq: Number(rec.lastGatewayStopSeq || 0) || undefined,
     typing:
@@ -288,9 +288,9 @@ function conversationSnapshot(
   };
 }
 
-function writeJsonSafe(catId: LooseBoundaryValue, relPath: LooseBoundaryValue, value: LooseBoundaryValue) {
+function writeJsonSafe(conversationId: LooseBoundaryValue, relPath: LooseBoundaryValue, value: LooseBoundaryValue) {
   try {
-    return writeArtifactJson(catId, relPath, value);
+    return writeArtifactJson(conversationId, relPath, value);
   } catch {
     return null;
   }
@@ -363,7 +363,7 @@ function appendConversationError(rec: LooseBoundaryValue, message: LooseBoundary
 }
 
 function terminalizeGatewayConversation(
-  catId: LooseBoundaryValue,
+  conversationId: LooseBoundaryValue,
   rec: ConversationRecord,
   message: LooseBoundaryValue,
   reason: LooseBoundaryValue,
@@ -381,15 +381,15 @@ function terminalizeGatewayConversation(
     active: false,
     stoppedAt: Date.now(),
   };
-  persistConversation(catId);
-  onConversationPushed({ catId });
+  persistConversation(conversationId);
+  onConversationPushed({ conversationId });
   telemetry.gatewayTerminalized({
-    catId,
+    conversationId,
     reason,
     durationMs: rec.durationMs,
   });
   gatewayNotify({
-    catId,
+    conversationId,
     status: 'error',
     result: message,
     durationMs: rec.durationMs,
@@ -400,11 +400,11 @@ function terminalizeGatewayConversation(
 
 function terminalizeRunningGatewayConversations(message: LooseBoundaryValue, reason: LooseBoundaryValue) {
   let count = 0;
-  for (const [catId, rec] of conversations.entries()) {
+  for (const [conversationId, rec] of conversations.entries()) {
     if (!rec) continue;
     const running = String(rec.runStatus || '').toLowerCase() === 'running' || !!(rec.typing && rec.typing.active);
     if (!running) continue;
-    if (terminalizeGatewayConversation(catId, rec, message, reason)) count += 1;
+    if (terminalizeGatewayConversation(conversationId, rec, message, reason)) count += 1;
   }
   return count;
 }
@@ -469,8 +469,8 @@ function shouldPushTypingStarted(rec: ConversationRecord, typing: AgentTypingSta
   );
 }
 
-function ensureConversationForGatewayEvent(catId: LooseBoundaryValue, event: MutableJsonObject = {}) {
-  const id = String(catId);
+function ensureConversationForGatewayEvent(conversationId: LooseBoundaryValue, event: MutableJsonObject = {}) {
+  const id = String(conversationId);
   let rec = conversations.get(id);
   if (rec) return rec;
   if (isDismissedGatewayConversation(id)) return null;
@@ -480,7 +480,7 @@ function ensureConversationForGatewayEvent(catId: LooseBoundaryValue, event: Mut
     items: [],
     runStatus: 'running',
     activeAssistantBubble: false,
-    artifactDir: evalTraceEnabled ? getCatArtifactDir(id) : null,
+    artifactDir: evalTraceEnabled ? getConversationArtifactDir(id) : null,
     gatewayConversationId: id,
     startedAt: eventTimeMs(event),
     hydratedFromGateway: true,
@@ -492,8 +492,8 @@ function ensureConversationForGatewayEvent(catId: LooseBoundaryValue, event: Mut
 }
 
 function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject = {}) {
-  const catId = String(event.conversation_id || '').trim();
-  if (!catId) return;
+  const conversationId = String(event.conversation_id || '').trim();
+  if (!conversationId) return;
   const type = String(event.type || '').trim();
   if (
     ![
@@ -506,13 +506,13 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
     ].includes(type)
   )
     return;
-  const rec = ensureConversationForGatewayEvent(catId, event);
+  const rec = ensureConversationForGatewayEvent(conversationId, event);
   if (!rec) return;
   const receivedAt = Date.now();
   if (!rec.firstGatewayEventAt) {
     rec.firstGatewayEventAt = receivedAt;
     telemetry.gatewayFirstEvent({
-      catId,
+      conversationId,
       gatewayEventType: type,
       gatewaySeq: Number(event.seq || 0) || null,
       msSinceStarted: rec.startedAt ? receivedAt - Number(rec.startedAt) : null,
@@ -522,15 +522,15 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
   }
 
   if (type === 'message.created' || type === 'message.updated') {
-    upsertGatewayAssistantMessage(catId, event);
+    upsertGatewayAssistantMessage(conversationId, event);
     return;
   }
   if (type === 'message.deleted') {
-    deleteGatewayMessage(catId, event);
+    deleteGatewayMessage(conversationId, event);
     return;
   }
   if (type === 'attachment.created') {
-    appendGatewayAttachment(catId, event);
+    appendGatewayAttachment(conversationId, event);
     return;
   }
   if (type === 'typing.started') {
@@ -549,8 +549,8 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
     rec.typing = typing;
     if (shouldPush) {
       rec.lastTypingStartedPushAt = receivedAt;
-      persistConversation(catId);
-      onConversationPushed({ catId });
+      persistConversation(conversationId);
+      onConversationPushed({ conversationId });
     }
     return;
   }
@@ -563,8 +563,8 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
         stoppedAt: eventTimeMs(typingEvent),
         seq: Number(typingEvent.seq || 0) || (rec.typing && rec.typing.seq) || undefined,
       };
-      persistConversation(catId);
-      onConversationPushed({ catId });
+      persistConversation(conversationId);
+      onConversationPushed({ conversationId });
       return;
     }
     const seq = Number(typingEvent.seq || 0);
@@ -583,10 +583,10 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
         typingEvent.message_id == null ? (rec.typing && rec.typing.messageId) || null : String(typingEvent.message_id),
       seq: seq || (rec.typing && rec.typing.seq) || undefined,
     };
-    persistConversation(catId);
-    onConversationPushed({ catId });
+    persistConversation(conversationId);
+    onConversationPushed({ conversationId });
     telemetry.terminalStateRendered({
-      catId,
+      conversationId,
       status,
       durationMs: rec.durationMs,
       endResult: rec.endResult,
@@ -602,14 +602,14 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
       const retry = latestUserRetry(rec);
       rec.authPrompted = true;
       telemetry.authHandoffRequested({
-        catId,
+        conversationId,
         reason: 'provider-auth-required',
         retryKind: retry.kind,
         source: 'gateway-event',
         error: textMeta(failureText, 120),
       });
       onAuthRequired({
-        catId,
+        conversationId,
         prompt: retry.text || rec.prompt || '',
         launchContext: rec.pointerContext || null,
         reason: 'provider-auth-required',
@@ -618,7 +618,7 @@ function handleGatewayEvent(event: LocalDesktopGatewayEvent | MutableJsonObject 
       });
     }
     gatewayNotify({
-      catId,
+      conversationId,
       status,
       result: undefined,
       durationMs: rec.durationMs,
@@ -793,15 +793,15 @@ async function hydrateGatewayConversations(opts: AgentOptions = {}) {
   }
 }
 
-function notifyRestarted(getMainWindow: LooseBoundaryValue, catId: LooseBoundaryValue) {
+function notifyRestarted(getMainWindow: LooseBoundaryValue, conversationId: LooseBoundaryValue) {
   const win = getMainWindow && getMainWindow();
   if (win && !win.isDestroyed()) {
-    win.webContents.send('agent-restarted', { catId: String(catId) });
+    win.webContents.send('agent-restarted', { conversationId: String(conversationId) });
   }
 }
 
-function persistConversation(catId: LooseBoundaryValue) {
-  const id = String(catId);
+function persistConversation(conversationId: LooseBoundaryValue) {
+  const id = String(conversationId);
   const rec = conversations.get(id);
   if (!rec) return;
   if (evalTraceEnabled) {
@@ -810,11 +810,11 @@ function persistConversation(catId: LooseBoundaryValue) {
 }
 
 function upsertGatewayAssistantMessage(
-  catId: LooseBoundaryValue,
+  conversationId: LooseBoundaryValue,
   event: LocalDesktopMessageEvent | MutableJsonObject = {},
 ) {
   const wireEvent = event as MutableJsonObject;
-  const id = String(catId);
+  const id = String(conversationId);
   const rec = conversations.get(id);
   if (!rec) return;
   const hasText = wireEvent.text != null;
@@ -844,14 +844,14 @@ function upsertGatewayAssistantMessage(
   if (wireEvent.finalize != null) target.finalize = !!wireEvent.finalize;
   rec.activeAssistantBubble = !target.finalize;
   persistConversation(id);
-  onConversationPushed({ catId: id, streamBubble: leadAssistantBubbleText(text) });
+  onConversationPushed({ conversationId: id, streamBubble: leadAssistantBubbleText(text) });
 }
 
 function deleteGatewayMessage(
-  catId: LooseBoundaryValue,
+  conversationId: LooseBoundaryValue,
   event: LocalDesktopMessageDeletedEvent | MutableJsonObject = {},
 ) {
-  const id = String(catId);
+  const id = String(conversationId);
   const rec = conversations.get(id);
   if (!rec) return;
   const messageId = event.message_id == null ? '' : String(event.message_id);
@@ -862,15 +862,15 @@ function deleteGatewayMessage(
   );
   if (rec.items.length !== before) {
     persistConversation(id);
-    onConversationPushed({ catId: id });
+    onConversationPushed({ conversationId: id });
   }
 }
 
 function appendGatewayAttachment(
-  catId: LooseBoundaryValue,
+  conversationId: LooseBoundaryValue,
   event: LocalDesktopAttachmentEvent | MutableJsonObject = {},
 ) {
-  const id = String(catId);
+  const id = String(conversationId);
   const rec = conversations.get(id);
   if (!rec) return;
   const label = normalizeAttachmentType(event.attachment_type || 'attachment');
@@ -892,28 +892,28 @@ function appendGatewayAttachment(
   rec.items.push(item);
   rec.activeAssistantBubble = false;
   persistConversation(id);
-  onConversationPushed({ catId: id, streamBubble: leadAssistantBubbleText(text) });
+  onConversationPushed({ conversationId: id, streamBubble: leadAssistantBubbleText(text) });
 }
 
-function initConversationState(catId: LooseBoundaryValue, { prompt, pointerContext }: LooseBoundaryValue) {
-  const id = String(catId);
+function initConversationState(conversationId: LooseBoundaryValue, { prompt, pointerContext }: LooseBoundaryValue) {
+  const id = String(conversationId);
   conversations.set(id, {
     prompt: String(prompt || ''),
     pointerContext: pointerContext || null,
     items: prompt ? [{ kind: 'user', text: String(prompt), at: Date.now() }] : [],
     runStatus: 'running',
     activeAssistantBubble: false,
-    artifactDir: evalTraceEnabled ? getCatArtifactDir(id) : null,
+    artifactDir: evalTraceEnabled ? getConversationArtifactDir(id) : null,
     gatewayConversationId: id,
     startedAt: Date.now(),
     typing: { active: false },
   });
   persistConversation(id);
-  onConversationPushed({ catId: id });
+  onConversationPushed({ conversationId: id });
 }
 
-function getAgentConversation(catId: LooseBoundaryValue) {
-  const c = conversations.get(String(catId));
+function getAgentConversation(conversationId: LooseBoundaryValue) {
+  const c = conversations.get(String(conversationId));
   if (!c) return { found: false, items: [] };
   return {
     found: true,
@@ -926,13 +926,13 @@ function getAgentConversation(catId: LooseBoundaryValue) {
     durationMs: c.durationMs,
     gatewayConversationId: c.gatewayConversationId || null,
     typing: c.typing || { active: false },
-    artifacts: getAgentArtifacts(String(catId)),
+    artifacts: getAgentArtifacts(String(conversationId)),
   };
 }
 
 function listAgentConversations() {
-  return [...conversations.entries()].map(([catId, c]) => ({
-    catId,
+  return [...conversations.entries()].map(([conversationId, c]) => ({
+    conversationId,
     found: true,
     locationLabel: getConversationLocationLabel(c),
     prompt: c.prompt,
@@ -942,17 +942,17 @@ function listAgentConversations() {
     startedAt: c.startedAt || 0,
     gatewayConversationId: c.gatewayConversationId || null,
     typing: c.typing || { active: false },
-    artifacts: getAgentArtifacts(catId),
+    artifacts: getAgentArtifacts(conversationId),
   }));
 }
 
-function deleteConversationState(catId: LooseBoundaryValue) {
-  conversations.delete(String(catId));
+function deleteConversationState(conversationId: LooseBoundaryValue) {
+  conversations.delete(String(conversationId));
 }
 
-async function dismissAgent(catId: LooseBoundaryValue, opts: AgentOptions = {}) {
+async function dismissAgent(conversationId: LooseBoundaryValue, opts: AgentOptions = {}) {
   const { getMainWindow } = opts;
-  const id = String(catId);
+  const id = String(conversationId);
   const rec = conversations.get(id);
   const runStatus = String((rec && rec.runStatus) || '').toLowerCase();
   const isRunning = runStatus === 'running' || !!(rec && rec.typing && rec.typing.active);
@@ -967,7 +967,7 @@ async function dismissAgent(catId: LooseBoundaryValue, opts: AgentOptions = {}) 
   deleteConversationState(id);
   const win = getMainWindow && getMainWindow();
   if (win && !win.isDestroyed()) {
-    win.webContents.send('remove-cat', { catId: id });
+    win.webContents.send('remove-session', { conversationId: id });
   }
   return { ok: true };
 }
@@ -1075,9 +1075,9 @@ function isHermesSlashCommandPrompt(prompt: LooseBoundaryValue) {
     .startsWith('/');
 }
 
-function getAgentArtifacts(catId: LooseBoundaryValue) {
-  const id = String(catId);
-  const dir = evalTraceEnabled ? getCatArtifactDir(id) : null;
+function getAgentArtifacts(conversationId: LooseBoundaryValue) {
+  const id = String(conversationId);
+  const dir = evalTraceEnabled ? getConversationArtifactDir(id) : null;
   if (!dir) return null;
   return {
     dir,
@@ -1086,13 +1086,13 @@ function getAgentArtifacts(catId: LooseBoundaryValue) {
 }
 
 async function runOnGateway(
-  catId: LooseBoundaryValue,
+  conversationId: LooseBoundaryValue,
   notify: LooseBoundaryValue,
   log: LooseBoundaryValue,
   prompt: LooseBoundaryValue,
   opts: AgentOptions = {},
 ) {
-  const id = String(catId);
+  const id = String(conversationId);
   const rec = conversations.get(id);
   await ensureGatewayReady(log, { reason: 'message' });
   const client = ensureGatewayClient({
@@ -1100,7 +1100,6 @@ async function runOnGateway(
     log,
     resetLastSeq: !!opts.resetGatewayReplay,
   });
-  const conversationId = id;
   const includeContext = !!opts.includeContext && !isHermesSlashCommandPrompt(prompt);
   const fullPrompt = includeContext
     ? buildLocalRunPrompt(prompt, (rec && rec.pointerContext) || null)
@@ -1108,7 +1107,7 @@ async function runOnGateway(
   const messageId = client.createMessageId(id);
 
   if (rec) {
-    rec.gatewayConversationId = conversationId;
+    rec.gatewayConversationId = id;
     rec.runStatus = 'running';
     rec.endResult = undefined;
     rec.durationMs = undefined;
@@ -1116,14 +1115,13 @@ async function runOnGateway(
     rec.gatewayPostAcceptedAt = undefined;
     rec.firstGatewayEventAt = undefined;
     persistConversation(id);
-    onConversationPushed({ catId: id });
+    onConversationPushed({ conversationId: id });
   }
 
   const postStartedAt = Date.now();
   if (rec) rec.gatewayPostRequestedAt = postStartedAt;
   telemetry.gatewayMessagePostRequested({
-    catId: id,
-    conversationId,
+    conversationId: id,
     messageId,
     includeContext,
     msSinceStarted: rec && rec.startedAt ? postStartedAt - Number(rec.startedAt) : null,
@@ -1131,7 +1129,7 @@ async function runOnGateway(
   });
 
   await client.postMessage({
-    conversationId,
+    conversationId: id,
     messageId,
     text: fullPrompt,
     chatName: rec && rec.prompt ? preview(rec.prompt, 80) : preview(prompt, 80),
@@ -1143,8 +1141,7 @@ async function runOnGateway(
   const acceptedAt = Date.now();
   if (rec) rec.gatewayPostAcceptedAt = acceptedAt;
   telemetry.gatewayMessagePostAccepted({
-    catId: id,
-    conversationId,
+    conversationId: id,
     messageId,
     durationMs: acceptedAt - postStartedAt,
     msSinceStarted: rec && rec.startedAt ? acceptedAt - Number(rec.startedAt) : null,
@@ -1153,12 +1150,12 @@ async function runOnGateway(
 }
 
 function markGatewayError(
-  catId: LooseBoundaryValue,
+  conversationId: LooseBoundaryValue,
   error: LooseBoundaryValue,
   notify: LooseBoundaryValue,
   opts: MutableJsonObject = {},
 ) {
-  const id = String(catId);
+  const id = String(conversationId);
   const rec = conversations.get(id);
   const message = error && error.message ? error.message : String(error || 'Hermes gateway is unavailable.');
   if (rec) {
@@ -1168,11 +1165,11 @@ function markGatewayError(
     rec.durationMs = rec.startedAt ? Date.now() - rec.startedAt : 0;
     rec.activeAssistantBubble = false;
     persistConversation(id);
-    onConversationPushed({ catId: id });
+    onConversationPushed({ conversationId: id });
   }
-  telemetry.gatewayMessagePostFailed({ catId: id, error: message });
+  telemetry.gatewayMessagePostFailed({ conversationId: id, error: message });
   notify({
-    catId: id,
+    conversationId: id,
     status: 'error',
     result: message,
     durationMs: rec ? rec.durationMs : 0,
@@ -1182,14 +1179,14 @@ function markGatewayError(
     const fallbackRetry = latestUserRetry(rec);
     rec.authPrompted = true;
     telemetry.authHandoffRequested({
-      catId: id,
+      conversationId: id,
       reason: 'provider-auth-required',
       retryKind: opts.retryKind || fallbackRetry.kind,
       source: 'gateway-post-error',
       error: textMeta(message, 120),
     });
     onAuthRequired({
-      catId: id,
+      conversationId: id,
       prompt: String(opts.retryText || fallbackRetry.text || rec.prompt || ''),
       launchContext: rec.pointerContext || null,
       reason: 'provider-auth-required',
@@ -1199,8 +1196,15 @@ function markGatewayError(
   }
 }
 
-async function runAgentLifecycle({ catId, prompt, pointerContext, notify, log, getMainWindow }: LooseBoundaryValue) {
-  const id = String(catId);
+async function runAgentLifecycle({
+  conversationId,
+  prompt,
+  pointerContext,
+  notify,
+  log,
+  getMainWindow,
+}: LooseBoundaryValue) {
+  const id = String(conversationId);
   const resetGatewayReplay = !gatewayClient && conversations.size === 0;
   initConversationState(id, {
     prompt,
@@ -1218,13 +1222,13 @@ async function runAgentLifecycle({ catId, prompt, pointerContext, notify, log, g
   }
 }
 
-function startAgentForCat(
-  { catId, prompt, pointerContext }: LooseBoundaryValue,
+function startAgentForConversation(
+  { conversationId, prompt, pointerContext }: LooseBoundaryValue,
   { getMainWindow, log = console }: AgentOptions = {},
 ) {
   const notify = getNotify(getMainWindow);
   void runAgentLifecycle({
-    catId: String(catId),
+    conversationId: String(conversationId),
     prompt,
     pointerContext,
     notify,
@@ -1233,9 +1237,9 @@ function startAgentForCat(
   });
 }
 
-async function sendFollowup(catId: LooseBoundaryValue, text: LooseBoundaryValue, opts: AgentOptions = {}) {
+async function sendFollowup(conversationId: LooseBoundaryValue, text: LooseBoundaryValue, opts: AgentOptions = {}) {
   const { getMainWindow, log = console } = opts;
-  const id = String(catId);
+  const id = String(conversationId);
   const t = String(text || '');
   if (!t.trim()) return { ok: false, error: 'Missing follow-up text.' };
 
@@ -1253,7 +1257,7 @@ async function sendFollowup(catId: LooseBoundaryValue, text: LooseBoundaryValue,
   rec.durationMs = undefined;
   rec.activeAssistantBubble = false;
   persistConversation(id);
-  onConversationPushed({ catId: id });
+  onConversationPushed({ conversationId: id });
 
   notifyRestarted(getMainWindow, id);
   const notify = getNotify(getMainWindow);
@@ -1266,9 +1270,9 @@ async function sendFollowup(catId: LooseBoundaryValue, text: LooseBoundaryValue,
   }
 }
 
-async function cancelAgent(catId: LooseBoundaryValue, opts: AgentOptions = {}) {
+async function cancelAgent(conversationId: LooseBoundaryValue, opts: AgentOptions = {}) {
   const { getMainWindow, log = console } = opts;
-  const id = String(catId);
+  const id = String(conversationId);
   const rec = conversations.get(id);
   if (!rec) {
     log.warn('cancelAgent: no conversation', id);
@@ -1280,7 +1284,7 @@ async function cancelAgent(catId: LooseBoundaryValue, opts: AgentOptions = {}) {
   }
   rec.items.push({ kind: 'user', text: 'Cancel requested.', at: Date.now(), metadata: { command: '/stop' } });
   persistConversation(id);
-  onConversationPushed({ catId: id });
+  onConversationPushed({ conversationId: id });
 
   const notify = getNotify(getMainWindow);
   try {
@@ -1303,7 +1307,7 @@ function cancelAllAgents() {
 }
 
 export {
-  startAgentForCat,
+  startAgentForConversation,
   cancelAllAgents,
   getAgentConversation,
   listAgentConversations,

@@ -117,29 +117,77 @@ function expectedDigest(record) {
   return `sha256:${record.sha256}`;
 }
 
+function formatSize(bytes) {
+  return bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KiB` : `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
 function releaseBody(manifest, records) {
+  const dmg = records.find((record) => record.name.endsWith('.dmg'));
+  const zip = records.find((record) => record.name.endsWith('.zip'));
+  const manifestRecord = records.find((record) => record.name === 'release-manifest.json');
   const lines = [
-    'Private bootstrap beta for macOS arm64.',
+    '# agent-UI for Hermes - Bootstrap Beta',
     '',
-    `This build is from main commit ${manifest.package.gitSha}.`,
+    'This is a private macOS beta for people already using a local Hermes setup. agent-UI gives you a desktop shortcut for sending text or voice tasks to Hermes, then shows the running session with follow-up, cancel, and reopen controls.',
     '',
-    'Artifacts:',
+    '## Download',
+    '',
+    dmg
+      ? `Download \`${dmg.name}\` for the normal Mac install.`
+      : 'Download the DMG artifact for the normal Mac install.',
+    '',
+    zip
+      ? `The zip \`${zip.name}\` is included as a backup for testers who cannot use the DMG.`
+      : 'The zip artifact is included as a backup for testers who cannot use the DMG.',
+    '',
+    '## Before You Install',
+    '',
+    '- macOS on Apple silicon.',
+    `- Local Hermes ${manifest.hermes.connectorBaselineRequirement || 'v2026.4.30+'}.`,
+    '- A Hermes provider/model already configured through Hermes.',
+    '- Microphone permission only if you want voice input.',
+    '',
+    'This app is connector-only. It does not bundle Hermes, store provider credentials, or copy tools into your Hermes install.',
+    '',
+    '## Install',
+    '',
+    '1. Open the DMG.',
+    '2. Drag `agent-UI for Hermes.app` to `/Applications`.',
+    '3. Launch from Finder.',
+    '4. If macOS blocks the first launch, right-click `agent-UI for Hermes.app` and choose `Open`.',
+    '5. Choose `Use Text Input` or `Use Voice Input`, press `Cmd+Shift+C`, and submit a small test task.',
+    '',
+    '## Beta Notes',
+    '',
+    '- This bootstrap build is ad-hoc signed and not notarized yet, so the first-launch security warning is expected.',
+    '- Hermes still owns model/provider auth and the actual run. agent-UI is only the desktop connector.',
+    '- If Hermes has no provider/model configured, agent-UI should preserve your task and show the Hermes setup path.',
+    '',
+    '## Verification',
+    '',
+    'Before upload, this release was checked with:',
+    '',
+    '- `npm run verify`',
+    '- `npm run dist:mac`',
+    '- `npm run release:verify`',
+    '- `npm run verify:live:release -- "dist/mac-arm64/agent-UI for Hermes.app"`',
+    '- `npm run verify:interaction:lmstudio -- "dist/mac-arm64/agent-UI for Hermes.app"`',
+    '',
+    '## Files',
+    '',
+    `Build commit: \`${manifest.package.gitSha}\``,
+    '',
   ];
   for (const record of records) {
-    lines.push(`- ${record.name}`);
-    lines.push(`  - sha256: ${record.sha256}`);
+    lines.push(`- \`${record.name}\` (${formatSize(record.sizeBytes)})`);
+    lines.push(`  - SHA-256: \`${record.sha256}\``);
   }
-  lines.push(
-    '',
-    'Verification completed before upload:',
-    '- npm run verify',
-    '- npm run dist:mac',
-    '- npm run release:verify',
-    '- npm run verify:live:release -- "dist/mac-arm64/agent-UI for Hermes.app"',
-    '- npm run verify:interaction:lmstudio -- "dist/mac-arm64/agent-UI for Hermes.app"',
-    '',
-    'This is the connector build for an existing local Hermes setup. It is ad-hoc signed and not notarized; first launch may require Finder right-click Open. See release-manifest.json for hashes, provenance, and validation metadata.',
-  );
+  if (manifestRecord) {
+    lines.push(
+      '',
+      '`release-manifest.json` contains artifact hashes, signing/notarization evidence, packaged plugin checks, and build provenance.',
+    );
+  }
   return lines.join('\n');
 }
 
@@ -178,7 +226,7 @@ function main() {
       '--target',
       manifest.package.gitSha,
       '--title',
-      'agent-UI Bootstrap Beta 1',
+      'agent-UI for Hermes Bootstrap Beta 1',
       '--draft=false',
       '--prerelease',
       '--notes-file',

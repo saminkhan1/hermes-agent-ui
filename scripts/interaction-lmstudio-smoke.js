@@ -617,8 +617,8 @@ async function listConversations() {
   return Array.isArray(out && out.conversations) ? out.conversations : [];
 }
 
-async function conversation(catId) {
-  return getJson(`/conversation?catId=${encodeURIComponent(catId)}`);
+async function conversation(conversationId) {
+  return getJson(`/conversation?conversationId=${encodeURIComponent(conversationId)}`);
 }
 
 async function traceEvents() {
@@ -626,10 +626,10 @@ async function traceEvents() {
   return Array.isArray(trace && trace.events) ? trace.events : [];
 }
 
-function gatewayPostEvents(events, catId) {
+function gatewayPostEvents(events, conversationId) {
   return events.filter((event) => {
     if (event.type !== 'gateway_message_post_requested') return false;
-    return !catId || String(event.catId || '') === String(catId);
+    return !conversationId || String(event.conversationId || '') === String(conversationId);
   });
 }
 
@@ -709,18 +709,18 @@ async function waitNewConversation(beforeIds, label) {
     `new conversation: ${label}`,
     async () => {
       const list = await listConversations();
-      const next = list.find((item) => !beforeIds.has(String(item.catId || '')));
-      return next && next.catId ? String(next.catId) : null;
+      const next = list.find((item) => !beforeIds.has(String(item.conversationId || '')));
+      return next && next.conversationId ? String(next.conversationId) : null;
     },
     20000,
   );
 }
 
-async function waitAssistantSentinel(catId, sentinel, label, timeoutMs = 180000) {
+async function waitAssistantSentinel(conversationId, sentinel, label, timeoutMs = 180000) {
   return waitUntil(
     `assistant sentinel ${sentinel}: ${label}`,
     async () => {
-      const conv = await conversation(catId);
+      const conv = await conversation(conversationId);
       const assistant = itemTexts(conv, 'assistant').join('\n');
       if (assistant.includes(sentinel) && String(conv.runStatus || '').toLowerCase() === 'completed') return conv;
       return null;
@@ -730,11 +730,11 @@ async function waitAssistantSentinel(catId, sentinel, label, timeoutMs = 180000)
   );
 }
 
-async function waitGatewayPostCount(catId, count, label) {
+async function waitGatewayPostCount(conversationId, count, label) {
   return waitUntil(
     `gateway post count ${count}: ${label}`,
     async () => {
-      const posts = gatewayPostEvents(await traceEvents(), catId);
+      const posts = gatewayPostEvents(await traceEvents(), conversationId);
       return posts.length >= count ? posts : null;
     },
     30000,
@@ -742,23 +742,26 @@ async function waitGatewayPostCount(catId, count, label) {
   );
 }
 
-async function openConversationFromOverlay(catId, label) {
+async function openConversationFromOverlay(conversationId, label) {
   const target = await waitUntil(
-    `overlay row for ${catId}`,
+    `overlay row for ${conversationId}`,
     async () => {
       const ui = await uiTargets();
       const rows = ui && ui.overlay && Array.isArray(ui.overlay.rows) ? ui.overlay.rows : [];
-      const row = rows.find((entry) => String(entry.catId || '') === String(catId));
+      const row = rows.find((entry) => String(entry.conversationId || '') === String(conversationId));
       return row && (row.actionRect || row.rect) ? { ui, row } : null;
     },
     20000,
   );
   clickAtRect(target.row.actionRect || target.row.rect, `${label} overlay row`);
   return waitUntil(
-    `conversation window for ${catId}`,
+    `conversation window for ${conversationId}`,
     async () => {
       const ui = await uiTargets();
-      return ui && ui.conversation && ui.conversation.visible && String(ui.conversation.catId || '') === String(catId)
+      return ui &&
+        ui.conversation &&
+        ui.conversation.visible &&
+        String(ui.conversation.conversationId || '') === String(conversationId)
         ? ui
         : null;
     },
@@ -819,7 +822,7 @@ function screenshotRect(name, rect) {
 async function runMenuShortcutPromptFollowupJourney() {
   clickMenuItem('File', 'Use Text Input');
 
-  const beforeIds = new Set((await listConversations()).map((entry) => String(entry.catId || '')));
+  const beforeIds = new Set((await listConversations()).map((entry) => String(entry.conversationId || '')));
   pressShortcutC();
   const modal = await waitModalVisible('shortcut new session');
   screenshotRect('new-session-modal', modal.modal.bounds);
@@ -831,23 +834,23 @@ async function runMenuShortcutPromptFollowupJourney() {
   pressKeyCode(36);
   await waitModalHidden('initial submit');
 
-  const catId = await waitNewConversation(beforeIds, 'initial submit');
-  const initialPosts = await waitGatewayPostCount(catId, 1, 'initial prompt');
+  const conversationId = await waitNewConversation(beforeIds, 'initial submit');
+  const initialPosts = await waitGatewayPostCount(conversationId, 1, 'initial prompt');
   assertCondition(initialPosts[0].includeContext === true, 'initial prompt did not include Agent UI context');
   assertCondition(
-    String(initialPosts[0].conversationId || '') === catId,
+    String(initialPosts[0].conversationId || '') === conversationId,
     'initial gateway conversation_id did not match the session',
   );
 
-  const initial = await waitAssistantSentinel(catId, sentinels.initial, 'initial prompt');
+  const initial = await waitAssistantSentinel(conversationId, sentinels.initial, 'initial prompt');
   assertNoErrorItems(initial, 'initial conversation');
   assertCondition(itemTexts(initial, 'user').includes(prompt), 'initial user prompt was not preserved exactly');
   assertCondition(
-    String(initial.gatewayConversationId || '') === catId,
+    String(initial.gatewayConversationId || '') === conversationId,
     'initial conversation recorded the wrong gateway id',
   );
 
-  const opened = await openConversationFromOverlay(catId, 'completed session');
+  const opened = await openConversationFromOverlay(conversationId, 'completed session');
   screenshotRect('conversation-initial', opened.conversation.bounds);
   await focusConversationFollowup('follow-up');
 
@@ -862,7 +865,7 @@ async function runMenuShortcutPromptFollowupJourney() {
   }
   pressKeyCode(36);
 
-  const followupPosts = await waitGatewayPostCount(catId, 2, 'follow-up');
+  const followupPosts = await waitGatewayPostCount(conversationId, 2, 'follow-up');
   const messageIds = followupPosts.map((post) => String(post.messageId || '')).filter(Boolean);
   assertCondition(
     new Set(messageIds).size === 2,
@@ -870,11 +873,11 @@ async function runMenuShortcutPromptFollowupJourney() {
   );
   assertCondition(followupPosts[1].includeContext === false, 'follow-up unexpectedly included first-message context');
   assertCondition(
-    followupPosts.every((post) => String(post.conversationId || '') === catId),
+    followupPosts.every((post) => String(post.conversationId || '') === conversationId),
     'follow-up changed gateway conversation_id',
   );
 
-  const finalConversation = await waitAssistantSentinel(catId, sentinels.followup, 'follow-up');
+  const finalConversation = await waitAssistantSentinel(conversationId, sentinels.followup, 'follow-up');
   assertNoErrorItems(finalConversation, 'follow-up conversation');
   assertCondition(
     itemTexts(finalConversation, 'user').includes(followup),
@@ -884,7 +887,7 @@ async function runMenuShortcutPromptFollowupJourney() {
 
   evidence.checks.menuShortcutPromptFollowup = {
     ok: true,
-    catId,
+    conversationId,
     gatewayConversationId: finalConversation.gatewayConversationId || null,
     gatewayPosts: followupPosts.length,
   };

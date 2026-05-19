@@ -1,41 +1,125 @@
 # agent-UI
 
-agent-UI is a thin desktop launcher and status surface for Hermes.
+agent-UI is a small macOS companion app for using a local Hermes runtime from
+your desktop.
 
-It captures lightweight app/window/display context when the global shortcut fires, then starts the currently selected input mode: text mode opens a minimal task input, while voice mode records through Hermes voice capture and places the transcript in the same input for review before submission.
+Press the global shortcut, type or speak a task, and agent-UI sends it to Hermes
+with lightweight app/window/display context. Running sessions appear as desktop
+pets with details, follow-up, cancel, and reopen support.
 
-## Product Shape
+## What You Get
 
-For manual testers, ship one macOS app with the launcher, voice, pet stack, detail, follow-up, cancel, and thin Hermes auth/model flow:
+- Global text input from `Cmd+Shift+C`.
+- Voice input that records through Hermes, shows the transcript for review, and
+  submits only after you confirm.
+- Desktop overlay for active Hermes sessions.
+- Conversation details with follow-up and cancel.
+- Background task support for first-message slash commands such as
+  `/background ...`.
+- A thin Hermes setup/login handoff when provider or model configuration is
+  missing.
 
-- `agent-UI for Hermes`: a small connector for users who already have a local Hermes runtime.
-
-The app posts prompts to Hermes `local_desktop` `/messages` and reads `/events`. agent-UI does not store LLM/provider credentials, does not keep gateway keys in its own config, and does not run a provider-auth preflight. The user starts a task first; if Hermes reports provider/model setup is required, agent-UI opens the thin Hermes auth/model flow and preserves the pending task.
-
-The package omits Hermes runtime resources and bundled tool copies. It includes only the Agent UI `local_desktop` platform plugin resource and exposes it to the Hermes gateway process without copying files into the user's Hermes tree. It resolves and remembers the local Hermes binary path as non-secret config, revalidates it on launch, and connects to the user's existing Hermes config through the `local_desktop` gateway.
+agent-UI is connector-only. It does not bundle Hermes, store provider
+credentials, or copy tools into your Hermes tree. It uses your existing local
+Hermes install and exposes only the packaged `local_desktop` plugin to Hermes at
+runtime.
 
 ## Requirements
 
-For developers building the distributable:
+To use the packaged app:
 
-- Node.js and npm
-- macOS for the mac app build
-- a local Hermes Agent checkout for development and runtime verification
+- macOS.
+- A local Hermes runtime.
+- A Hermes model/provider login or API key configured through Hermes.
+- Microphone permission if you use voice input.
 
-Developer ID Application signing credentials and Apple notarization credentials are optional for the future public distribution track. The default bootstrapped track does not require a paid Apple Developer plan.
+For the current bootstrap beta, macOS may require Finder's right-click Open
+approval on first launch because the app is ad-hoc signed and not notarized.
 
-For manual testers using the packaged app:
+## Install
 
-- macOS
-- a Hermes model/provider login or API key configured through Hermes
-- microphone permission for voice input mode
+1. Download `agent-UI-for-Hermes-1.0.0-mac-arm64-bootstrap.dmg` from the GitHub
+   Release page.
+2. Mount the DMG.
+3. Drag `agent-UI for Hermes.app` to `/Applications`.
+4. Launch from Finder. If macOS blocks the bootstrap build, right-click the app
+   and choose Open.
 
-## Build A Downloadable macOS App
+## Use The App
+
+1. Start the app.
+2. Choose `Use Text Input` or `Use Voice Input` from the app, tray, or pet
+   context menu.
+3. Press `Cmd+Shift+C`.
+4. Enter a task, or speak and review the transcript.
+5. Submit. Hermes owns the actual run; agent-UI shows status, output, follow-up,
+   and cancel controls.
+
+If Hermes has no provider/model configured, agent-UI preserves your task and
+shows the Hermes setup/login path instead of a generic failure.
+
+## Local Hermes Behavior
+
+agent-UI uses the Hermes local desktop gateway. It does not spawn `hermes chat`
+or keep a local copy of conversation history.
+
+agent-UI reads the default local Hermes profile, remembers the detected Hermes
+binary path in `~/.agent-ui/connector-runtime.json`, and revalidates it on
+launch. It may write the required Hermes `config.yaml` and `.env` settings for
+the local desktop gateway. It passes the packaged `local_desktop` plugin to
+Hermes through `HERMES_BUNDLED_PLUGINS`; it does not install or copy plugins
+into the user's Hermes tree. If the preferred gateway port is occupied by
+another process, agent-UI rotates to a free local port and writes that port to
+the user's active Hermes `.env`.
+
+Gateway mode behavior:
+
+- Uses the current `conversationId` as the stable Hermes `conversation_id`.
+- Stores only the last SSE sequence in `~/.agent-ui/hermes-gateway.json` so
+  missed gateway events can replay; conversation content stays with Hermes.
+- Sends the first prompt with tagged context metadata.
+- Sends first-message slash commands such as `/background ...` without the
+  context wrapper so Hermes can dispatch them normally.
+- Sends follow-ups as plain text while Hermes owns same-session busy behavior.
+- Sends conversation-window cancel as `/stop` through the same Hermes gateway
+  conversation.
+- Reconnects SSE from the last recorded sequence; if the replay window expired,
+  it reconnects live and adds a local sync-gap error item.
+
+## Build From Source
+
+Developer prerequisites:
+
+- Node.js and npm.
+- macOS for app packaging.
+- A local Hermes Agent checkout for development and runtime verification.
+
+Clone and install:
+
+```bash
+git clone https://github.com/saminkhan1/agent-UI.git agent-UI
+cd agent-UI
+npm install
+```
+
+Run from source:
+
+```bash
+npm run dev
+```
+
+Build and preview the production bundle:
+
+```bash
+npm run build
+npm start
+```
+
+Build a downloadable macOS app:
 
 From the repo root:
 
 ```bash
-npm install
 npm run dist:mac
 ```
 
@@ -58,12 +142,6 @@ dist/release-manifest.json
 
 The packaging path builds the Electron main/preload/renderer output as `agent-UI for Hermes.app`, omits `build/hermes-runtime`, and records `v2026.4.30+` as the required local Hermes baseline.
 
-## Runtime Gateway Behavior
-
-agent-UI uses the Hermes local desktop gateway. It does not spawn `hermes chat` or keep a local copy of conversation history.
-
-agent-UI reads the default local Hermes profile, remembers the detected Hermes binary path in `~/.agent-ui/connector-runtime.json`, and revalidates it on launch. It may write the required Hermes `config.yaml` and `.env` settings for the local desktop gateway. It passes the packaged `local_desktop` plugin to Hermes through `HERMES_BUNDLED_PLUGINS`; it does not install or copy plugins into the user's Hermes tree. If the preferred gateway port is occupied by another process, agent-UI rotates to a free local port and writes that port to the user's active Hermes `.env`.
-
 `GET /health` is unauthenticated. `POST /messages` and `GET /events` require `Authorization: Bearer <LOCAL_DESKTOP_GATEWAY_KEY>`.
 
 Useful overrides:
@@ -76,41 +154,6 @@ export AGENT_UI_HERMES_GATEWAY_AUTOSTART=0
 ```
 
 `AGENT_UI_HERMES_BIN` remains a developer escape hatch. Packaged app startup resolves the remembered or detected local Hermes binary and does not search shell `PATH`.
-
-Gateway mode behavior:
-
-- Uses the current pet `catId` as the stable Hermes `conversation_id`.
-- Stores only the last SSE sequence in `~/.agent-ui/hermes-gateway.json` so missed gateway events can replay; conversation content stays with Hermes.
-- Sends the first prompt with the existing tagged context metadata.
-- Sends first-message slash commands such as `/background ...` without the context wrapper so Hermes can dispatch them normally.
-- Sends follow-ups as plain text while Hermes owns same-session busy behavior.
-- Sends conversation-window cancel as `/stop` through the same Hermes gateway conversation.
-- Reconnects SSE from the last recorded sequence; if the replay window expired, it reconnects live and adds a local sync-gap error item.
-- Leaves Hermes session finalization in Hermes core.
-
-## Clone And Install
-
-```bash
-git clone https://github.com/saminkhan1/agent-UI.git agent-UI
-cd agent-UI
-npm install
-npm run verify
-```
-
-## Run From Source
-
-Use dev mode while working on the app:
-
-```bash
-npm run dev
-```
-
-Build and preview the production bundle:
-
-```bash
-npm run build
-npm start
-```
 
 ## Use As A Local CLI
 
@@ -137,7 +180,7 @@ If the built app is missing, run `npm run build` from the repo root.
 5. In the app, tray, or pet context menu, choose `Use Text Input`.
 6. Press `Cmd+Shift+C`.
 7. Enter a short prompt and submit.
-8. Confirm a pet/session appears and streams Hermes output.
+8. Confirm a session appears and streams Hermes output.
 9. Open details, send a follow-up, then press Cancel and confirm Hermes stops the active run.
 10. Start one `/background ...` task and confirm Hermes accepts it as a slash command.
 11. In the app, tray, or pet context menu, choose `Use Voice Input`.
@@ -160,13 +203,19 @@ Use the four-ring release workflow for user-downloadable macOS artifacts:
 3. Ring 2, installed-app automation: install or extract the exact connector artifact, run the smoke against `/Applications/agent-UI for Hermes.app`, and preserve its evidence directory.
 4. Ring 3, manual customer pass: mount the DMG, drag to `/Applications`, launch from Finder, approve the bootstrap Gatekeeper prompt with right-click Open if needed, confirm TCC microphone prompts, tray/menu behavior, text/voice sessions, follow-up, cancel, background mode, quit/reopen, and clear first-run errors for missing credentials, offline mode, port conflicts, and denied permissions.
 
-After installing a release candidate into `/Applications`, run the installed-app automation before the human Ring 3 pass:
+After installing a release candidate into `/Applications`, run the installed-app
+automation before the human Ring 3 pass:
 
 ```bash
 npm run verify:installed -- "/Applications/agent-UI for Hermes.app"
 ```
 
-The smoke launches the installed app in eval mode with isolated config/Hermes home directories, blocks the default gateway port to exercise port-conflict recovery, drives background mode, follow-up, cancel, conversation-window, and quit/reopen checks, then writes JSON evidence to `/private/tmp/agent-ui-installed-release-smoke-*`.
+`verify:installed` is the basic installed-app smoke. The full release e2e path
+is `verify:live:release`, which drives the packaged app through real Hermes and
+LM Studio with first launch, voice submit, follow-up, cancel, reopen,
+three-session concurrency, no-provider onboarding, required stage coverage, and
+Hermes log blockers. Both write JSON evidence to
+`/private/tmp/agent-ui-installed-release-smoke-*`.
 
 After Ring 1 packaging, run:
 
@@ -176,7 +225,8 @@ npm run release:verify
 
 This writes `dist/release-manifest.json` with app mode, app version, git SHA, app source dirty status, connector Hermes baseline, whether Hermes runtime is included, packaged `local_desktop` source-match status, signing identity, notarization status, and SHA-256 hashes for every DMG/zip artifact. In bootstrap signing mode, `notarizationStatus` is recorded as `not_applicable_bootstrap`; `spctl` and stapler results are still captured as evidence but are not required to pass.
 
-The customer-facing download link should be the GitHub Release page, not a GitHub Actions artifact link.
+The customer-facing download link should be the GitHub Release page, not a
+GitHub Actions artifact link.
 After all local and GitHub gates pass, refresh the GitHub Release assets from the verified manifest:
 
 ```bash

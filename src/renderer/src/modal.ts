@@ -16,7 +16,7 @@ const headerAppIcon = document.getElementById('header-app-icon');
 const errorEl = document.getElementById('error');
 const hintEl = document.getElementById('spawn-hint');
 const promptSendHintEl = document.getElementById('prompt-send-hint');
-const btnCreateCat = document.getElementById('btn-create-cat') as HTMLButtonElement | null;
+const btnStartSession = document.getElementById('btn-start-session') as HTMLButtonElement | null;
 
 const isApple =
   /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
@@ -60,7 +60,7 @@ function reportEvalUiState() {
   window.agentUI.reportEvalUiState('modal', {
     modalContextId: modalContextId || null,
     promptRect: rectForEvalElement(promptEl, { includeHidden: true }),
-    createButtonRect: rectForEvalElement(btnCreateCat, { includeHidden: true }),
+    createButtonRect: rectForEvalElement(btnStartSession, { includeHidden: true }),
     activeElement: activeElementForEval(),
     promptValueLength: promptValue.length,
     promptValuePreview: promptValue.preview,
@@ -88,8 +88,8 @@ function setPromptDisabled(disabled: boolean) {
 }
 
 function setSubmitDisabled(disabled: boolean) {
-  if (!btnCreateCat) return;
-  btnCreateCat.disabled = !!disabled;
+  if (!btnStartSession) return;
+  btnStartSession.disabled = !!disabled;
 }
 
 function setVoiceStatus(message: string) {
@@ -172,8 +172,8 @@ function submit() {
     setError('Enter a prompt.');
     return;
   }
-  if (window.agentUI?.submitNewCat) {
-    window.agentUI.submitNewCat({
+  if (window.agentUI?.submitNewSession) {
+    window.agentUI.submitNewSession({
       prompt,
       modalContextId,
     });
@@ -183,8 +183,8 @@ function submit() {
 }
 
 function cancel() {
-  if (window.agentUI?.cancelNewCat) {
-    window.agentUI.cancelNewCat();
+  if (window.agentUI?.cancelNewSession) {
+    window.agentUI.cancelNewSession();
   }
 }
 
@@ -195,7 +195,7 @@ function syncPromptHeight() {
   reportEvalUiState();
 }
 
-btnCreateCat?.addEventListener('click', submit);
+btnStartSession?.addEventListener('click', submit);
 
 if (promptEl) {
   promptEl.addEventListener('input', () => {

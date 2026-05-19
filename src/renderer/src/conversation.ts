@@ -12,7 +12,7 @@ import type {
 } from '../../shared/contracts.ts';
 
 const params = new URLSearchParams(window.location.search);
-const catId = params.get('catId');
+const conversationId = params.get('conversationId');
 const logEl = document.getElementById('log');
 const metaEl = document.getElementById('meta');
 const statusEl = document.getElementById('typing-status');
@@ -32,7 +32,7 @@ type ConversationData = Partial<AgentConversationSnapshot> & {
 };
 
 type ConversationUpdatedEvent = {
-  catId?: LooseBoundaryValue;
+  conversationId?: LooseBoundaryValue;
 };
 
 let unsubUpdated: null | (() => void) = null;
@@ -65,7 +65,7 @@ function reportEvalUiState() {
       };
     });
   window.agentUI.reportEvalUiState('conversation', {
-    catId: catId || null,
+    conversationId: conversationId || null,
     logRect: rectForEvalElement(logEl, { includeHidden: true }),
     followupRect: rectForEvalElement(followupInput, { includeHidden: true }),
     activeElement: activeElementForEval(),
@@ -337,14 +337,14 @@ function setComposerError(message: LooseBoundaryValue) {
 }
 
 async function render() {
-  if (!window.agentUI?.getAgentConversation || !catId) {
-    logEl!.textContent = 'No conversation to show.';
+  if (!window.agentUI?.getAgentConversation || !conversationId) {
+    logEl!.textContent = 'No session to show.';
     updateComposerFromData(null);
     updateStatusFromData(null);
     reportEvalUiState();
     return;
   }
-  const data = (await window.agentUI.getAgentConversation(catId)) as ConversationData | null;
+  const data = (await window.agentUI.getAgentConversation(conversationId)) as ConversationData | null;
   lastData = data;
   if (!data || !data.found) {
     logEl!.textContent = 'This conversation is not available yet, or the agent was not started.';
@@ -369,14 +369,14 @@ async function render() {
 }
 
 async function sendFollowup() {
-  if (!catId || !followupInput) return;
+  if (!conversationId || !followupInput) return;
   const text = followupInput.value;
   if (!text.trim()) return;
   if (typeof window.agentUI.sendFollowup !== 'function') return;
   setComposerError('');
   if (sendBtn) sendBtn.disabled = true;
   try {
-    const result = await window.agentUI.sendFollowup(catId, text);
+    const result = await window.agentUI.sendFollowup(conversationId, text);
     if (result && result.ok === false) {
       setComposerError(result.error || 'Unable to send follow-up.');
       updateComposerFromData(lastData);
@@ -391,13 +391,13 @@ async function sendFollowup() {
 }
 
 async function cancelRun() {
-  if (!catId) return;
+  if (!conversationId) return;
   if (!isCancelableConversation(lastData)) return;
   if (typeof window.agentUI.cancelAgent !== 'function') return;
   setComposerError('');
   if (cancelBtn) cancelBtn.disabled = true;
   try {
-    const result = await window.agentUI.cancelAgent(catId);
+    const result = await window.agentUI.cancelAgent(conversationId);
     if (result && result.ok === false) {
       setComposerError(result.error || 'Unable to cancel session.');
       updateComposerFromData(lastData);
@@ -410,17 +410,17 @@ async function cancelRun() {
   }
 }
 
-if (catId) {
+if (conversationId) {
   void render();
   if (typeof window.agentUI.onConversationUpdated === 'function') {
     unsubUpdated = window.agentUI.onConversationUpdated((ev: ConversationUpdatedEvent) => {
-      if (ev && String(ev.catId) === String(catId)) {
+      if (ev && String(ev.conversationId) === String(conversationId)) {
         void render();
       }
     });
   }
 } else {
-  logEl!.textContent = 'Missing session id.';
+  logEl!.textContent = 'Missing conversation id.';
 }
 
 function close() {
@@ -430,10 +430,10 @@ function close() {
 }
 
 function dismiss() {
-  if (!catId) return;
+  if (!conversationId) return;
   if (!isDismissibleConversation(lastData)) return;
-  if (typeof window.agentUI.dismissCat === 'function') {
-    window.agentUI.dismissCat(catId);
+  if (typeof window.agentUI.dismissSession === 'function') {
+    window.agentUI.dismissSession(conversationId);
   }
 }
 

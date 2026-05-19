@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 import type { AgentUIPayload } from '../shared/contracts.ts';
 
-const MAX_CAT_ID_LENGTH = 128;
+const MAX_CONVERSATION_ID_LENGTH = 128;
 const MAX_TEXT_CHARS = 200000;
 const MAX_EVAL_PAYLOAD_BYTES = 65536;
 
@@ -14,9 +14,9 @@ function text(value: LooseBoundaryValue, maxChars = MAX_TEXT_CHARS) {
   return out.length > maxChars ? out.slice(0, maxChars) : out;
 }
 
-function catId(value: LooseBoundaryValue) {
+function conversationId(value: LooseBoundaryValue) {
   const id = String(value || '').trim();
-  if (!id || id.length > MAX_CAT_ID_LENGTH) return '';
+  if (!id || id.length > MAX_CONVERSATION_ID_LENGTH) return '';
   return /^[A-Za-z0-9_.:-]+$/.test(id) ? id : '';
 }
 
@@ -62,18 +62,18 @@ contextBridge.exposeInMainWorld('agentUI', {
     const safePayload = { surface: text(surface, 64), payload };
     if (payloadWithinLimit(safePayload)) ipcRenderer.send('eval-ui-state', safePayload);
   },
-  submitNewCat: (payload: AgentUIPayload = {}) =>
-    ipcRenderer.send('new-cat-submit', {
-      modalContextId: catId(payload.modalContextId),
+  submitNewSession: (payload: AgentUIPayload = {}) =>
+    ipcRenderer.send('new-session-submit', {
+      modalContextId: conversationId(payload.modalContextId),
       prompt: text(payload.prompt),
     }),
-  cancelNewCat: () => ipcRenderer.send('new-cat-cancel'),
+  cancelNewSession: () => ipcRenderer.send('new-session-cancel'),
   onVoiceInputStatus: (callback: SafeCallback) =>
     onSafe('voice-input-status', callback, (payload: LooseBoundaryValue = {}) => {
       if (!payload || typeof payload !== 'object') return SKIP_PAYLOAD;
       const safePayload = payloadObject(payload);
       return {
-        modalContextId: catId(safePayload.modalContextId),
+        modalContextId: conversationId(safePayload.modalContextId),
         state: text(safePayload.state, 64),
         transcript: text(safePayload.transcript),
         error: text(safePayload.error, 4096),
@@ -98,27 +98,28 @@ contextBridge.exposeInMainWorld('agentUI', {
     ipcRenderer.send('pet-pointer-interaction-changed', { active: !!active }),
   onPetLayoutChanged: (callback: SafeCallback) => onSafe('pet-layout-changed', callback),
   onPetCharacterChanged: (callback: SafeCallback) => onSafe('pet-character-changed', callback),
-  onSpawnCat: (callback: SafeCallback) => onSafe('spawn-cat', callback),
+  onSessionStarted: (callback: SafeCallback) => onSafe('session-started', callback),
   onAgentFinished: (callback: SafeCallback) => onSafe('agent-finished', callback),
   onAgentStreamBubble: (callback: SafeCallback) => onSafe('agent-stream-bubble', callback),
-  openCatConversation: (value: LooseBoundaryValue) => {
-    const id = catId(value);
-    if (id) ipcRenderer.send('open-cat-conversation', { catId: id });
+  openConversation: (value: LooseBoundaryValue) => {
+    const id = conversationId(value);
+    if (id) ipcRenderer.send('open-conversation', { conversationId: id });
   },
-  getAgentConversation: (value: LooseBoundaryValue) => ipcRenderer.invoke('get-agent-conversation', catId(value)),
+  getAgentConversation: (value: LooseBoundaryValue) =>
+    ipcRenderer.invoke('get-agent-conversation', conversationId(value)),
   onConversationUpdated: (callback: SafeCallback) => onSafe('conversation-updated', callback),
   closeConversationWindow: () => {
     ipcRenderer.send('close-conversation-window');
   },
-  dismissCat: (value: LooseBoundaryValue) => {
-    const id = catId(value);
-    if (id) ipcRenderer.send('dismiss-cat', { catId: id });
+  dismissSession: (value: LooseBoundaryValue) => {
+    const id = conversationId(value);
+    if (id) ipcRenderer.send('dismiss-session', { conversationId: id });
   },
   sendFollowup: (value: LooseBoundaryValue, body: LooseBoundaryValue) => {
-    return ipcRenderer.invoke('agent-followup', { catId: catId(value), text: text(body) });
+    return ipcRenderer.invoke('agent-followup', { conversationId: conversationId(value), text: text(body) });
   },
   cancelAgent: (value: LooseBoundaryValue) => {
-    return ipcRenderer.invoke('agent-cancel', { catId: catId(value) });
+    return ipcRenderer.invoke('agent-cancel', { conversationId: conversationId(value) });
   },
   openAgentAttachment: (url: LooseBoundaryValue) => {
     return ipcRenderer.invoke('open-agent-attachment', { url: text(url, 4096) });
@@ -163,8 +164,8 @@ contextBridge.exposeInMainWorld('agentUI', {
   onHermesAuthEvent: (callback: SafeCallback) => onSafe('hermes-auth-event', callback),
   onHermesAuthContext: (callback: SafeCallback) => onSafe('hermes-auth-context', callback),
   onAgentRestarted: (callback: SafeCallback) => onSafe('agent-restarted', callback),
-  onRemoveCat: (callback: SafeCallback) => onSafe('remove-cat', callback),
-  reportCatCounts: (counts: LooseBoundaryValue) => {
-    ipcRenderer.send('cat-counts', counts);
+  onRemoveSession: (callback: SafeCallback) => onSafe('remove-session', callback),
+  reportSessionCounts: (counts: LooseBoundaryValue) => {
+    ipcRenderer.send('session-counts', counts);
   },
 });

@@ -77,7 +77,7 @@ async function handleEvalRequest(req: LooseBoundaryValue, res: LooseBoundaryValu
       return;
     }
     if (req.method === 'GET' && url.pathname === '/conversation') {
-      sendEvalJson(res, 200, await handlers.getConversation(url.searchParams.get('catId')));
+      sendEvalJson(res, 200, await handlers.getConversation(url.searchParams.get('conversationId')));
       return;
     }
     if (req.method === 'GET' && url.pathname === '/conversations') {

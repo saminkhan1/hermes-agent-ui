@@ -119,25 +119,25 @@ function traceEvalEvent(type: LooseBoundaryValue, payload = {}) {
 function reportEvalUiState(list = notifications()) {
   if (!window.agentUI || typeof window.agentUI.reportEvalUiState !== 'function') return;
   const top = list[0] || null;
-  const cats: LooseBoundaryValue[] = [];
-  const push = (el: LooseBoundaryValue, catId: LooseBoundaryValue) => {
+  const conversations: LooseBoundaryValue[] = [];
+  const push = (el: LooseBoundaryValue, conversationId: LooseBoundaryValue) => {
     const rect = rectForEvalElement(el);
-    if (!rect || !catId) return;
-    cats.push({ catId, ...rect });
+    if (!rect || !conversationId) return;
+    conversations.push({ conversationId, ...rect });
   };
-  push(mascot, top ? top.catId : '__idle_pet__');
-  if (badgeEl && !badgeEl.hidden) push(badgeEl, top ? top.catId : '__idle_pet__');
+  push(mascot, top ? top.conversationId : '__idle_overlay__');
+  if (badgeEl && !badgeEl.hidden) push(badgeEl, top ? top.conversationId : '__idle_overlay__');
   if (tray && !tray.hidden && tray.dataset.collapsed !== 'true') {
-    push(tray, top ? top.catId : '__pet_tray__');
+    push(tray, top ? top.conversationId : '__session_tray__');
   }
   const rows = trayRows()
     .map((row: LooseBoundaryValue) => {
-      const catId = String(row.dataset.notificationId || '').trim();
+      const conversationId = String(row.dataset.notificationId || '').trim();
       const rect = rectForEvalElement(row);
-      if (!catId || !rect) return null;
+      if (!conversationId || !rect) return null;
       const action = row.querySelector('.pet-row-action');
       return {
-        catId,
+        conversationId,
         rect,
         actionRect: rectForEvalElement(action),
       };
@@ -147,7 +147,7 @@ function reportEvalUiState(list = notifications()) {
     layout,
     notificationCount: list.length,
     trayOpen,
-    cats,
+    conversations,
     rows,
   });
 }
@@ -359,13 +359,13 @@ function canDismissSession(session: LooseBoundaryValue) {
 function notificationForSession(session: LooseBoundaryValue) {
   const state = normalizeStatus(session.status);
   if (state === 'idle') return null;
-  const id = String(session.catId);
+  const id = String(session.conversationId);
   const meta = statusMeta(state);
   const body = sessionBody(session);
   return {
-    action: { catId: id },
+    action: { conversationId: id },
     body: body || meta.defaultBody,
-    catId: id,
+    conversationId: id,
     id,
     isLoading: state === 'running',
     level: state,
@@ -493,7 +493,7 @@ function finishPetDrag(
   }
   if (shouldOpenMainWindow && currentDrag.startedOnMascot && !currentDrag.hasMoved) {
     const top = notifications()[0] || null;
-    if (top && top.action) openSessionConversation(top.action.catId);
+    if (top && top.action) openSessionConversation(top.action.conversationId);
   }
   renderAll();
 }
@@ -535,19 +535,19 @@ function onPetPointerMove(e: LooseBoundaryValue) {
   if (petDrag.transientState !== previousState) renderMascot(notifications());
 }
 
-function openSessionConversation(catId: LooseBoundaryValue) {
-  if (window.agentUI && typeof window.agentUI.openCatConversation === 'function') {
-    window.agentUI.openCatConversation(String(catId));
+function openSessionConversation(conversationId: LooseBoundaryValue) {
+  if (window.agentUI && typeof window.agentUI.openConversation === 'function') {
+    window.agentUI.openConversation(String(conversationId));
   }
 }
 
 function dismissNotification(notification: LooseBoundaryValue) {
   if (!notification || !notification.canDismiss) return;
-  const id = String(notification.catId || notification.id || '').trim();
+  const id = String(notification.conversationId || notification.id || '').trim();
   if (!id) return;
   expandedRows.delete(id);
-  if (window.agentUI && typeof window.agentUI.dismissCat === 'function') {
-    window.agentUI.dismissCat(id);
+  if (window.agentUI && typeof window.agentUI.dismissSession === 'function') {
+    window.agentUI.dismissSession(id);
     return;
   }
   removeSession(id);
@@ -652,11 +652,11 @@ function makeRow(notification: LooseBoundaryValue, index: LooseBoundaryValue) {
       'aria-label',
       `${notification.title}. ${statusMeta(notification.level).label}. ${bodyText}. Open notification`,
     );
-    action.addEventListener('click', () => openSessionConversation(notification.action.catId));
+    action.addEventListener('click', () => openSessionConversation(notification.action.conversationId));
     action.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return;
       e.preventDefault();
-      openSessionConversation(notification.action.catId);
+      openSessionConversation(notification.action.conversationId);
     });
   }
 
@@ -931,8 +931,8 @@ function renderTray(list: LooseBoundaryValue) {
 
 function updateCounts(list: LooseBoundaryValue) {
   const counts = visibleSessionCount(list);
-  if (window.agentUI && typeof window.agentUI.reportCatCounts === 'function') {
-    window.agentUI.reportCatCounts({ active: counts.active, inReview: counts.review });
+  if (window.agentUI && typeof window.agentUI.reportSessionCounts === 'function') {
+    window.agentUI.reportSessionCounts({ active: counts.active, inReview: counts.review });
   }
 }
 
@@ -992,10 +992,10 @@ function finishLineFromPayload(payload: AgentUIPayload = {}) {
 }
 
 function upsertSession(payload: AgentUIPayload = {}) {
-  const catId = String(payload.catId || '').trim();
-  if (!catId) return null;
-  const existing = sessions.get(catId) || {
-    catId,
+  const conversationId = String(payload.conversationId || '').trim();
+  if (!conversationId) return null;
+  const existing = sessions.get(conversationId) || {
+    conversationId,
     prompt: '',
     kind: null,
     status: 'running',
@@ -1008,14 +1008,14 @@ function upsertSession(payload: AgentUIPayload = {}) {
   existing.status = payload.status != null ? String(payload.status) : existing.status || 'running';
   existing.finishLine = finishLineFromPayload(payload) || existing.finishLine;
   existing.updatedAt = Date.now();
-  sessions.set(catId, existing);
+  sessions.set(conversationId, existing);
   return existing;
 }
 
 function applyStreamBubble(ev: AgentUIPayload = {}) {
-  const catId = String(ev.catId || '').trim();
-  if (!catId) return;
-  const session = sessions.get(catId) || upsertSession({ catId, status: 'running' });
+  const conversationId = String(ev.conversationId || '').trim();
+  if (!conversationId) return;
+  const session = sessions.get(conversationId) || upsertSession({ conversationId, status: 'running' });
   if (!session) return;
   const text = String(ev.text || '').trim();
   if (!text) return;
@@ -1023,32 +1023,32 @@ function applyStreamBubble(ev: AgentUIPayload = {}) {
   session.streamBubble = text;
   if (normalizeStatus(session.status) === 'idle') session.status = 'running';
   session.updatedAt = Date.now();
-  sessions.set(catId, session);
-  traceEvalEvent('stream_bubble_rendered', { catId, textLength: text.length });
+  sessions.set(conversationId, session);
+  traceEvalEvent('stream_bubble_rendered', { conversationId, textLength: text.length });
   renderAll();
 }
 
 function applyFinish(ev: AgentUIPayload = {}) {
-  const catId = String(ev.catId || '').trim();
-  if (!catId) return;
-  const session = sessions.get(catId) || upsertSession({ catId });
+  const conversationId = String(ev.conversationId || '').trim();
+  if (!conversationId) return;
+  const session = sessions.get(conversationId) || upsertSession({ conversationId });
   if (!session) return;
   session.status = ev.status != null ? String(ev.status) : session.status;
   session.finishLine = finishLineFromPayload(ev) || session.finishLine;
   session.streamBubble = '';
   session.updatedAt = Date.now();
-  sessions.set(catId, session);
-  pendingFinishes.delete(catId);
+  sessions.set(conversationId, session);
+  pendingFinishes.delete(conversationId);
   traceEvalEvent('terminal_visual_rendered', {
-    catId,
+    conversationId,
     status: normalizeStatus(session.status),
     textLength: String(session.finishLine || '').length,
   });
   renderAll();
 }
 
-function reactivate(catId: LooseBoundaryValue) {
-  const id = String(catId || '').trim();
+function reactivate(conversationId: LooseBoundaryValue) {
+  const id = String(conversationId || '').trim();
   if (!id) return;
   const session = sessions.get(id);
   if (!session) return;
@@ -1059,8 +1059,8 @@ function reactivate(catId: LooseBoundaryValue) {
   renderAll();
 }
 
-function removeSession(catId: LooseBoundaryValue) {
-  const id = String(catId || '').trim();
+function removeSession(conversationId: LooseBoundaryValue) {
+  const id = String(conversationId || '').trim();
   if (!id) return;
   sessions.delete(id);
   pendingFinishes.delete(id);
@@ -1107,26 +1107,29 @@ async function boot() {
     });
   }
 
-  if (typeof window.agentUI.onSpawnCat === 'function') {
-    window.agentUI.onSpawnCat((payload: LooseBoundaryValue) => {
+  if (typeof window.agentUI.onSessionStarted === 'function') {
+    window.agentUI.onSessionStarted((payload: LooseBoundaryValue) => {
       const session = upsertSession(payload);
       if (!session) return;
       renderAll();
-      if (pendingStreams.has(String(session.catId))) {
-        applyStreamBubble(pendingStreams.get(String(session.catId)));
-        pendingStreams.delete(String(session.catId));
+      if (pendingStreams.has(String(session.conversationId))) {
+        applyStreamBubble(pendingStreams.get(String(session.conversationId)));
+        pendingStreams.delete(String(session.conversationId));
       }
-      if (pendingFinishes.has(String(session.catId))) {
-        applyFinish(pendingFinishes.get(String(session.catId)));
-        pendingFinishes.delete(String(session.catId));
+      if (pendingFinishes.has(String(session.conversationId))) {
+        applyFinish(pendingFinishes.get(String(session.conversationId)));
+        pendingFinishes.delete(String(session.conversationId));
       }
-      traceEvalEvent('cat_spawn_rendered', { catId: String(session.catId), kind: session.kind || null });
+      traceEvalEvent('session_row_rendered', {
+        conversationId: String(session.conversationId),
+        kind: session.kind || null,
+      });
     });
   }
 
   if (typeof window.agentUI.onAgentFinished === 'function') {
     window.agentUI.onAgentFinished((ev: LooseBoundaryValue) => {
-      const id = String(ev && ev.catId ? ev.catId : '').trim();
+      const id = String(ev && ev.conversationId ? ev.conversationId : '').trim();
       if (!id) return;
       if (!sessions.has(id)) {
         pendingFinishes.set(id, ev || {});
@@ -1138,7 +1141,7 @@ async function boot() {
 
   if (typeof window.agentUI.onAgentStreamBubble === 'function') {
     window.agentUI.onAgentStreamBubble((ev: LooseBoundaryValue) => {
-      const id = String(ev && ev.catId ? ev.catId : '').trim();
+      const id = String(ev && ev.conversationId ? ev.conversationId : '').trim();
       if (!id) return;
       if (!sessions.has(id)) {
         pendingStreams.set(id, ev || {});
@@ -1150,13 +1153,13 @@ async function boot() {
 
   if (typeof window.agentUI.onAgentRestarted === 'function') {
     window.agentUI.onAgentRestarted((ev: LooseBoundaryValue) => {
-      if (ev && ev.catId != null) reactivate(ev.catId);
+      if (ev && ev.conversationId != null) reactivate(ev.conversationId);
     });
   }
 
-  if (typeof window.agentUI.onRemoveCat === 'function') {
-    window.agentUI.onRemoveCat((payload: LooseBoundaryValue) => {
-      if (payload && payload.catId != null) removeSession(payload.catId);
+  if (typeof window.agentUI.onRemoveSession === 'function') {
+    window.agentUI.onRemoveSession((payload: LooseBoundaryValue) => {
+      if (payload && payload.conversationId != null) removeSession(payload.conversationId);
     });
   }
 

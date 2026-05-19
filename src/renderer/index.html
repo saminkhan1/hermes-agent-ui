@@ -12,13 +12,18 @@
   </head>
   <body>
     <div id="pet-root" hidden>
-      <section class="pet-shell" id="pet-shell" aria-label="agent-UI pets" data-avatar-overlay-content-frame="true">
+      <section
+        class="pet-shell"
+        id="pet-shell"
+        aria-label="agent-UI pet overlay"
+        data-avatar-overlay-content-frame="true"
+      >
         <div class="pet-stage">
           <div id="pet-mascot" class="pet-mascot" aria-label="agent-UI pet"></div>
-          <button id="pet-badge" class="pet-badge" type="button" aria-label="Toggle pet activity tray">0</button>
+          <button id="pet-badge" class="pet-badge" type="button" aria-label="Toggle session activity tray">0</button>
         </div>
 
-        <div class="pet-tray" id="pet-tray" aria-label="Active pets">
+        <div class="pet-tray" id="pet-tray" aria-label="Active sessions">
           <div class="pet-tray-list" id="pet-tray-list" role="list" aria-label="Activity notifications"></div>
         </div>
       </section>

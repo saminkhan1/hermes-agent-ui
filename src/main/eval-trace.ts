@@ -28,34 +28,34 @@ function safeName(value: LooseBoundaryValue) {
   return String(value || 'unknown').replace(/[^A-Za-z0-9_.-]/g, '_');
 }
 
-function getCatArtifactDir(catId: LooseBoundaryValue) {
+function getConversationArtifactDir(conversationId: LooseBoundaryValue) {
   if (!enabled) return null;
-  const dir = path.join(runDir, 'cats', safeName(catId));
+  const dir = path.join(runDir, 'conversations', safeName(conversationId));
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
-function artifactPath(catId: LooseBoundaryValue, relPath: LooseBoundaryValue) {
-  const dir = getCatArtifactDir(catId);
+function artifactPath(conversationId: LooseBoundaryValue, relPath: LooseBoundaryValue) {
+  const dir = getConversationArtifactDir(conversationId);
   if (!dir) return null;
   const full = path.resolve(path.join(dir, String(relPath || 'artifact')));
   if (full !== dir && !full.startsWith(dir + path.sep)) {
-    throw new Error('artifact path escapes cat directory');
+    throw new Error('artifact path escapes conversation directory');
   }
   fs.mkdirSync(path.dirname(full), { recursive: true });
   return full;
 }
 
-function writeArtifactText(catId: LooseBoundaryValue, relPath: LooseBoundaryValue, text: LooseBoundaryValue) {
+function writeArtifactText(conversationId: LooseBoundaryValue, relPath: LooseBoundaryValue, text: LooseBoundaryValue) {
   if (!enabled) return null;
-  const file = artifactPath(catId, relPath);
+  const file = artifactPath(conversationId, relPath);
   if (!file) return null;
   fs.writeFileSync(file, String(text || ''), 'utf8');
   return file;
 }
 
-function writeArtifactJson(catId: LooseBoundaryValue, relPath: LooseBoundaryValue, value: LooseBoundaryValue) {
-  return writeArtifactText(catId, relPath, JSON.stringify(value, null, 2));
+function writeArtifactJson(conversationId: LooseBoundaryValue, relPath: LooseBoundaryValue, value: LooseBoundaryValue) {
+  return writeArtifactText(conversationId, relPath, JSON.stringify(value, null, 2));
 }
 
 function recordTrace(type: LooseBoundaryValue, payload = {}) {
@@ -89,4 +89,4 @@ function getTrace() {
   };
 }
 
-export { recordTrace, getTrace, getCatArtifactDir, writeArtifactJson, runId, runDir, traceFile, enabled };
+export { recordTrace, getTrace, getConversationArtifactDir, writeArtifactJson, runId, runDir, traceFile, enabled };

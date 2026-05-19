@@ -1,7 +1,7 @@
 {
   "name": "agent-ui",
   "version": "1.0.0",
-  "description": "Desktop pet overlay for local Hermes sessions",
+  "description": "Desktop overlay for local Hermes sessions",
   "productName": "agent-UI",
   "main": "out/main/index.js",
   "bin": {
@@ -39,7 +39,7 @@
   },
   "keywords": [
     "electron",
-    "desktop-pet",
+    "desktop-overlay",
     "hermes"
   ],
   "author": "",

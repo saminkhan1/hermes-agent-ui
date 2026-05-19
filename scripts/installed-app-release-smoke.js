@@ -78,7 +78,7 @@ const phaseRequiredStageIds = {
     'app_ready_ms',
     'shortcut_to_modal_visible_ms',
     'modal_visible_ms',
-    'submit_to_pet_ms',
+    'submit_to_session_visible_ms',
     'gateway_ready_ms',
     'gateway_post_ms',
     'submit_to_gateway_accepted_ms',
@@ -91,7 +91,7 @@ const phaseRequiredStageIds = {
   reopen: [
     'app_ready_ms',
     'quit_reopen_hydration_ms',
-    'submit_to_pet_ms',
+    'submit_to_session_visible_ms',
     'gateway_ready_ms',
     'gateway_post_ms',
     'submit_to_gateway_accepted_ms',
@@ -100,7 +100,7 @@ const phaseRequiredStageIds = {
   ],
   concurrency: [
     'app_ready_ms',
-    'submit_to_pet_ms',
+    'submit_to_session_visible_ms',
     'gateway_ready_ms',
     'gateway_post_ms',
     'submit_to_gateway_accepted_ms',
@@ -109,7 +109,7 @@ const phaseRequiredStageIds = {
   ],
   onboarding: [
     'app_ready_ms',
-    'submit_to_pet_ms',
+    'submit_to_session_visible_ms',
     'gateway_ready_ms',
     'gateway_post_ms',
     'first_gateway_event_ms',
@@ -644,23 +644,23 @@ async function stopApp() {
   }
 }
 
-async function waitConversation(catId, timeoutMs = conversationTimeoutMs) {
+async function waitConversation(conversationId, timeoutMs = conversationTimeoutMs) {
   let elapsedMs = 0;
   const heartbeatMs = 20000;
-  console.log(`[agent-ui] waiting for ${catId} conversation`);
+  console.log(`[agent-ui] waiting for ${conversationId} conversation`);
   const interval = setInterval(() => {
     elapsedMs += heartbeatMs;
-    console.log(`[agent-ui] still waiting for ${catId} conversation (${Math.round(elapsedMs / 1000)}s)`);
+    console.log(`[agent-ui] still waiting for ${conversationId} conversation (${Math.round(elapsedMs / 1000)}s)`);
   }, heartbeatMs);
   try {
-    return await postJson('/wait', { catId, timeoutMs }, { timeoutMs: timeoutMs + 5000 });
+    return await postJson('/wait', { conversationId, timeoutMs }, { timeoutMs: timeoutMs + 5000 });
   } finally {
     clearInterval(interval);
   }
 }
 
-async function conversation(catId) {
-  return await getJson(`/conversation?catId=${encodeURIComponent(catId)}`);
+async function conversation(conversationId) {
+  return await getJson(`/conversation?conversationId=${encodeURIComponent(conversationId)}`);
 }
 
 async function listConversations() {
@@ -673,8 +673,8 @@ async function waitNewConversation(beforeIds, label, timeoutMs = 15000) {
   let latest = [];
   while (Date.now() - startedAt <= timeoutMs) {
     latest = await listConversations();
-    const created = latest.find((entry) => !beforeIds.has(String(entry.catId || '')));
-    if (created && created.catId) return String(created.catId);
+    const created = latest.find((entry) => !beforeIds.has(String(entry.conversationId || '')));
+    if (created && created.conversationId) return String(created.conversationId);
     await sleep(250);
   }
   saveJson(`conversations-${label}-latest`, { conversations: latest });
@@ -741,16 +741,16 @@ async function runFirstLaunchChecks() {
     'voice transcript was not visibly editable before submit',
   );
 
-  const beforeVoiceIds = new Set((await listConversations()).map((entry) => String(entry.catId || '')));
+  const beforeVoiceIds = new Set((await listConversations()).map((entry) => String(entry.conversationId || '')));
   const submittedVoice = saveJson('submit-voice-modal', await postJson('/submit-modal', {}));
   assertCondition(
     submittedVoice && submittedVoice.ok === true,
     `voice modal submit failed: ${JSON.stringify(submittedVoice)}`,
   );
-  const voiceCatId = saveJson('voice-cat-id', {
-    catId: await waitNewConversation(beforeVoiceIds, 'voice-submit'),
-  }).catId;
-  const voice = saveJson('wait-voice', await waitConversation(voiceCatId));
+  const voiceConversationId = saveJson('voice-conversation-id', {
+    conversationId: await waitNewConversation(beforeVoiceIds, 'voice-submit'),
+  }).conversationId;
+  const voice = saveJson('wait-voice', await waitConversation(voiceConversationId));
   assertCondition(
     voice && voice.conversation && voice.conversation.runStatus === 'completed',
     'voice smoke did not complete',
@@ -766,7 +766,7 @@ async function runFirstLaunchChecks() {
   saveJson(
     'start-background',
     await postJson('/start', {
-      catId: 'bg-smoke',
+      conversationId: 'bg-smoke',
       prompt: '/background Release background smoke from installed app.',
       closeModal: true,
     }),
@@ -788,7 +788,7 @@ async function runFirstLaunchChecks() {
   saveJson(
     'start-followup',
     await postJson('/start', {
-      catId: 'follow-smoke',
+      conversationId: 'follow-smoke',
       prompt: followInitialPrompt,
       closeModal: true,
     }),
@@ -800,7 +800,7 @@ async function runFirstLaunchChecks() {
   saveJson(
     'followup',
     await postJson('/followup', {
-      catId: 'follow-smoke',
+      conversationId: 'follow-smoke',
       text: followupPrompt,
     }),
   );
@@ -817,13 +817,13 @@ async function runFirstLaunchChecks() {
   saveJson(
     'start-cancel',
     await postJson('/start', {
-      catId: 'cancel-smoke',
+      conversationId: 'cancel-smoke',
       prompt: 'Release cancel smoke; this should accept a cancel command.',
       closeModal: true,
     }),
   );
   await sleep(200);
-  const cancel = saveJson('cancel', await postJson('/cancel', { catId: 'cancel-smoke' }));
+  const cancel = saveJson('cancel', await postJson('/cancel', { conversationId: 'cancel-smoke' }));
   assertCondition(cancel && cancel.ok === true, `cancel endpoint failed: ${JSON.stringify(cancel)}`);
   try {
     saveJson('wait-cancel', await waitConversation('cancel-smoke'));
@@ -840,7 +840,7 @@ async function runFirstLaunchChecks() {
     saveJson(
       'start-post-cancel',
       await postJson('/start', {
-        catId: 'post-cancel-smoke',
+        conversationId: 'post-cancel-smoke',
         prompt: `Reply exactly: ${liveSentinels.postCancel}`,
         closeModal: true,
       }),
@@ -853,7 +853,10 @@ async function runFirstLaunchChecks() {
     assertAssistantResponse(postCancel.conversation, 'wait-post-cancel', liveSentinels.postCancel);
   }
 
-  const opened = saveJson('open-conversation', await postJson('/open-conversation', { catId: 'follow-smoke' }));
+  const opened = saveJson(
+    'open-conversation',
+    await postJson('/open-conversation', { conversationId: 'follow-smoke' }),
+  );
   assertCondition(opened && opened.ok === true, 'open-conversation endpoint failed');
   await sleep(1000);
   const uiTargets = saveJson('ui-open-conversation', await getJson('/ui-targets'));
@@ -881,7 +884,7 @@ async function runReopenChecks() {
   saveJson(
     'start-reopen',
     await postJson('/start', {
-      catId: 'reopen-smoke',
+      conversationId: 'reopen-smoke',
       prompt: reopenPrompt,
       closeModal: true,
     }),
@@ -916,7 +919,7 @@ async function runOnboardingChecks() {
   saveJson(
     'start-onboarding',
     await postJson('/start', {
-      catId: 'onboarding-smoke',
+      conversationId: 'onboarding-smoke',
       prompt: onboardingPrompt,
       closeModal: true,
     }),
@@ -929,7 +932,10 @@ async function runOnboardingChecks() {
     'onboarding task was not preserved',
   );
   assertActionableProviderSetup(conversationSnapshot, 'wait-onboarding');
-  saveJson('open-onboarding-conversation', await postJson('/open-conversation', { catId: 'onboarding-smoke' }));
+  saveJson(
+    'open-onboarding-conversation',
+    await postJson('/open-conversation', { conversationId: 'onboarding-smoke' }),
+  );
   saveJson(
     'ui-onboarding-actionable',
     await waitForUiTarget(
@@ -971,7 +977,7 @@ async function runConcurrencyChecks() {
   }
   await startApp('concurrency');
   const runs = liveSentinels.concurrent.map((sentinel, index) => ({
-    catId: `concurrent-${index + 1}`,
+    conversationId: `concurrent-${index + 1}`,
     sentinel,
     prompt: `Reply exactly: ${sentinel}`,
   }));
@@ -980,7 +986,7 @@ async function runConcurrencyChecks() {
   const starts = await Promise.all(
     runs.map((run) =>
       postJson('/start', {
-        catId: run.catId,
+        conversationId: run.conversationId,
         prompt: run.prompt,
         closeModal: true,
       }),
@@ -990,30 +996,33 @@ async function runConcurrencyChecks() {
   for (const [index, start] of starts.entries()) {
     assertCondition(
       start && start.ok === true,
-      `concurrent start failed for ${runs[index].catId}: ${JSON.stringify(start)}`,
+      `concurrent start failed for ${runs[index].conversationId}: ${JSON.stringify(start)}`,
     );
   }
 
   saveJson('ui-concurrency-started', await waitForOverlayNotificationCount(runs.length, 'concurrency-started'));
 
-  const waits = await Promise.all(runs.map((run) => waitConversation(run.catId)));
+  const waits = await Promise.all(runs.map((run) => waitConversation(run.conversationId)));
   saveJson('concurrency-waits', { waits });
   const conversations = [];
   for (let i = 0; i < runs.length; i += 1) {
     const run = runs[i];
     const waited = waits[i];
-    assertCondition(waited && waited.ok === true, `${run.catId} wait failed: ${JSON.stringify(waited)}`);
+    assertCondition(waited && waited.ok === true, `${run.conversationId} wait failed: ${JSON.stringify(waited)}`);
     assertCondition(
       waited.conversation && waited.conversation.runStatus === 'completed',
-      `${run.catId} did not complete`,
+      `${run.conversationId} did not complete`,
     );
-    assertAssistantResponse(waited.conversation, run.catId, run.sentinel);
+    assertAssistantResponse(waited.conversation, run.conversationId, run.sentinel);
     const users = itemTexts(waited.conversation, 'user');
-    assertCondition(users.includes(run.prompt), `${run.catId} missing its own user prompt`);
+    assertCondition(users.includes(run.prompt), `${run.conversationId} missing its own user prompt`);
     const text = assistantText(waited.conversation);
     for (const other of runs) {
-      if (other.catId === run.catId) continue;
-      assertCondition(!text.includes(other.sentinel), `${run.catId} assistant output contains ${other.sentinel}`);
+      if (other.conversationId === run.conversationId) continue;
+      assertCondition(
+        !text.includes(other.sentinel),
+        `${run.conversationId} assistant output contains ${other.sentinel}`,
+      );
     }
     conversations.push(waited.conversation);
   }
@@ -1027,10 +1036,10 @@ async function runConcurrencyChecks() {
   );
 
   const listed = saveJson('concurrency-list', await getJson('/conversations'));
-  const listedIds = new Set(((listed && listed.conversations) || []).map((item) => String(item.catId || '')));
+  const listedIds = new Set(((listed && listed.conversations) || []).map((item) => String(item.conversationId || '')));
   for (const run of runs) {
-    assertCondition(listedIds.has(run.catId), `${run.catId} missing from conversation list`);
-    saveJson(`conversation-${run.catId}`, await conversation(run.catId));
+    assertCondition(listedIds.has(run.conversationId), `${run.conversationId} missing from conversation list`);
+    saveJson(`conversation-${run.conversationId}`, await conversation(run.conversationId));
   }
 
   saveJson('trace-concurrency', await getJson('/trace'));

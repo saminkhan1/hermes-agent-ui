@@ -148,7 +148,7 @@ export type AgentTypingState = {
 };
 
 export type AgentConversationSnapshot = {
-  catId: string;
+  conversationId: string;
   prompt: string;
   pointerContext: JsonObject | null;
   items: AgentConversationItem[];

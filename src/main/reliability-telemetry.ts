@@ -27,7 +27,7 @@ const telemetry = {
   authWindowDomLoaded: (payload: MutableJsonObject = {}) => emit(EVENTS.AUTH_WINDOW_DOM_LOADED, payload),
   authWindowRequested: (payload: MutableJsonObject = {}) => emit(EVENTS.AUTH_WINDOW_REQUESTED, payload),
   authWindowShownAndFocused: (payload: MutableJsonObject = {}) => emit(EVENTS.AUTH_WINDOW_SHOWN_AND_FOCUSED, payload),
-  catSpawnSent: (payload: MutableJsonObject = {}) => emit(EVENTS.CAT_SPAWN_SENT, payload),
+  sessionRowSent: (payload: MutableJsonObject = {}) => emit(EVENTS.SESSION_ROW_SENT, payload),
   cleanupDismissCompleted: (payload: MutableJsonObject = {}) => emit(EVENTS.CLEANUP_DISMISS_COMPLETED, payload),
   cleanupModalClosed: (payload: MutableJsonObject = {}) => emit(EVENTS.CLEANUP_MODAL_CLOSED, payload),
   contextCaptureCompleted: (payload: MutableJsonObject = {}) => emit(EVENTS.CONTEXT_CAPTURE_COMPLETED, payload),

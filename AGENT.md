@@ -42,7 +42,7 @@ docs or generated copies.
   discovery for packaged app startup.
 - `src/shared/contracts.ts`: shared app/Hermes boundary types. Keep this aligned
   with the real Hermes source.
-- `src/renderer/`: pet stack, task modal, conversation window, auth/model flow,
+- `src/renderer/`: pet overlay, task modal, conversation window, auth/model flow,
   styles, and renderer-only helpers.
 - `vendor/hermes-platforms/local_desktop/`: checked local desktop plugin source
   used for packaging/parity checks; do not treat this as newer than the live
