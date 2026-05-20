@@ -16,7 +16,9 @@ const {
 } = require('./eval-stage-report');
 
 const defaultBundle = '/Applications/agent-UI for Hermes.app';
-const appArg = String(process.argv[2] || process.env.AGENT_UI_INSTALLED_APP || defaultBundle);
+const appArg = String(
+  process.argv.slice(2).find((arg) => arg !== '--') || process.env.AGENT_UI_INSTALLED_APP || defaultBundle,
+);
 const appPath = path.resolve(appArg);
 function resolveAppExecutable(value) {
   if (!value.endsWith('.app')) return value;

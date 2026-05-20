@@ -68,6 +68,7 @@ function reportEvalUiState() {
     conversationId: conversationId || null,
     logRect: rectForEvalElement(logEl, { includeHidden: true }),
     followupRect: rectForEvalElement(followupInput, { includeHidden: true }),
+    sendButtonRect: rectForEvalElement(sendBtn, { includeHidden: true }),
     activeElement: activeElementForEval(),
     followupValueLength: followupValue.length,
     followupValuePreview: followupValue.preview,

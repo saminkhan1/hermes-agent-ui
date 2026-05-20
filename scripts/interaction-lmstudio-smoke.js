@@ -12,7 +12,9 @@ const repoRoot = path.resolve(__dirname, '..');
 const localBundle = path.join(repoRoot, 'dist', 'mac-arm64', 'agent-UI for Hermes.app');
 const installedBundle = '/Applications/agent-UI for Hermes.app';
 const appArg = String(
-  process.argv[2] || process.env.AGENT_UI_INSTALLED_APP || (fs.existsSync(localBundle) ? localBundle : installedBundle),
+  process.argv.slice(2).find((arg) => arg !== '--') ||
+    process.env.AGENT_UI_INSTALLED_APP ||
+    (fs.existsSync(localBundle) ? localBundle : installedBundle),
 );
 const appPath = path.resolve(appArg);
 const appBundle = appPath.endsWith('.app') ? appPath : path.dirname(path.dirname(path.dirname(appPath)));
@@ -28,6 +30,9 @@ const evalDir = path.join(runDir, 'eval');
 const screenshotsDir = path.join(runDir, 'screenshots');
 const evalToken = crypto.randomBytes(24).toString('hex');
 const host = '127.0.0.1';
+const launcherMode = String(process.env.AGENT_UI_INTERACTION_LAUNCHER || 'shortcut')
+  .trim()
+  .toLowerCase();
 
 const lmStudioBaseUrl = String(
   process.env.AGENT_UI_LMSTUDIO_BASE_URL || process.env.LM_BASE_URL || 'http://127.0.0.1:1234/v1',
@@ -488,19 +493,39 @@ function clickMenuItem(menu, item) {
 
 function pressShortcutC() {
   activateApp();
-  runOsa(
-    ['tell application "System Events"', '  keystroke "c" using {command down, shift down}', 'end tell'].join('\n'),
-    'press Command-Shift-C',
-  );
-}
-
-function pressKeyCode(code, modifiers = '') {
-  activateApp();
-  const suffix = modifiers ? ` using ${modifiers}` : '';
-  runOsa(
-    ['tell application "System Events"', `  key code ${Number(code)}${suffix}`, 'end tell'].join('\n'),
-    `press key code ${code}`,
-  );
+  const source = [
+    'import ApplicationServices',
+    'import Darwin',
+    'let eventSource = CGEventSource(stateID: .hidSystemState)',
+    'func postKey(_ keyCode: CGKeyCode, _ keyDown: Bool, _ flags: CGEventFlags) -> Bool {',
+    '  guard let event = CGEvent(keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: keyDown) else { return false }',
+    '  event.flags = flags',
+    '  event.post(tap: .cghidEventTap)',
+    '  usleep(15000)',
+    '  return true',
+    '}',
+    'let command = CGKeyCode(55)',
+    'let shift = CGKeyCode(56)',
+    'let c = CGKeyCode(8)',
+    'let commandFlag: CGEventFlags = [.maskCommand]',
+    'let commandShiftFlags: CGEventFlags = [.maskCommand, .maskShift]',
+    'usleep(100000)',
+    'guard postKey(command, true, commandFlag),',
+    '      postKey(shift, true, commandShiftFlags),',
+    '      postKey(c, true, commandShiftFlags),',
+    '      postKey(c, false, commandShiftFlags),',
+    '      postKey(shift, false, commandFlag),',
+    '      postKey(command, false, []) else {',
+    '  fputs("failed to post keyboard events\\n", stderr)',
+    '  exit(2)',
+    '}',
+  ].join('\n');
+  const res = runCommand('swift', ['-e', source], { timeoutMs: 30000 });
+  if (!res.ok) {
+    fail(
+      `press Command-Shift-C CGEvent failed. macOS Accessibility permission may be required for keyboard event automation.\n${res.stderr || res.stdout}`,
+    );
+  }
 }
 
 function clickAtRect(rect, label, { xRatio = 0.5, yRatio = 0.5 } = {}) {
@@ -690,6 +715,18 @@ async function waitModalVisible(label) {
   return ui;
 }
 
+async function openNewSessionWithLauncher() {
+  if (launcherMode === 'menu') {
+    clickMenuItem('File', 'New Session…');
+    return waitModalVisible('menu new session');
+  }
+  if (launcherMode && launcherMode !== 'shortcut') {
+    fail(`Unsupported AGENT_UI_INTERACTION_LAUNCHER=${launcherMode}`);
+  }
+  pressShortcutC();
+  return waitModalVisible('shortcut new session');
+}
+
 async function waitModalHidden(label) {
   return waitUntil(`modal hidden: ${label}`, async () => {
     const targets = await uiTargets();
@@ -702,6 +739,35 @@ async function waitPromptLength(length, label) {
     const targets = await uiTargets();
     return targets.modal && targets.modal.promptValueLength === length ? targets : null;
   });
+}
+
+async function focusModalPrompt(label, expectedLength) {
+  const current = await uiTargets();
+  assertCondition(current && current.modal && current.modal.promptRect, `${label}: missing modal prompt rect`);
+  clickAtRect(current.modal.promptRect, `${label} modal prompt`);
+  return waitUntil(
+    `${label}: modal prompt focused`,
+    async () => {
+      const targets = await uiTargets();
+      if (!targets || !targets.modal || !targets.modal.activeElement) return null;
+      if (targets.modal.activeElement.id !== 'prompt') return null;
+      if (expectedLength != null && targets.modal.promptValueLength !== expectedLength) return null;
+      return targets;
+    },
+    5000,
+  );
+}
+
+async function submitModalWithButton(label, expectedLength) {
+  const focused = await focusModalPrompt(label, expectedLength);
+  assertCondition(focused.modal && focused.modal.createButtonRect, `${label}: missing start button rect`);
+  clickAtRect(focused.modal.createButtonRect, `${label} start session`);
+  try {
+    return await waitModalHidden(label);
+  } catch (error) {
+    await saveInteractionSnapshot(`${label.replace(/[^a-z0-9-]+/gi, '-').toLowerCase()}-submit-timeout`);
+    throw error;
+  }
 }
 
 async function waitNewConversation(beforeIds, label) {
@@ -787,6 +853,12 @@ async function focusConversationFollowup(label) {
   );
 }
 
+async function submitFollowupWithButton(label) {
+  const focused = await focusConversationFollowup(label);
+  assertCondition(focused.conversation && focused.conversation.sendButtonRect, `${label}: missing send button rect`);
+  clickAtRect(focused.conversation.sendButtonRect, `${label} send`);
+}
+
 async function waitForFollowupValue(followup, label) {
   try {
     return await waitUntil(
@@ -812,27 +884,40 @@ function screenshotRect(name, rect) {
   const file = path.join(screenshotsDir, `${name}.png`);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const res = runCommand('screencapture', ['-x', '-R', `${x},${y},${w},${h}`, file], { timeoutMs: 15000 });
-  if (!res.ok) fail(`screenshot ${name} failed: ${res.stderr || res.stdout}`);
-  const size = fs.existsSync(file) ? fs.statSync(file).size : 0;
-  assertCondition(size > 512, `screenshot ${name} was empty`);
-  evidence.files[`screenshot-${name}`] = file;
-  return file;
+  if (res.ok) {
+    const size = fs.existsSync(file) ? fs.statSync(file).size : 0;
+    assertCondition(size > 512, `screenshot ${name} was empty`);
+    evidence.files[`screenshot-${name}`] = file;
+    return file;
+  }
+
+  const fallbackFile = path.join(screenshotsDir, `${name}-full.png`);
+  const fallback = runCommand('screencapture', ['-x', fallbackFile], { timeoutMs: 15000 });
+  if (!fallback.ok) fail(`screenshot ${name} failed: ${res.stderr || res.stdout}`);
+  const fallbackSize = fs.existsSync(fallbackFile) ? fs.statSync(fallbackFile).size : 0;
+  assertCondition(fallbackSize > 512, `screenshot ${name} fallback was empty`);
+  evidence.files[`screenshot-${name}`] = fallbackFile;
+  evidence.checks[`screenshot-${name}`] = {
+    ok: true,
+    fallback: 'full-screen',
+    rect: { x, y, width: w, height: h },
+    reason: res.stderr || res.stdout || 'rect capture failed',
+  };
+  return fallbackFile;
 }
 
 async function runMenuShortcutPromptFollowupJourney() {
   clickMenuItem('File', 'Use Text Input');
 
   const beforeIds = new Set((await listConversations()).map((entry) => String(entry.conversationId || '')));
-  pressShortcutC();
-  const modal = await waitModalVisible('shortcut new session');
+  const modal = await openNewSessionWithLauncher();
   screenshotRect('new-session-modal', modal.modal.bounds);
 
   const prompt = `Reply exactly: ${sentinels.initial}`;
   clickAtRect(modal.modal.promptRect, 'new session prompt');
   pasteText(prompt);
   await waitPromptLength(prompt.length, 'initial prompt');
-  pressKeyCode(36);
-  await waitModalHidden('initial submit');
+  await submitModalWithButton('initial submit', prompt.length);
 
   const conversationId = await waitNewConversation(beforeIds, 'initial submit');
   const initialPosts = await waitGatewayPostCount(conversationId, 1, 'initial prompt');
@@ -863,7 +948,7 @@ async function runMenuShortcutPromptFollowupJourney() {
     pasteText(followup);
     await waitForFollowupValue(followup, 'follow-up text pasted after retry');
   }
-  pressKeyCode(36);
+  await submitFollowupWithButton('follow-up submit');
 
   const followupPosts = await waitGatewayPostCount(conversationId, 2, 'follow-up');
   const messageIds = followupPosts.map((post) => String(post.messageId || '')).filter(Boolean);

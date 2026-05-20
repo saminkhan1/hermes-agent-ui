@@ -1,0 +1,7 @@
+allowBuilds:
+  electron-winstaller: true
+  esbuild: true
+  get-windows: true
+overrides:
+  get-windows>@mapbox/node-pre-gyp: ^2.0.3
+  get-windows>node-gyp: ^12.3.0

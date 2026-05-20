@@ -56,9 +56,11 @@ function makeConfig({ appMode, signingMode }) {
     ],
     mac: {
       ...pkg.build.mac,
+      icon: 'packaging/mac/icon.icns',
     },
     dmg: {
       ...pkg.build.dmg,
+      icon: 'packaging/mac/icon.icns',
     },
   };
 

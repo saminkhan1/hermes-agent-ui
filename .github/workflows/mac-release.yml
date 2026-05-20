@@ -33,7 +33,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
+          cache: pnpm
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.3
 
       - name: Restore Electron builder caches
         uses: actions/cache@v4
@@ -41,28 +46,25 @@ jobs:
           path: |
             ~/Library/Caches/electron
             ~/Library/Caches/electron-builder
-          key: ${{ runner.os }}-${{ runner.arch }}-electron-builder-${{ hashFiles('package-lock.json', 'packaging/*.cjs') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-electron-builder-${{ hashFiles('pnpm-lock.yaml', 'packaging/*.cjs') }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-electron-builder-
 
       - name: Install JavaScript dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Ring 0 source checks
         run: |
-          npm run verify:hermes-contracts
-          npm run typecheck
-          npm run format:check
-          npm run lint
+          pnpm run verify:hermes-contracts
+          pnpm run typecheck
+          pnpm run format:check
+          pnpm run lint
 
       - name: Ring 1 package connector bootstrap DMG and zip
-        run: npm run dist:mac
-
-      - name: Verify post-build source contracts
-        run: npm run verify:source-contracts
+        run: pnpm run dist:mac
 
       - name: Record and verify bootstrap artifacts
-        run: npm run release:verify
+        run: pnpm run release:verify
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4

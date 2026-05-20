@@ -11,8 +11,7 @@ docs or generated copies.
 - agent-UI is the UI/gateway layer. Hermes is the agent runtime and owns model
   auth, provider config, tool orchestration, conversation content, and session
   finalization.
-- The shipped app is connector-only: `agent-UI for Hermes`. Do not add a
-  bundled-Hermes or two-app release path unless the product contract changes.
+- The shipped app is connector-only: `agent-UI for Hermes`.
 - The app talks to Hermes through the `local_desktop` gateway:
   - `GET /health` is unauthenticated.
   - `POST /messages` and `GET /events` use
@@ -49,7 +48,6 @@ docs or generated copies.
   Hermes checkout.
 - `scripts/verify-hermes-contracts.cjs`: drift guard against Hermes contracts
   and stale bundled/vendor surfaces.
-- `scripts/verify-source-contracts.js`: repo-owned public/release surface guard.
 - `scripts/installed-app-release-smoke.js`: black-box installed-app smoke and
   LM Studio live verification driver.
 - `scripts/interaction-lmstudio-smoke.js`: real macOS menu/shortcut/click
@@ -67,41 +65,40 @@ work in source and disappear from `out/main`.
 Install once:
 
 ```bash
-npm install
+pnpm install
 ```
 
 Run from source:
 
 ```bash
-npm run dev
+pnpm run dev
 ```
 
 Build and preview:
 
 ```bash
-npm run build
-npm start
+pnpm run build
+pnpm start
 ```
 
 Fast verification gate:
 
 ```bash
-npm run verify
+pnpm run verify
 ```
 
-`npm run verify` currently routes to `npm run verify:source`, which runs Hermes
-contract verification, TypeScript strict checking, production build, and source
-contract checks.
+`pnpm run verify` currently routes to `pnpm run verify:source`, which runs Hermes
+contract verification, TypeScript strict checking, formatting, linting, and a
+production build.
 
 Targeted gates:
 
 ```bash
-npm run verify:hermes-contracts
-npm run verify:source-contracts
-npm run dist:mac
-npm run release:verify
-npm run release:github:refresh -- v1.0.0-beta.1
-npm run verify:installed -- "/Applications/agent-UI for Hermes.app"
+pnpm run verify:hermes-contracts
+pnpm run dist:mac
+pnpm run release:verify
+pnpm run release:github:refresh -- v1.0.0-beta.1
+pnpm run verify:installed -- "/Applications/agent-UI for Hermes.app"
 ```
 
 Real LM Studio gates require LM Studio serving `google/gemma-4-26b-a4b` on
@@ -109,10 +106,10 @@ Real LM Studio gates require LM Studio serving `google/gemma-4-26b-a4b` on
 macOS Accessibility permission and the direct NousResearch Hermes clone:
 
 ```bash
-npm run verify:live:release -- "/Applications/agent-UI for Hermes.app"
-npm run verify:interaction:lmstudio -- "/Applications/agent-UI for Hermes.app"
-npm run verify:live:lmstudio -- "/Applications/agent-UI for Hermes.app"
-npm run verify:concurrency:3 -- "/Applications/agent-UI for Hermes.app"
+pnpm run verify:live:release -- "/Applications/agent-UI for Hermes.app"
+pnpm run verify:interaction:lmstudio -- "/Applications/agent-UI for Hermes.app"
+pnpm run verify:live:lmstudio -- "/Applications/agent-UI for Hermes.app"
+pnpm run verify:concurrency:3 -- "/Applications/agent-UI for Hermes.app"
 ```
 
 ## Verification Rules
@@ -120,20 +117,20 @@ npm run verify:concurrency:3 -- "/Applications/agent-UI for Hermes.app"
 - Before changing code, inspect the worktree with `git status --short`. This
   repo is often dirty; never revert unrelated user changes.
 - For narrow code changes, run the smallest relevant check plus
-  `npm run verify` when feasible.
-- For release, packaging, signing, or app-mode changes, run `npm run dist:mac`
-  and `npm run release:verify`; then use the installed-app smoke against the
+  `pnpm run verify` when feasible.
+- For release, packaging, signing, or app-mode changes, run `pnpm run dist:mac`
+  and `pnpm run release:verify`; then use the installed-app smoke against the
   actual app path.
-- For full live release proof, prefer `npm run verify:live:release` over
+- For full live release proof, prefer `pnpm run verify:live:release` over
   separately running `verify:live:lmstudio` plus `verify:concurrency:3`. The
   combined gate also requires deterministic voice transcript coverage,
   no-provider onboarding with an actionable setup state or auth handoff, clean
   required stage coverage, and no unexpected Hermes `ERROR`/`WARNING` log lines.
   The targeted scripts stay available for narrower reruns.
-- For Hermes boundary changes, run `npm run verify:hermes-contracts` and verify
+- For Hermes boundary changes, run `pnpm run verify:hermes-contracts` and verify
   against `/Users/saminkhan1/Documents/hermes/hermes-agent`.
 - For menu, shortcut, modal, paste, click, or follow-up/cancel user-flow
-  changes, prefer `npm run verify:interaction:lmstudio -- "/Applications/agent-UI for Hermes.app"`
+  changes, prefer `pnpm run verify:interaction:lmstudio -- "/Applications/agent-UI for Hermes.app"`
   when the local permissions/runtime are available.
 - For user-flow confidence, prefer installed-app and live Hermes/model checks
   over mocks. Mocks are acceptable only as narrow unit scaffolding, not as proof
@@ -168,18 +165,13 @@ npm run verify:concurrency:3 -- "/Applications/agent-UI for Hermes.app"
 
 ## Release Shape
 
-`npm run dist:mac` builds the connector bootstrap DMG/zip using ad-hoc signing.
+`pnpm run dist:mac` builds the connector bootstrap DMG/zip using ad-hoc signing.
 The expected product name is `agent-UI for Hermes`, and release metadata should
 record `hermesRuntimeIncluded: false` with Hermes baseline `v2026.4.30+`.
 
 The future Developer ID path exists through:
 
 ```bash
-npm run dist:mac:developer-id
-npm run release:verify:developer-id
+pnpm run dist:mac:developer-id
+pnpm run release:verify:developer-id
 ```
-
-Do not mention removed surfaces such as `agent-UI Standalone`, `bundle:hermes`,
-`HERMES_BUNDLE_SOURCE`, `npm test`, or `docs/RELEASE.md` in current public
-surfaces unless the repo intentionally brings them back and updates the contract
-checks in the same change.

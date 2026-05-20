@@ -90,7 +90,7 @@ Gateway mode behavior:
 
 Developer prerequisites:
 
-- Node.js and npm.
+- Node.js and pnpm.
 - macOS for app packaging.
 - A local Hermes Agent checkout for development and runtime verification.
 
@@ -99,20 +99,20 @@ Clone and install:
 ```bash
 git clone https://github.com/saminkhan1/agent-UI.git agent-UI
 cd agent-UI
-npm install
+pnpm install
 ```
 
 Run from source:
 
 ```bash
-npm run dev
+pnpm run dev
 ```
 
 Build and preview the production bundle:
 
 ```bash
-npm run build
-npm start
+pnpm run build
+pnpm start
 ```
 
 Build a downloadable macOS app:
@@ -120,16 +120,16 @@ Build a downloadable macOS app:
 From the repo root:
 
 ```bash
-npm run dist:mac
+pnpm run dist:mac
 ```
 
-`npm run dist:mac` emits the connector DMG + zip artifacts with an ad-hoc signed app, no Apple notarization, and no stapling. This is the no-paid-plan path for direct testers; macOS may require the tester to use Finder's right-click Open approval on first launch.
+`pnpm run dist:mac` emits the connector DMG + zip artifacts with an ad-hoc signed app, no Apple notarization, and no stapling. This is the no-paid-plan path for direct testers; macOS may require the tester to use Finder's right-click Open approval on first launch.
 
 The future Developer ID path remains available when paid signing and notarization credentials exist:
 
 ```bash
-npm run dist:mac:developer-id
-npm run release:verify:developer-id
+pnpm run dist:mac:developer-id
+pnpm run release:verify:developer-id
 ```
 
 The bootstrap artifacts are written to `dist/`, for example:
@@ -160,7 +160,7 @@ export AGENT_UI_HERMES_GATEWAY_AUTOSTART=0
 After installing dependencies, link the package once:
 
 ```bash
-npm link
+pnpm link
 ```
 
 Then launch it from any terminal:
@@ -169,7 +169,7 @@ Then launch it from any terminal:
 agent-ui
 ```
 
-If the built app is missing, run `npm run build` from the repo root.
+If the built app is missing, run `pnpm run build` from the repo root.
 
 ## Manual Test Checklist
 
@@ -198,8 +198,8 @@ Known first-run cases to check:
 
 Use the four-ring release workflow for user-downloadable macOS artifacts:
 
-1. Ring 0, local fast checks: `npm run verify:source`. No VMs.
-2. Ring 1, GitHub Actions build gate: `.github/workflows/mac-release.yml` runs on pinned `macos-15`, verifies source contracts against a real Hermes checkout, builds connector bootstrap DMG + zip artifacts once, verifies manifests plus artifact hashes, and uploads artifacts. GitHub runners are only a build gate, not clean-install proof.
+1. Ring 0, local fast checks: `pnpm run verify:source`. No VMs.
+2. Ring 1, GitHub Actions build gate: `.github/workflows/mac-release.yml` runs on pinned `macos-15`, verifies Hermes contracts against a real Hermes checkout, builds connector bootstrap DMG + zip artifacts once, verifies manifests plus artifact hashes, and uploads artifacts. GitHub runners are only a build gate, not clean-install proof.
 3. Ring 2, installed-app automation: install or extract the exact connector artifact, run the smoke against `/Applications/agent-UI for Hermes.app`, and preserve its evidence directory.
 4. Ring 3, manual customer pass: mount the DMG, drag to `/Applications`, launch from Finder, approve the bootstrap Gatekeeper prompt with right-click Open if needed, confirm TCC microphone prompts, tray/menu behavior, text/voice sessions, follow-up, cancel, background mode, quit/reopen, and clear first-run errors for missing credentials, offline mode, port conflicts, and denied permissions.
 
@@ -207,7 +207,7 @@ After installing a release candidate into `/Applications`, run the installed-app
 automation before the human Ring 3 pass:
 
 ```bash
-npm run verify:installed -- "/Applications/agent-UI for Hermes.app"
+pnpm run verify:installed -- "/Applications/agent-UI for Hermes.app"
 ```
 
 `verify:installed` is the basic installed-app smoke. The full release e2e path
@@ -220,7 +220,7 @@ Hermes log blockers. Both write JSON evidence to
 After Ring 1 packaging, run:
 
 ```bash
-npm run release:verify
+pnpm run release:verify
 ```
 
 This writes `dist/release-manifest.json` with app mode, app version, git SHA, app source dirty status, connector Hermes baseline, whether Hermes runtime is included, packaged `local_desktop` source-match status, signing identity, notarization status, and SHA-256 hashes for every DMG/zip artifact. In bootstrap signing mode, `notarizationStatus` is recorded as `not_applicable_bootstrap`; `spctl` and stapler results are still captured as evidence but are not required to pass.
@@ -230,17 +230,17 @@ GitHub Actions artifact link.
 After all local and GitHub gates pass, refresh the GitHub Release assets from the verified manifest:
 
 ```bash
-npm run release:github:refresh -- v1.0.0-beta.1
+pnpm run release:github:refresh -- v1.0.0-beta.1
 ```
 
 ## Verify
 
 ```bash
-npm run verify:source
-npm run dist:mac
-npm run release:verify
-npm run verify:live:release -- "/Applications/agent-UI for Hermes.app"
-npm run verify:interaction:lmstudio -- "/Applications/agent-UI for Hermes.app"
+pnpm run verify:source
+pnpm run dist:mac
+pnpm run release:verify
+pnpm run verify:live:release -- "/Applications/agent-UI for Hermes.app"
+pnpm run verify:interaction:lmstudio -- "/Applications/agent-UI for Hermes.app"
 ```
 
 `verify:source` is the fast app-owned contract gate: Hermes contract drift, TypeScript, build output, packaging mode, gateway env, eval server auth, and installed-smoke wiring. It is not a fake user-flow pass.
@@ -253,7 +253,7 @@ The live gate is intentionally stricter than the stage report table alone: requi
 
 `verify:live:lmstudio` and `verify:concurrency:3` remain targeted demo gates. They require LM Studio serving `google/gemma-4-26b-a4b` at `http://127.0.0.1:1234/v1`, loaded with at least 64K context and parallelism for three requests, then drive the installed app through real Hermes and real model responses.
 
-The gateway client/runtime are part of the Electron main process bundle. `npm run verify:source` checks that the build emits:
+The gateway client/runtime are part of the Electron main process bundle. `pnpm run verify:source` checks that the build emits:
 
 ```text
 out/main/hermes-gateway-client.js
