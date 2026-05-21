@@ -99,7 +99,7 @@ Developer prerequisites:
 Clone and install:
 
 ```bash
-git clone https://github.com/saminkhan1/agent-UI.git agent-UI
+git clone https://github.com/saminkhan1/hermes-agent-ui.git agent-UI
 cd agent-UI
 pnpm install
 ```
