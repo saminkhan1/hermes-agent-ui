@@ -1,7 +1,9 @@
 # agent-UI
 
-agent-UI is a small macOS companion app for using a local Hermes runtime from
-your desktop.
+agent-UI is a macOS Electron client for local Hermes agents. It provides global
+text and voice input, lightweight desktop context, Hermes gateway event
+streaming, and session controls without bundling or replacing the Hermes
+runtime.
 
 Press the global shortcut, type or speak a task, and agent-UI sends it to Hermes
 with lightweight app/window/display context. Running sessions appear as desktop
