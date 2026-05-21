@@ -225,7 +225,19 @@ async function configureLmStudioProvider() {
       '  reasoning_effort: low',
       'auxiliary:',
       '  compression:',
+      `    model: ${model}`,
+      '    provider: custom',
+      `    base_url: ${lmStudioBaseUrl}`,
+      '    api_key: agent-ui-local-smoke',
+      '    api_mode: chat_completions',
       '    context_length: 64000',
+      '  title_generation:',
+      `    model: ${model}`,
+      '    provider: custom',
+      `    base_url: ${lmStudioBaseUrl}`,
+      '    api_key: agent-ui-local-smoke',
+      '    api_mode: chat_completions',
+      '    timeout: 120',
       'platforms:',
       '  local_desktop:',
       '    enabled: true',
@@ -254,7 +266,7 @@ function executableExists(file) {
 
 function directHermesRoot() {
   const home = os.userInfo().homedir || os.homedir();
-  return path.join(home, 'Documents', 'hermes', 'hermes-agent');
+  return path.join(home, '.hermes', 'hermes-agent');
 }
 
 function directHermesCandidates() {
@@ -280,7 +292,7 @@ function assertRealHermesAvailable() {
     fail(
       [
         'Direct NousResearch Hermes executable is required for verify:interaction:lmstudio.',
-        'Install Hermes into ~/Documents/hermes/hermes-agent/venv or ~/Documents/hermes/hermes-agent/.venv.',
+        'Install Hermes with the official installer.',
         `Searched: ${candidates.join(', ')}`,
       ].join('\n'),
     );
@@ -365,8 +377,7 @@ async function startApp(label) {
       AGENT_UI_EVAL_PORT_FILE: portFile,
       AGENT_UI_EVAL_TOKEN: evalToken,
       AGENT_UI_CONFIG_DIR: configDir,
-      AGENT_UI_HERMES_HOME: hermesHome,
-      AGENT_UI_HERMES_BIN: evidence.realHermes.command,
+      HERMES_HOME: hermesHome,
       LM_BASE_URL: lmStudioBaseUrl,
       HOME: process.env.HOME || os.userInfo().homedir,
     },

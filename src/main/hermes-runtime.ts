@@ -6,7 +6,7 @@ import type { MutableJsonObject } from '../shared/contracts.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
-import { spawn, execFile } from 'node:child_process';
+import { spawn, spawnSync, execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { parseEnv, promisify } from 'node:util';
@@ -15,12 +15,9 @@ import {
   defaultConnectorHermesCandidates,
   defaultGatewayEnvPathForMode,
   defaultHermesHomeForMode,
-  readConnectorRuntimeState,
   realUserHomeDir,
-  rememberConnectorHermesCommand,
 } from './hermes-release';
 
-const CLI_BIN_ENV = 'AGENT_UI_HERMES_BIN';
 const GATEWAY_AUTOSTART_ENV = 'AGENT_UI_HERMES_GATEWAY_AUTOSTART';
 const LOCAL_DESKTOP_USER = 'local';
 const LOCAL_DESKTOP_PLATFORM = 'local_desktop';
@@ -247,57 +244,48 @@ function absoluteCommandPath(value: LooseBoundaryValue) {
   return path.isAbsolute(command) ? command : path.resolve(process.cwd(), command);
 }
 
-function resolveConnectorHermesCommand(configured = '') {
-  const configuredPath = absoluteCommandPath(configured);
-  if (configuredPath) {
-    const configuredExists = executableExists(configuredPath);
-    if (configuredExists) rememberConnectorHermesCommand(configuredPath);
-    return {
-      command: configuredPath,
-      configured: true,
-      bundled: false,
-      releaseMode: 'connector',
-      remembered: false,
-      needsOnboarding: !configuredExists,
-    };
+function shellWrapperTarget(command: string) {
+  try {
+    const text = fs.readFileSync(command, 'utf8').split(/\r?\n/).slice(0, 20).join('\n');
+    const match = text.match(/^\s*exec\s+["']([^"']+)["']\s+(?:"\$@"|'\$@'|\$@)/m);
+    const target = match ? match[1] : '';
+    return target && executableExists(target) ? target : '';
+  } catch {
+    return '';
   }
+}
 
-  const state = readConnectorRuntimeState();
-  const remembered = absoluteCommandPath(state.hermesBin);
-  if (remembered && !executableExists(remembered)) {
-    return {
-      command: '',
-      configured: false,
-      bundled: false,
-      releaseMode: 'connector',
-      remembered: true,
-      needsOnboarding: true,
-      invalidRememberedPath: remembered,
-    };
-  }
-  if (remembered) {
-    return {
-      command: remembered,
-      configured: false,
-      bundled: false,
-      releaseMode: 'connector',
-      remembered: true,
-      needsOnboarding: false,
-    };
-  }
+function connectorCommandFound(command: string, details: MutableJsonObject = {}) {
+  return {
+    command,
+    configured: false,
+    bundled: false,
+    releaseMode: 'connector',
+    needsOnboarding: false,
+    ...details,
+  };
+}
 
+function connectorCommandUsable(command: string) {
+  if (!executableExists(command)) return false;
+  const result = spawnSync(command, ['version'], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      HOME: realUserHomeDir(),
+      HERMES_HOME: defaultHermesHome(),
+      PATH: safeRuntimePath(),
+    },
+    timeout: 5000,
+  });
+  return result.status === 0 && /Hermes Agent/i.test(`${result.stdout || ''}\n${result.stderr || ''}`);
+}
+
+function resolveConnectorHermesCommand() {
   for (const candidate of defaultConnectorHermesCandidates()) {
     const resolved = absoluteCommandPath(candidate);
-    if (executableExists(resolved)) {
-      rememberConnectorHermesCommand(resolved);
-      return {
-        command: resolved,
-        configured: false,
-        bundled: false,
-        releaseMode: 'connector',
-        remembered: false,
-        needsOnboarding: false,
-      };
+    if (connectorCommandUsable(resolved)) {
+      return connectorCommandFound(resolved);
     }
   }
 
@@ -306,14 +294,12 @@ function resolveConnectorHermesCommand(configured = '') {
     configured: false,
     bundled: false,
     releaseMode: 'connector',
-    remembered: false,
     needsOnboarding: true,
   };
 }
 
 function resolveHermesCommand() {
-  const configured = String(process.env[CLI_BIN_ENV] || '').trim();
-  return resolveConnectorHermesCommand(configured);
+  return resolveConnectorHermesCommand();
 }
 
 function hermesCwd(command: LooseBoundaryValue) {
@@ -323,7 +309,14 @@ function hermesCwd(command: LooseBoundaryValue) {
 }
 
 function connectorHermesRuntimeForCommand(command: LooseBoundaryValue) {
-  const resolved = path.resolve(String(command || ''));
+  let resolved = path.resolve(String(command || ''));
+  try {
+    resolved = fs.realpathSync(resolved);
+  } catch {
+    // Keep the original path; executable validation happens before process launch.
+  }
+  const wrapperTarget = shellWrapperTarget(resolved);
+  if (wrapperTarget) resolved = wrapperTarget;
   const parts = resolved.split(path.sep);
   const hermesAgentIdx = parts.lastIndexOf('hermes-agent');
   if (hermesAgentIdx < 0) return null;
@@ -383,8 +376,7 @@ async function captureAndTranscribeVoice(opts: CaptureVoiceOptions = {}) {
   if (!command || !executableExists(command)) {
     return {
       ok: false,
-      error:
-        'Hermes executable is missing. Set AGENT_UI_HERMES_BIN or install Hermes in ~/Documents/hermes/hermes-agent.',
+      error: 'Hermes executable is missing. Install Hermes with the official installer.',
     };
   }
   try {
@@ -959,9 +951,8 @@ function gatewayStartupFailureMessage(
 
 function missingHermesExecutableMessage(resolved: MutableJsonObject = {}) {
   const command = String(resolved.command || '').trim();
-  if (command)
-    return `Hermes executable is missing or not executable at ${command}. Check AGENT_UI_HERMES_BIN or rebuild Hermes.`;
-  return 'Hermes executable is missing. Set AGENT_UI_HERMES_BIN or install Hermes in ~/Documents/hermes/hermes-agent.';
+  if (command) return `Hermes executable is missing or not usable at ${command}. Reinstall Hermes.`;
+  return 'Hermes executable is missing. Install Hermes with the official installer.';
 }
 
 async function ensureGatewayProcess(log = console, opts: GatewayReadyOptions = {}) {

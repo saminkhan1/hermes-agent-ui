@@ -56,60 +56,22 @@ function getAgentUIConfigDir() {
 }
 
 function connectorHermesHome() {
-  return path.join(realUserHomeDir(), 'Documents', 'hermes', 'hermes-home');
+  return path.join(realUserHomeDir(), '.hermes');
 }
 
 function defaultHermesHomeForMode() {
-  const configured = String(process.env.AGENT_UI_HERMES_HOME || '').trim();
+  const configured = String(process.env.HERMES_HOME || '').trim();
   if (configured) return path.resolve(configured);
   return connectorHermesHome();
 }
 
 function defaultGatewayEnvPathForMode() {
-  const configured = String(process.env.AGENT_UI_HERMES_ENV_PATH || '').trim();
-  if (configured) return path.resolve(configured);
   return path.join(defaultHermesHomeForMode(), '.env');
-}
-
-function connectorRuntimeStatePath() {
-  return path.join(getAgentUIConfigDir(), 'connector-runtime.json');
-}
-
-function readJsonFile(file: LooseBoundaryValue, fallback = {}) {
-  try {
-    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return data && typeof data === 'object' ? data : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function writeJsonFile(file: LooseBoundaryValue, value: LooseBoundaryValue) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-}
-
-function readConnectorRuntimeState() {
-  return readJsonFile(connectorRuntimeStatePath(), {});
-}
-
-function rememberConnectorHermesCommand(command: LooseBoundaryValue) {
-  const value = String(command || '').trim();
-  if (!value) return;
-  writeJsonFile(connectorRuntimeStatePath(), {
-    hermesBin: value,
-    rememberedAt: new Date().toISOString(),
-  });
 }
 
 function defaultConnectorHermesCandidates() {
   const home = realUserHomeDir();
-  const root = path.join(home, 'Documents', 'hermes');
-  return [
-    path.join(root, 'hermes-agent', 'venv', 'bin', 'hermes'),
-    path.join(root, 'hermes-agent', '.venv', 'bin', 'hermes'),
-    path.join(root, 'hermes-agent', 'hermes'),
-  ];
+  return [path.join(home, '.local', 'bin', 'hermes'), path.join('/usr', 'local', 'bin', 'hermes')];
 }
 
 export {
@@ -120,8 +82,6 @@ export {
   defaultHermesHomeForMode,
   getAgentUIConfigDir,
   normalizeReleaseMode,
-  readConnectorRuntimeState,
   realUserHomeDir,
   releaseMode,
-  rememberConnectorHermesCommand,
 };

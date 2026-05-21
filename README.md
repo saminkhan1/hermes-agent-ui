@@ -29,7 +29,7 @@ runtime.
 To use the packaged app:
 
 - macOS.
-- A local Hermes runtime.
+- A local Hermes runtime installed with the official Hermes installer.
 - A Hermes model/provider login or API key configured through Hermes.
 - Microphone permission if you use voice input.
 
@@ -63,13 +63,13 @@ shows the Hermes setup/login path instead of a generic failure.
 agent-UI uses the Hermes local desktop gateway. It does not spawn `hermes chat`
 or keep a local copy of conversation history.
 
-agent-UI reads the default local Hermes profile, remembers the detected Hermes
-binary path in `~/.agent-ui/connector-runtime.json`, and revalidates it on
-launch. It may write the required Hermes `config.yaml` and `.env` settings for
-the local desktop gateway. It passes the packaged `local_desktop` plugin to
-Hermes through `HERMES_BUNDLED_PLUGINS`; it does not install or copy plugins
-into the user's Hermes tree. If the preferred gateway port is occupied by
-another process, agent-UI rotates to a free local port and writes that port to
+agent-UI reads the default local Hermes profile and resolves Hermes from the
+official installer launcher locations. It may write the required Hermes
+`config.yaml` and `.env` settings for the local desktop gateway. It passes the
+packaged `local_desktop` plugin to Hermes through `HERMES_BUNDLED_PLUGINS`; it
+does not install or copy plugins into the user's Hermes tree. If the preferred
+gateway port is occupied by another process, agent-UI rotates to a free local
+port and writes that port to
 the user's active Hermes `.env`.
 
 Gateway mode behavior:
@@ -123,7 +123,7 @@ From the repo root:
 pnpm run dist:mac
 ```
 
-`pnpm run dist:mac` emits the connector DMG + zip artifacts with an ad-hoc signed app, no Apple notarization, and no stapling. This is the no-paid-plan path for direct testers; macOS may require the tester to use Finder's right-click Open approval on first launch.
+`pnpm run dist:mac` emits the connector DMG + zip artifacts with an ad-hoc signed app, no Apple notarization, and no stapling. Without paid Developer ID signing and notarization, browser-downloaded DMGs can show Apple's malware-verification dialog, and right-click Open is not reliable enough as the primary customer path. The GitHub release refresh step also generates `dist/install-agent-ui-for-hermes.sh`, a checksum-verified installer script that downloads the zip, verifies its SHA-256, installs the app into `/Applications`, clears quarantine on that installed copy, verifies the code signature, and opens the app.
 
 The future Developer ID path remains available when paid signing and notarization credentials exist:
 
@@ -137,6 +137,7 @@ The bootstrap artifacts are written to `dist/`, for example:
 ```text
 dist/agent-UI-for-Hermes-1.0.0-mac-arm64-bootstrap.dmg
 dist/agent-UI-for-Hermes-1.0.0-mac-arm64-bootstrap.zip
+dist/install-agent-ui-for-hermes.sh
 dist/release-manifest.json
 ```
 
@@ -144,16 +145,17 @@ The packaging path builds the Electron main/preload/renderer output as `agent-UI
 
 `GET /health` is unauthenticated. `POST /messages` and `GET /events` require `Authorization: Bearer <LOCAL_DESKTOP_GATEWAY_KEY>`.
 
-Useful overrides:
+Useful gateway controls:
 
 ```bash
-export AGENT_UI_HERMES_HOME=~/Documents/hermes/hermes-home
 export AGENT_UI_HERMES_GATEWAY_URL=http://127.0.0.1:8766
 export AGENT_UI_HERMES_GATEWAY_KEY="<gateway secret>"
 export AGENT_UI_HERMES_GATEWAY_AUTOSTART=0
 ```
 
-`AGENT_UI_HERMES_BIN` remains a developer escape hatch. Packaged app startup resolves the remembered or detected local Hermes binary and does not search shell `PATH`.
+Packaged app startup resolves the official Hermes launcher locations:
+`~/.local/bin/hermes` and `/usr/local/bin/hermes`. It does not depend on an
+interactive shell `PATH`.
 
 ## Use As A Local CLI
 
@@ -201,7 +203,7 @@ Use the four-ring release workflow for user-downloadable macOS artifacts:
 1. Ring 0, local fast checks: `pnpm run verify:source`. No VMs.
 2. Ring 1, GitHub Actions build gate: `.github/workflows/mac-release.yml` runs on pinned `macos-15`, verifies Hermes contracts against a real Hermes checkout, builds connector bootstrap DMG + zip artifacts once, verifies manifests plus artifact hashes, and uploads artifacts. GitHub runners are only a build gate, not clean-install proof.
 3. Ring 2, installed-app automation: install or extract the exact connector artifact, run the smoke against `/Applications/agent-UI for Hermes.app`, and preserve its evidence directory.
-4. Ring 3, manual customer pass: mount the DMG, drag to `/Applications`, launch from Finder, approve the bootstrap Gatekeeper prompt with right-click Open if needed, confirm TCC microphone prompts, tray/menu behavior, text/voice sessions, follow-up, cancel, background mode, quit/reopen, and clear first-run errors for missing credentials, offline mode, port conflicts, and denied permissions.
+4. Ring 3, manual customer pass: use the release installer script as the primary customer path, confirm it installs to `/Applications` and opens without Apple's malware-verification dialog, then confirm TCC microphone prompts, tray/menu behavior, text/voice sessions, follow-up, cancel, background mode, quit/reopen, and clear first-run errors for missing credentials, offline mode, port conflicts, and denied permissions. Keep the DMG as a fallback artifact only; if testing it manually, expect Gatekeeper friction unless a Developer ID/notarized build is produced.
 
 After installing a release candidate into `/Applications`, run the installed-app
 automation before the human Ring 3 pass:
@@ -226,7 +228,10 @@ pnpm run release:verify
 This writes `dist/release-manifest.json` with app mode, app version, git SHA, app source dirty status, connector Hermes baseline, whether Hermes runtime is included, packaged `local_desktop` source-match status, signing identity, notarization status, and SHA-256 hashes for every DMG/zip artifact. In bootstrap signing mode, `notarizationStatus` is recorded as `not_applicable_bootstrap`; `spctl` and stapler results are still captured as evidence but are not required to pass.
 
 The customer-facing download link should be the GitHub Release page, not a
-GitHub Actions artifact link.
+GitHub Actions artifact link. For bootstrap beta releases, the release page
+should lead with the generated installer script command instead of the DMG
+drag-and-open path, because the script verifies hashes before clearing
+quarantine while the browser-downloaded DMG can repeatedly hit Gatekeeper.
 After all local and GitHub gates pass, refresh the GitHub Release assets from the verified manifest:
 
 ```bash
@@ -249,7 +254,7 @@ pnpm run verify:interaction:lmstudio -- "/Applications/agent-UI for Hermes.app"
 
 `verify:live:release` is the preferred release gate for the live installed-app path. It runs first-launch, deterministic voice transcript insertion, live voice-submit, follow-up, cancel, post-cancel, reopen, three-session concurrency, no-provider onboarding with an actionable setup state or auth handoff, required stage coverage, and Hermes log-blocker checks in one installed-app smoke run, after one LM Studio preflight.
 
-The live gate is intentionally stricter than the stage report table alone: required customer stages cannot be missing, and unexpected Hermes `ERROR`/`WARNING` log lines fail the run instead of being buried in the evidence directory. Bootstrap artifacts remain ad-hoc signed, so a passing live gate still assumes the documented Gatekeeper right-click Open flow unless a Developer ID/notarized build is produced.
+The live gate is intentionally stricter than the stage report table alone: required customer stages cannot be missing, and unexpected Hermes `ERROR`/`WARNING` log lines fail the run instead of being buried in the evidence directory. Bootstrap artifacts remain ad-hoc signed, so a passing live gate must be paired with either the checksum-verified installer-script path or a Developer ID/notarized build; the DMG right-click Open flow is fallback documentation, not the primary customer install path.
 
 `verify:live:lmstudio` and `verify:concurrency:3` remain targeted demo gates. They require LM Studio serving `google/gemma-4-26b-a4b` at `http://127.0.0.1:1234/v1`, loaded with at least 64K context and parallelism for three requests, then drive the installed app through real Hermes and real model responses.
 

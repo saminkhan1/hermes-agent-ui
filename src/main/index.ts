@@ -19,6 +19,7 @@ import type { MutableJsonObject } from '../shared/contracts.ts';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -122,9 +123,20 @@ protocol.registerSchemesAsPrivileged([
 
 let getWindowsModulePromise: LooseBoundaryValue = null;
 
+const getWindowsRequire = createRequire(__filename);
+
+function getWindowsPlatformModulePath() {
+  const entry = getWindowsRequire.resolve('get-windows');
+  const packageDir = path.dirname(entry);
+  if (process.platform === 'darwin') return path.join(packageDir, 'lib', 'macos.js');
+  if (process.platform === 'linux') return path.join(packageDir, 'lib', 'linux.js');
+  if (process.platform === 'win32') return path.join(packageDir, 'lib', 'windows.js');
+  return entry;
+}
+
 function loadGetWindowsModule() {
   if (!getWindowsModulePromise) {
-    getWindowsModulePromise = import('get-windows').catch((err) => {
+    getWindowsModulePromise = import(pathToFileURL(getWindowsPlatformModulePath()).href).catch((err) => {
       getWindowsModulePromise = null;
       throw err;
     });

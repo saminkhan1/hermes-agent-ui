@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const ts = require('typescript');
@@ -37,17 +38,6 @@ function exists(file) {
 
 function unique(values) {
   return [...new Set(values.filter((value) => value != null).map((value) => String(value)))].sort();
-}
-
-function uniqueInOrder(values) {
-  const seen = new Set();
-  const out = [];
-  for (const value of values.filter((item) => item != null).map((item) => String(item))) {
-    if (seen.has(value)) continue;
-    seen.add(value);
-    out.push(value);
-  }
-  return out;
 }
 
 function relative(file) {
@@ -372,12 +362,7 @@ function parsePluginEnv(file) {
 }
 
 function candidateHermesRoots() {
-  const roots = [];
-  for (const name of ['HERMES_AGENT_ROOT', 'HERMES_AGENT_SOURCE']) {
-    if (process.env[name]) roots.push(path.resolve(process.env[name]));
-  }
-  roots.push(path.resolve(repoRoot, '..', 'hermes', 'hermes-agent'));
-  return uniqueInOrder(roots);
+  return [path.join(os.homedir(), '.hermes', 'hermes-agent')];
 }
 
 function possibleBasePaths(root) {
@@ -403,7 +388,7 @@ function resolveHermesBasePath() {
   if (!basePath) {
     fail('Could not locate Hermes gateway/platforms/base.py', {
       searchedRoots: candidateHermesRoots(),
-      hint: 'Set HERMES_AGENT_ROOT to a Hermes Agent source checkout or build/lib directory.',
+      hint: 'Install Hermes with the official installer.',
     });
   }
   return basePath;

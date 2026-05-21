@@ -11,8 +11,6 @@ import {
   connectorHermesRuntimeForCommand,
   defaultHermesHome,
   executableExists,
-  hermesCwd,
-  parseTranscriptionJson,
   resolveHermesCommand,
   safeRuntimePath,
 } from './hermes-runtime';
@@ -23,6 +21,7 @@ const MAX_LABEL_CHARS = 80;
 const MAX_API_KEY_CHARS = 20000;
 const MAX_MODEL_CHARS = 256;
 const MAX_OUTPUT_CHARS = 120000;
+const MAX_BRIDGE_OUTPUT_CHARS = 4_000_000;
 const AUTH_ERROR_MARKERS = [
   'provider authentication failed',
   'no inference provider configured',
@@ -36,13 +35,10 @@ const AUTH_ERROR_MARKERS = [
 ];
 
 const events = new EventEmitter();
+const sessions = new Map<string, OAuthSession>();
 
 type RunHermesOptions = {
   timeoutMs?: number;
-};
-type HermesCommandError = Error & {
-  stdout?: string;
-  stderr?: string;
 };
 type OAuthSession = {
   child: ChildProcessWithoutNullStreams;
@@ -57,8 +53,6 @@ type ReadinessSnapshot = {
   needs_auth?: boolean;
   needs_model?: boolean;
 };
-
-const sessions = new Map<string, OAuthSession>();
 
 function boundedText(value: LooseBoundaryValue, max = 4096) {
   const out = value == null ? '' : String(value);
@@ -95,8 +89,6 @@ function hermesEnv(extra: Record<string, string> = {}) {
     HOME: realUserHomeDir(),
     HERMES_HOME: defaultHermesHome(),
     PATH: safeRuntimePath(),
-    PYTHONNOUSERSITE: '1',
-    PYTHONDONTWRITEBYTECODE: '1',
     PYTHONUNBUFFERED: '1',
   };
 }
@@ -104,20 +96,9 @@ function hermesEnv(extra: Record<string, string> = {}) {
 function hermesCommandOrThrow() {
   const { command } = resolveHermesCommand();
   if (!command || !executableExists(command)) {
-    throw new Error(
-      'Hermes executable is missing. Set AGENT_UI_HERMES_BIN or install Hermes in ~/Documents/hermes/hermes-agent.',
-    );
+    throw new Error('Hermes executable is missing. Install Hermes with the official installer.');
   }
   return command;
-}
-
-function pythonRuntimeOrThrow() {
-  const command = hermesCommandOrThrow();
-  const runtime = connectorHermesRuntimeForCommand(command);
-  if (!runtime) {
-    throw new Error('Hermes Python runtime is missing. Rebuild the local Hermes virtualenv.');
-  }
-  return { command, ...runtime };
 }
 
 function redact(value: LooseBoundaryValue) {
@@ -126,7 +107,24 @@ function redact(value: LooseBoundaryValue) {
     .replace(/([A-Za-z0-9_-]{12})[A-Za-z0-9_-]{28,}/g, '$1...');
 }
 
-function runHermesPythonJson(
+function pythonRuntimeOrThrow() {
+  const command = hermesCommandOrThrow();
+  const connector = connectorHermesRuntimeForCommand(command);
+  if (!connector) {
+    throw new Error('Hermes Python runtime is unavailable from the resolved Hermes launcher.');
+  }
+  return { command, ...connector };
+}
+
+function parseJsonOutput(stdout: LooseBoundaryValue): MutableJsonObject {
+  const text = cleanHermesOutput(stdout).trim();
+  if (!text) throw new Error('Hermes returned no JSON result.');
+  const parsed = JSON.parse(text);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Hermes returned invalid JSON.');
+  return parsed as MutableJsonObject;
+}
+
+async function runHermesPythonJson(
   code: string,
   payload: AgentUIPayload = {},
   opts: RunHermesOptions = {},
@@ -147,7 +145,7 @@ function runHermesPythonJson(
     });
     let stdout = '';
     let stderr = '';
-    const timeoutMs = Number(opts.timeoutMs || 15000);
+    const timeoutMs = Number(opts.timeoutMs || 20000);
     const timer =
       timeoutMs > 0
         ? setTimeout(() => {
@@ -158,7 +156,7 @@ function runHermesPythonJson(
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk: LooseBoundaryValue) => {
-      stdout = appendOutput(stdout, chunk);
+      stdout = `${stdout}${String(chunk || '')}`.slice(-MAX_BRIDGE_OUTPUT_CHARS);
     });
     child.stderr.on('data', (chunk: LooseBoundaryValue) => {
       stderr = appendOutput(stderr, chunk);
@@ -170,22 +168,20 @@ function runHermesPythonJson(
     child.on('close', (codeNum: LooseBoundaryValue, signal: LooseBoundaryValue) => {
       if (timer) clearTimeout(timer);
       if (codeNum !== 0) {
-        const err: HermesCommandError = new Error(
-          redact(
-            stderr.trim() || stdout.trim() || `Hermes exited with code ${codeNum}${signal ? ` (${signal})` : ''}.`,
+        reject(
+          new Error(
+            redact(
+              stderr.trim() || stdout.trim() || `Hermes exited with code ${codeNum}${signal ? ` (${signal})` : ''}.`,
+            ),
           ),
         );
-        err.stdout = redact(stdout);
-        err.stderr = redact(stderr);
-        reject(err);
         return;
       }
-      const parsed = parseTranscriptionJson(stdout);
-      if (!parsed || typeof parsed !== 'object') {
-        reject(new Error('Hermes returned no JSON result.'));
-        return;
+      try {
+        resolve(parseJsonOutput(stdout));
+      } catch (error) {
+        reject(error);
       }
-      resolve(parsed);
     });
 
     child.stdin.end(`${JSON.stringify(payload || {})}\n`);
@@ -194,107 +190,85 @@ function runHermesPythonJson(
 
 const STATUS_SCRIPT = String.raw`
 import json
-import os
 import sys
 
-payload = json.loads(sys.stdin.read() or "{}")
+from hermes_cli.auth import PROVIDER_REGISTRY
+from hermes_cli.config import get_config_path, get_env_path
+from hermes_cli.inventory import build_models_payload, load_picker_context
+from hermes_cli.runtime_provider import resolve_runtime_provider
 
-from hermes_cli.auth import AuthError, PROVIDER_REGISTRY, _load_auth_store
-from hermes_cli.auth_commands import _OAUTH_CAPABLE_PROVIDERS
-from hermes_cli.config import load_config, get_config_path, get_env_path, get_env_value
-from hermes_cli.models import fetch_lmstudio_models
-from hermes_cli.model_switch import list_authenticated_providers
+try:
+    from hermes_cli.auth_commands import _OAUTH_CAPABLE_PROVIDERS
+except Exception:
+    _OAUTH_CAPABLE_PROVIDERS = set()
 
-cfg = load_config()
-model_cfg = cfg.get("model", {})
-if isinstance(model_cfg, dict):
-    current_model = str(model_cfg.get("default", model_cfg.get("name", "")) or "")
-    current_provider = str(model_cfg.get("provider", "") or "")
-    current_base_url = str(model_cfg.get("base_url", "") or "")
-else:
-    current_model = str(model_cfg or "")
-    current_provider = ""
-    current_base_url = ""
 
-user_providers = cfg.get("providers") if isinstance(cfg.get("providers"), dict) else {}
-custom_providers = cfg.get("custom_providers") if isinstance(cfg.get("custom_providers"), list) else []
-providers = list_authenticated_providers(
-    current_provider=current_provider,
-    current_base_url=current_base_url,
-    current_model=current_model,
-    user_providers=user_providers,
-    custom_providers=custom_providers,
+def enrich(row):
+    row = dict(row or {})
+    slug = str(row.get("slug") or row.get("id") or "").strip()
+    if slug:
+        row.setdefault("id", slug)
+        row.setdefault("slug", slug)
+    pconfig = PROVIDER_REGISTRY.get(slug)
+    if pconfig is not None:
+        row.setdefault("name", getattr(pconfig, "name", slug) or slug)
+        row["auth_type"] = getattr(pconfig, "auth_type", "") or row.get("auth_type") or "api_key"
+        env_vars = list(getattr(pconfig, "api_key_env_vars", ()) or ())
+        if env_vars:
+            row.setdefault("api_key_env_vars", env_vars)
+            row.setdefault("key_env", env_vars[0])
+    row["oauth_capable"] = bool(slug in _OAUTH_CAPABLE_PROVIDERS or str(row.get("auth_type") or "").startswith("oauth"))
+    return row
+
+
+def row_provider_id(row):
+    return str(row.get("slug") or row.get("id") or "").strip()
+
+
+def catalog_row_for(*ids):
+    wanted = {str(value or "").strip() for value in ids if str(value or "").strip()}
+    for row in catalog:
+        if row_provider_id(row) in wanted:
+            return row
+    return {}
+
+
+ctx = load_picker_context()
+payload = build_models_payload(
+    ctx,
+    include_unconfigured=True,
+    picker_hints=True,
+    canonical_order=True,
     max_models=50,
 )
-
-current_is_lmstudio = current_provider.strip().lower() == "lmstudio"
-lmstudio_auth_required = False
-if not any(
-    str(provider.get("slug") or provider.get("id") or "").strip().lower() == "lmstudio"
-    for provider in providers
-    if isinstance(provider, dict)
-):
-    lmstudio_base_url = (
-        current_base_url if current_is_lmstudio and current_base_url else
-        get_env_value("LM_BASE_URL") or os.environ.get("LM_BASE_URL", "") or "http://127.0.0.1:1234/v1"
-    ).rstrip("/")
+catalog = [enrich(row) for row in payload.get("providers", []) if isinstance(row, dict)]
+providers = [row for row in catalog if row.get("authenticated")]
+current_provider = str(payload.get("provider") or "").strip()
+current_model = str(payload.get("model") or "").strip()
+authenticated_ids = {str(row.get("slug") or row.get("id") or "").strip() for row in providers}
+if current_provider and current_model and current_provider not in authenticated_ids:
     try:
-        models = fetch_lmstudio_models(
-            api_key=get_env_value("LM_API_KEY") or os.environ.get("LM_API_KEY", ""),
-            base_url=lmstudio_base_url,
-            timeout=1.5,
-        )
-    except AuthError:
-        lmstudio_auth_required = True
-        models = []
-
-    if not lmstudio_auth_required and not models and current_is_lmstudio and current_model:
-        models = [current_model]
-
-    if not lmstudio_auth_required:
-        providers.append({
-            "slug": "lmstudio",
-            "id": "lmstudio",
-            "name": "LM Studio",
-            "source": "hermes",
-            "is_current": current_is_lmstudio,
-            "auth_type": "none",
-            "base_url": lmstudio_base_url,
-            "models": models[:50],
-            "total_models": len(models),
-        })
-
-catalog = []
-for provider_id, pconfig in sorted(PROVIDER_REGISTRY.items()):
-    env_vars = list(getattr(pconfig, "api_key_env_vars", ()) or ())
-    auth_type = getattr(pconfig, "auth_type", "api_key") or "api_key"
-    if provider_id == "lmstudio" and not lmstudio_auth_required:
-        auth_type = "none"
-    catalog.append({
-        "id": provider_id,
-        "name": getattr(pconfig, "name", provider_id) or provider_id,
-        "auth_type": auth_type,
-        "oauth_capable": provider_id in _OAUTH_CAPABLE_PROVIDERS,
-        "api_key_env_vars": env_vars,
-    })
-if not any(p["id"] == "openrouter" for p in catalog):
-    catalog.append({
-        "id": "openrouter",
-        "name": "OpenRouter",
-        "auth_type": "api_key",
-        "oauth_capable": False,
-        "api_key_env_vars": ["OPENROUTER_API_KEY"],
-    })
-
-auth_store = _load_auth_store()
-pool = auth_store.get("credential_pool") if isinstance(auth_store, dict) else {}
-if not isinstance(pool, dict):
-    pool = {}
-pool_counts = {
-    str(provider): len(entries) if isinstance(entries, list) else 0
-    for provider, entries in pool.items()
-}
-authenticated_ids = {str(p.get("slug") or "").strip() for p in providers if isinstance(p, dict)}
+        runtime = resolve_runtime_provider(requested=current_provider, target_model=current_model)
+    except Exception:
+        runtime = None
+    if runtime:
+        runtime_provider = str(runtime.get("provider") or "").strip()
+        requested_provider = str(runtime.get("requested_provider") or "").strip()
+        runtime_row = enrich(catalog_row_for(current_provider, requested_provider, runtime_provider))
+        runtime_row["id"] = current_provider
+        runtime_row["slug"] = current_provider
+        runtime_row.setdefault("name", current_provider)
+        runtime_row["authenticated"] = True
+        runtime_row["is_current"] = True
+        runtime_row["source"] = runtime_row.get("source") or str(runtime.get("source") or "runtime")
+        runtime_row.pop("warning", None)
+        models = runtime_row.get("models") if isinstance(runtime_row.get("models"), list) else []
+        if current_model and current_model not in models:
+            models = [current_model, *models]
+        runtime_row["models"] = models[:50]
+        runtime_row["total_models"] = max(len(models), int(runtime_row.get("total_models") or 0))
+        providers.append(runtime_row)
+        authenticated_ids = {str(row.get("slug") or row.get("id") or "").strip() for row in providers}
 ready = bool(current_provider and current_model and current_provider in authenticated_ids)
 
 print(json.dumps({
@@ -306,7 +280,6 @@ print(json.dumps({
     "current_model": current_model,
     "providers": providers,
     "provider_catalog": catalog,
-    "pool_counts": pool_counts,
     "config_path": str(get_config_path()),
     "env_path": str(get_env_path()),
 }, separators=(",", ":"), sort_keys=True))
@@ -366,116 +339,50 @@ if not provider:
 if not model:
     raise SystemExit("model is required")
 
-from hermes_cli.config import load_config, save_config, get_config_path, read_raw_config
-from hermes_cli.model_normalize import normalize_model_for_provider
-from hermes_cli.providers import custom_provider_slug, resolve_provider_full
-from hermes_cli.runtime_provider import resolve_runtime_provider
+from hermes_cli.config import load_config, read_raw_config, save_config, get_config_path
+from hermes_cli.inventory import load_picker_context
+from hermes_cli.model_switch import switch_model
 
-cfg = load_config()
-try:
-    raw_cfg = read_raw_config()
-except Exception:
-    raw_cfg = cfg
-
-def as_dict(value):
-    return value if isinstance(value, dict) else {}
-
-def as_list(value):
-    return value if isinstance(value, list) else []
-
-def text(value):
-    return str(value or "").strip()
-
-def clean_base_url(value):
-    return text(value).rstrip("/")
-
-model_cfg = as_dict(cfg.get("model")).copy()
-raw_model_cfg = as_dict(raw_cfg.get("model"))
-user_providers = as_dict(cfg.get("providers"))
-custom_providers = as_list(cfg.get("custom_providers"))
-
-pdef = resolve_provider_full(provider, user_providers, custom_providers)
-if pdef is None:
-    raise SystemExit(f"unknown provider: {provider}")
-
-target_provider = text(getattr(pdef, "id", "")) or provider
-normalized_model = normalize_model_for_provider(model, target_provider)
-runtime = resolve_runtime_provider(requested=provider, target_model=normalized_model)
-runtime_provider = text(runtime.get("provider")) or target_provider
-runtime_base_url = clean_base_url(runtime.get("base_url") or getattr(pdef, "base_url", ""))
-
-def find_raw_custom_provider(requested_provider, base_url):
-    requested = text(requested_provider).lower()
-    wanted_url = clean_base_url(base_url).lower()
-    for entry in as_list(raw_cfg.get("custom_providers")):
-        if not isinstance(entry, dict):
-            continue
-        name = text(entry.get("name"))
-        provider_key = text(entry.get("provider_key"))
-        entry_url = clean_base_url(entry.get("base_url") or entry.get("url") or entry.get("api"))
-        identities = {name.lower(), custom_provider_slug(name).lower()} if name else set()
-        if provider_key:
-            identities.add(provider_key.lower())
-            identities.add(custom_provider_slug(provider_key).lower())
-        if requested in identities:
-            return entry
-        if wanted_url and entry_url.lower() == wanted_url:
-            return entry
-    return {}
-
-def custom_api_key_config_value(entry, base_url):
-    raw_api_key = text(entry.get("api_key")) if isinstance(entry, dict) else ""
-    if raw_api_key:
-        return raw_api_key
-    key_env = text(entry.get("key_env")) if isinstance(entry, dict) else ""
-    if key_env:
-        return "$" + "{" + key_env + "}"
-    previous_provider = text(raw_model_cfg.get("provider")).lower()
-    previous_base_url = clean_base_url(raw_model_cfg.get("base_url")).lower()
-    if previous_provider == "custom" and previous_base_url == clean_base_url(base_url).lower():
-        return text(raw_model_cfg.get("api_key"))
-    return ""
-
-is_named_custom = target_provider.startswith("custom:")
-is_user_provider = (
-    text(getattr(pdef, "source", "")) == "user-config"
-    and not is_named_custom
-    and target_provider in user_providers
+ctx = load_picker_context()
+result = switch_model(
+    raw_input=model,
+    current_provider=ctx.current_provider,
+    current_model=ctx.current_model,
+    current_base_url=ctx.current_base_url,
+    current_api_key="",
+    is_global=True,
+    explicit_provider=provider,
+    user_providers=ctx.user_providers,
+    custom_providers=ctx.custom_providers,
 )
-persist_provider = target_provider if is_user_provider else runtime_provider
-if is_named_custom or (runtime_provider == "custom" and not is_user_provider):
-    persist_provider = "custom"
+if not result.success:
+    raise SystemExit(result.error_message or "Hermes could not switch model.")
 
-model_cfg["provider"] = persist_provider
-model_cfg["default"] = normalized_model
-for key in ("base_url", "api_key", "api_mode", "context_length"):
+try:
+    cfg = read_raw_config()
+except Exception:
+    cfg = load_config()
+if not isinstance(cfg, dict):
+    cfg = {}
+model_cfg = cfg.get("model")
+if not isinstance(model_cfg, dict):
+    model_cfg = {}
+    cfg["model"] = model_cfg
+model_cfg["provider"] = result.target_provider
+model_cfg["default"] = result.new_model
+for key in ("base_url", "api_mode", "api_key"):
     model_cfg.pop(key, None)
-
-if runtime_base_url and not is_user_provider:
-    model_cfg["base_url"] = runtime_base_url
-
-api_mode = text(runtime.get("api_mode"))
-if api_mode and (
-    persist_provider == "custom"
-    or target_provider in {"opencode-zen", "opencode-go", "azure-foundry"}
-):
-    model_cfg["api_mode"] = api_mode
-
-if persist_provider == "custom":
-    custom_entry = find_raw_custom_provider(provider, runtime_base_url)
-    api_key_config = custom_api_key_config_value(custom_entry, runtime_base_url)
-    if api_key_config:
-        model_cfg["api_key"] = api_key_config
-
-cfg["model"] = model_cfg
+if result.base_url:
+    model_cfg["base_url"] = result.base_url
 save_config(cfg)
 
 print(json.dumps({
     "ok": True,
-    "provider": persist_provider,
-    "model": normalized_model,
-    "base_url": model_cfg.get("base_url", ""),
-    "api_mode": model_cfg.get("api_mode", ""),
+    "provider": result.target_provider,
+    "model": result.new_model,
+    "base_url": result.base_url,
+    "api_mode": result.api_mode,
+    "warning": result.warning_message,
     "config_path": str(get_config_path()),
 }, separators=(",", ":"), sort_keys=True))
 `;
@@ -509,7 +416,7 @@ function extractUserCode(value: LooseBoundaryValue) {
 }
 
 async function getAuthStatus() {
-  const status = await runHermesPythonJson(STATUS_SCRIPT, {}, { timeoutMs: 20000 });
+  const status = await runHermesPythonJson(STATUS_SCRIPT, {}, { timeoutMs: 30000 });
   return { ...status, readiness: readinessFromSnapshot(status) };
 }
 
@@ -549,7 +456,7 @@ async function saveModelSelection(payload: AgentUIPayload = {}) {
   if (!provider) return { ok: false, error: 'Choose a provider.' };
   if (!model) return { ok: false, error: 'Choose or enter a model.' };
   try {
-    return await runHermesPythonJson(SAVE_MODEL_SCRIPT, { provider, model }, { timeoutMs: 15000 });
+    return await runHermesPythonJson(SAVE_MODEL_SCRIPT, { provider, model }, { timeoutMs: 30000 });
   } catch (error) {
     return { ok: false, error: error instanceof Error && error.message ? error.message : String(error) };
   }
@@ -572,18 +479,11 @@ function startOAuthSession(payload: AgentUIPayload = {}) {
   const sessionId = randomUUID();
   const args = ['auth', 'add', provider, '--type', 'oauth', '--no-browser'];
   const child = spawn(command, args, {
-    cwd: hermesCwd(command),
     env: hermesEnv(),
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
   });
-  const rec: {
-    child: LooseBoundaryValue;
-    provider: string;
-    stdout: string;
-    stderr: string;
-    startedAt: number;
-  } = { child, provider, stdout: '', stderr: '', startedAt: Date.now() };
+  const rec: OAuthSession = { child, provider, stdout: '', stderr: '', startedAt: Date.now() };
   sessions.set(sessionId, rec);
 
   const onOutput = (stream: 'stdout' | 'stderr') => (chunk: LooseBoundaryValue) => {

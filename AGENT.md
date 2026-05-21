@@ -3,7 +3,7 @@
 This repo is `agent-UI`, a thin Electron desktop launcher and status surface for
 Hermes. Treat the local checkout as the source of truth. When Hermes behavior or
 contracts matter, verify against the local Hermes checkout at
-`/Users/saminkhan1/Documents/hermes/hermes-agent` instead of relying on public
+`/Users/saminkhan1/.hermes/hermes-agent` instead of relying on public
 docs or generated copies.
 
 ## Product Contract
@@ -128,7 +128,7 @@ pnpm run verify:concurrency:3 -- "/Applications/agent-UI for Hermes.app"
   required stage coverage, and no unexpected Hermes `ERROR`/`WARNING` log lines.
   The targeted scripts stay available for narrower reruns.
 - For Hermes boundary changes, run `pnpm run verify:hermes-contracts` and verify
-  against `/Users/saminkhan1/Documents/hermes/hermes-agent`.
+  against `/Users/saminkhan1/.hermes/hermes-agent`.
 - For menu, shortcut, modal, paste, click, or follow-up/cancel user-flow
   changes, prefer `pnpm run verify:interaction:lmstudio -- "/Applications/agent-UI for Hermes.app"`
   when the local permissions/runtime are available.
@@ -158,8 +158,8 @@ pnpm run verify:concurrency:3 -- "/Applications/agent-UI for Hermes.app"
   `import type ...` for types and `require(...)` for runtime imports.
 - Keep renderer UI dense and operational. This is a desktop utility surface, not
   a marketing page.
-- Do not store provider credentials or gateway secrets in app-owned product
-  config. The remembered Hermes binary path is non-secret config.
+- Do not store provider credentials, gateway secrets, or Hermes install-location
+  compatibility state in app-owned product config.
 - When gateway restart is needed, report the exact restart command unless the
   code path has explicit restart approval.
 
