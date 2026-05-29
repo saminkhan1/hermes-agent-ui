@@ -8,7 +8,6 @@ const { spawnSync } = require('node:child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
 const manifestPath = path.join(repoRoot, 'dist', 'release-manifest.json');
-const installerPath = path.join(repoRoot, 'dist', 'install-agent-ui-for-hermes.sh');
 const defaultTag = 'v1.0.0-beta.1';
 const args = process.argv.slice(2);
 
@@ -45,6 +44,16 @@ function run(command, commandArgs, opts = {}) {
     fail(`${command} ${commandArgs.join(' ')}`, String(res.stderr || res.stdout || res.error || '').trim());
   }
   return String(res.stdout || '').trim();
+}
+
+function runOptional(command, commandArgs, opts = {}) {
+  return spawnSync(command, commandArgs, {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    input: opts.input,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    timeout: opts.timeoutMs || 30000,
+  });
 }
 
 function gh(commandArgs, opts = {}) {
@@ -126,92 +135,21 @@ function releaseAssetUrl(repo, releaseTag, name) {
   return `https://github.com/${repo}/releases/download/${releaseTag}/${encodeURIComponent(name)}`;
 }
 
-function installerScript(repo, releaseTag, zip) {
-  const zipUrl = releaseAssetUrl(repo, releaseTag, zip.name);
-  return `#!/usr/bin/env bash
-set -euo pipefail
-
-APP_NAME="agent-UI for Hermes.app"
-ZIP_NAME="${zip.name}"
-ZIP_URL="${zipUrl}"
-ZIP_SHA256="${zip.sha256}"
-INSTALL_DIR="/Applications"
-
-if [ "$(uname -s)" != "Darwin" ]; then
-  echo "agent-UI for Hermes only supports macOS." >&2
-  exit 1
-fi
-
-if [ "$(uname -m)" != "arm64" ]; then
-  echo "This beta build is for Apple silicon Macs." >&2
-  exit 1
-fi
-
-command -v curl >/dev/null || { echo "curl is required." >&2; exit 1; }
-command -v ditto >/dev/null || { echo "ditto is required." >&2; exit 1; }
-command -v shasum >/dev/null || { echo "shasum is required." >&2; exit 1; }
-command -v codesign >/dev/null || { echo "codesign is required." >&2; exit 1; }
-
-tmpdir="$(mktemp -d "\${TMPDIR:-/tmp}/agent-ui-install.XXXXXX")"
-cleanup() {
-  rm -rf "$tmpdir"
-}
-trap cleanup EXIT
-
-zip_file="$tmpdir/$ZIP_NAME"
-echo "Downloading $ZIP_NAME..."
-curl -fL --proto '=https' --tlsv1.2 -o "$zip_file" "$ZIP_URL"
-
-actual_sha="$(shasum -a 256 "$zip_file" | awk '{print $1}')"
-if [ "$actual_sha" != "$ZIP_SHA256" ]; then
-  echo "SHA-256 mismatch for $ZIP_NAME" >&2
-  echo "expected: $ZIP_SHA256" >&2
-  echo "actual:   $actual_sha" >&2
-  exit 1
-fi
-
-extract_dir="$tmpdir/extract"
-mkdir -p "$extract_dir"
-ditto -x -k "$zip_file" "$extract_dir"
-source_app="$extract_dir/$APP_NAME"
-if [ ! -d "$source_app" ]; then
-  source_app="$(find "$extract_dir" -maxdepth 2 -name "$APP_NAME" -type d -print -quit)"
-fi
-if [ ! -d "$source_app" ]; then
-  echo "Could not find $APP_NAME in $ZIP_NAME." >&2
-  exit 1
-fi
-codesign --verify --deep --strict --verbose=2 "$source_app"
-
-dest_app="$INSTALL_DIR/$APP_NAME"
-if [ -e "$dest_app" ]; then
-  rm -rf "$dest_app"
-fi
-ditto "$source_app" "$dest_app"
-xattr -dr com.apple.quarantine "$dest_app" 2>/dev/null || true
-codesign --verify --deep --strict --verbose=2 "$dest_app"
-
-echo "Installed $dest_app"
-open "$dest_app"
-`;
-}
-
-function writeInstallerRecord(repo, releaseTag, records) {
-  const zip = records.find((record) => record.name.endsWith('.zip'));
-  if (!zip) fail('cannot build installer script without a zip artifact.');
-  fs.writeFileSync(installerPath, installerScript(repo, releaseTag, zip), { encoding: 'utf8', mode: 0o755 });
-  return {
-    name: path.basename(installerPath),
-    file: installerPath,
-    sha256: sha256(installerPath),
-    sizeBytes: fs.statSync(installerPath).size,
-  };
+function deleteObsoleteReleaseAssets(releaseTag) {
+  for (const assetName of ['install-agent-ui-for-hermes.sh']) {
+    const res = runOptional('gh', ['release', 'delete-asset', releaseTag, assetName, '--yes', ...repoArgs], {
+      timeoutMs: 60000,
+    });
+    if (res.status === 0) continue;
+    const output = `${res.stderr || ''}\n${res.stdout || ''}`;
+    if (/not found|no asset/i.test(output)) continue;
+    fail(`could not delete obsolete release asset ${assetName}`, output.trim());
+  }
 }
 
 function releaseBody(manifest, records, repo) {
   const dmg = records.find((record) => record.name.endsWith('.dmg'));
   const zip = records.find((record) => record.name.endsWith('.zip'));
-  const installer = records.find((record) => record.name === path.basename(installerPath));
   const manifestRecord = records.find((record) => record.name === 'release-manifest.json');
   const lines = [
     '# agent-UI for Hermes - Bootstrap Beta',
@@ -221,12 +159,12 @@ function releaseBody(manifest, records, repo) {
     '## Download',
     '',
     dmg
-      ? `Download \`${dmg.name}\` for the normal Mac install.`
-      : 'Download the DMG artifact for the normal Mac install.',
+      ? `Download the DMG: [\`${dmg.name}\`](${releaseAssetUrl(repo, tag, dmg.name)}).`
+      : 'Download the DMG artifact from this release.',
     '',
     zip
-      ? `The zip \`${zip.name}\` is included as a backup for testers who cannot use the DMG.`
-      : 'The zip artifact is included as a backup for testers who cannot use the DMG.',
+      ? `The zip \`${zip.name}\` is build evidence only. Do not use it as the customer install path.`
+      : 'Use the DMG as the customer install path.',
     '',
     '## Before You Install',
     '',
@@ -237,29 +175,21 @@ function releaseBody(manifest, records, repo) {
     '',
     'This app is connector-only. It does not bundle Hermes, store provider credentials, or copy tools into your Hermes install.',
     '',
-    '## Install Without The Apple Verification Dialog',
-    '',
-    "Because this beta is not notarized, the normal browser-download DMG path can show Apple's malware-verification warning and, on some Macs, right-click Open can keep looping. The no-dialog beta path is the checksum-verified installer script below: it downloads the release zip, verifies the SHA-256, verifies the app signature before install, installs the app in `/Applications`, clears quarantine on that installed copy, verifies the installed signature again, and opens the app.",
-    '',
-    installer
-      ? '```bash\n' +
-        `curl -fL -o /tmp/${installer.name} ${releaseAssetUrl(repo, tag, installer.name)} && \\\n` +
-        `printf '${installer.sha256}  /tmp/${installer.name}\\n' | shasum -a 256 -c - && \\\n` +
-        `bash /tmp/${installer.name}\n` +
-        '```'
-      : 'Download and run the installer script asset from this release.',
-    '',
-    '## Manual DMG Install',
+    '## Install',
     '',
     '1. Open the DMG.',
     '2. Drag `agent-UI for Hermes.app` to `/Applications`.',
-    '3. Launch from Finder.',
-    '4. If macOS says Apple could not verify the app is free of malware, right-click `agent-UI for Hermes.app`, choose `Open`, then confirm `Open` once. That approval is only needed for the first launch of this ad-hoc signed beta.',
-    '5. Choose `Use Text Input` or `Use Voice Input`, press `Cmd+Shift+C`, and submit a small test task.',
+    '3. Eject the DMG.',
+    '4. Open `/Applications` in Finder.',
+    '5. Right-click `agent-UI for Hermes.app` and choose `Open`.',
+    '6. If macOS warns that it cannot verify the app, click `Open` again.',
+    '7. After the first approved launch, future launches should work by double-clicking the app.',
+    '8. Choose `Use Text Input` or `Use Voice Input`, press `Cmd+Shift+C`, and submit a small test task.',
     '',
     '## Beta Notes',
     '',
     '- This bootstrap build is ad-hoc signed and not notarized yet. Without a paid Apple Developer ID, macOS can still show the first-launch verification warning even when the bundle passes local code-signature checks.',
+    '- Terminal commands, disabling Gatekeeper, clearing quarantine, and copying from a build folder are not supported install paths.',
     '- Hermes still owns model/provider auth and the actual run. agent-UI is only the desktop connector.',
     '- If Hermes has no provider/model configured, agent-UI should preserve your task and show the Hermes setup path.',
     '',
@@ -270,8 +200,8 @@ function releaseBody(manifest, records, repo) {
     '- `pnpm run verify`',
     '- `pnpm run dist:mac`',
     '- `pnpm run release:verify`',
-    '- `pnpm run verify:live:release -- "dist/mac-arm64/agent-UI for Hermes.app"`',
-    '- `pnpm run verify:interaction:lmstudio -- "dist/mac-arm64/agent-UI for Hermes.app"`',
+    '- `pnpm run verify:installed -- "/Applications/agent-UI for Hermes.app"`',
+    '- Golden VM install: DMG download, drag to `/Applications`, Finder right-click Open, warning approval, first usable screen, quit, double-click reopen.',
     '',
     '## Files',
     '',
@@ -296,7 +226,6 @@ function main() {
   validateManifest(manifest);
   const repo = repoOverride || ghJson(['repo', 'view', '--json', 'nameWithOwner']).nameWithOwner;
   const records = artifactRecords(manifest);
-  records.push(writeInstallerRecord(repo, tag, records));
   const plan = {
     tag,
     gitSha: manifest.package.gitSha,
@@ -336,6 +265,7 @@ function main() {
     ],
     { input: releaseBody(manifest, records, repo), timeoutMs: 60000 },
   );
+  deleteObsoleteReleaseAssets(tag);
   ghRelease(['release', 'upload', tag, ...records.map((record) => record.file), '--clobber'], { timeoutMs: 300000 });
 
   const refreshed = ghJson(['api', `repos/${repo}/releases/tags/${tag}`]);

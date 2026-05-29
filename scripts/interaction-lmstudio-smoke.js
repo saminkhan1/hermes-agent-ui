@@ -39,12 +39,16 @@ const lmStudioBaseUrl = String(
 )
   .trim()
   .replace(/\/+$/, '');
-let lmStudioModel = String(process.env.AGENT_UI_LMSTUDIO_MODEL || 'google/gemma-4-26b-a4b').trim();
+let lmStudioModel = String(process.env.AGENT_UI_LMSTUDIO_MODEL || '').trim();
 
 const sentinels = {
   initial: 'AGENT_UI_INTERACTION_INITIAL_OK',
   followup: 'AGENT_UI_INTERACTION_FOLLOWUP_OK',
 };
+
+function exactResponsePrompt(sentinel) {
+  return `Return only this exact token with no explanation, no punctuation, and no extra words: ${sentinel}`;
+}
 
 const evidence = {
   startedAt: new Date().toISOString(),
@@ -222,7 +226,7 @@ async function configureLmStudioProvider() {
       '  context_length: 64000',
       'agent:',
       '  max_turns: 4',
-      '  reasoning_effort: low',
+      '  reasoning_effort: none',
       'auxiliary:',
       '  compression:',
       `    model: ${model}`,
@@ -241,6 +245,9 @@ async function configureLmStudioProvider() {
       'platforms:',
       '  local_desktop:',
       '    enabled: true',
+      'platform_toolsets:',
+      '  local_desktop:',
+      '    - no_mcp',
       '',
     ].join('\n'),
   );
@@ -924,7 +931,7 @@ async function runMenuShortcutPromptFollowupJourney() {
   const modal = await openNewSessionWithLauncher();
   screenshotRect('new-session-modal', modal.modal.bounds);
 
-  const prompt = `Reply exactly: ${sentinels.initial}`;
+  const prompt = exactResponsePrompt(sentinels.initial);
   clickAtRect(modal.modal.promptRect, 'new session prompt');
   pasteText(prompt);
   await waitPromptLength(prompt.length, 'initial prompt');
@@ -950,7 +957,7 @@ async function runMenuShortcutPromptFollowupJourney() {
   screenshotRect('conversation-initial', opened.conversation.bounds);
   await focusConversationFollowup('follow-up');
 
-  const followup = `Reply exactly: ${sentinels.followup}`;
+  const followup = exactResponsePrompt(sentinels.followup);
   pasteText(followup);
   try {
     await waitForFollowupValue(followup, 'follow-up text pasted');

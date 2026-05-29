@@ -42,10 +42,19 @@ approval on first launch because the app is ad-hoc signed and not notarized.
 
 1. Download `agent-UI-for-Hermes-1.0.0-mac-arm64-bootstrap.dmg` from the GitHub
    Release page.
-2. Mount the DMG.
+2. Open the DMG.
 3. Drag `agent-UI for Hermes.app` to `/Applications`.
-4. Launch from Finder. If macOS blocks the bootstrap build, right-click the app
-   and choose Open.
+4. Eject the DMG.
+5. Open `/Applications` in Finder.
+6. Right-click `agent-UI for Hermes.app`.
+7. Click Open.
+8. If macOS warns that it cannot verify the app, click Open again.
+9. After the first approved launch, future launches should work by double-clicking
+   the app.
+
+Terminal commands, disabling Gatekeeper, clearing quarantine, and copying the app
+directly from a build folder are not supported install paths for the unpaid
+bootstrap release.
 
 ## Use The App
 
@@ -125,7 +134,7 @@ From the repo root:
 pnpm run dist:mac
 ```
 
-`pnpm run dist:mac` emits the connector DMG + zip artifacts with an ad-hoc signed app, no Apple notarization, and no stapling. Without paid Developer ID signing and notarization, browser-downloaded DMGs can show Apple's malware-verification dialog, and right-click Open is not reliable enough as the primary customer path. The GitHub release refresh step also generates `dist/install-agent-ui-for-hermes.sh`, a checksum-verified installer script that downloads the zip, verifies its SHA-256, installs the app into `/Applications`, clears quarantine on that installed copy, verifies the code signature, and opens the app.
+`pnpm run dist:mac` emits the connector DMG + zip artifacts with an ad-hoc signed app, no Apple notarization, and no stapling. Without paid Developer ID signing and notarization, browser-downloaded DMGs can show Apple's malware-verification dialog. The supported unpaid customer path is the DMG install plus Finder right-click Open approval flow; if that flow fails in a fresh VM, the release is blocked.
 
 The future Developer ID path remains available when paid signing and notarization credentials exist:
 
@@ -139,7 +148,6 @@ The bootstrap artifacts are written to `dist/`, for example:
 ```text
 dist/agent-UI-for-Hermes-1.0.0-mac-arm64-bootstrap.dmg
 dist/agent-UI-for-Hermes-1.0.0-mac-arm64-bootstrap.zip
-dist/install-agent-ui-for-hermes.sh
 dist/release-manifest.json
 ```
 
@@ -179,19 +187,22 @@ If the built app is missing, run `pnpm run build` from the repo root.
 
 1. Mount the connector bootstrap DMG.
 2. Drag the app to `/Applications`.
-3. Launch from Finder, using right-click Open for the bootstrap Gatekeeper approval if macOS requires it.
-4. Confirm the app starts without requiring a terminal.
-5. In the app, tray, or pet context menu, choose `Use Text Input`.
-6. Press `Cmd+Shift+C`.
-7. Enter a short prompt and submit.
-8. Confirm a session appears and streams Hermes output.
-9. Open details, send a follow-up, then press Cancel and confirm Hermes stops the active run.
-10. Start one `/background ...` task and confirm Hermes accepts it as a slash command.
-11. In the app, tray, or pet context menu, choose `Use Voice Input`.
-12. Press `Cmd+Shift+C`, grant macOS microphone permission if prompted, and confirm the prompt window shows voice recording/transcribing state.
-13. Confirm the transcribed prompt appears in the text box, edit it if needed, then submit it to start a new session.
-14. While the pet overlay is visible, share the active display from FaceTime, Zoom, and Discord, then confirm the share starts and the overlay remains visible in the shared display.
-15. Quit/reopen the app and confirm the selected input mode and gateway reconnect path do not show a startup error.
+3. Eject the DMG.
+4. Open `/Applications` in Finder.
+5. Right-click the app, choose Open, and click Open again if macOS warns.
+6. Confirm the app starts without requiring a terminal.
+7. Quit the app, then launch it again normally by double-clicking.
+8. In the app, tray, or pet context menu, choose `Use Text Input`.
+9. Press `Cmd+Shift+C`.
+10. Enter a short prompt and submit.
+11. Confirm a session appears and streams Hermes output.
+12. Open details, send a follow-up, then press Cancel and confirm Hermes stops the active run.
+13. Start one `/background ...` task and confirm Hermes accepts it as a slash command.
+14. In the app, tray, or pet context menu, choose `Use Voice Input`.
+15. Press `Cmd+Shift+C`, grant macOS microphone permission if prompted, and confirm the prompt window shows voice recording/transcribing state.
+16. Confirm the transcribed prompt appears in the text box, edit it if needed, then submit it to start a new session.
+17. While the pet overlay is visible, share the active display from FaceTime, Zoom, and Discord, then confirm the share starts and the overlay remains visible in the shared display.
+18. Quit/reopen the app and confirm the selected input mode and gateway reconnect path do not show a startup error.
 
 Known first-run cases to check:
 
@@ -205,7 +216,7 @@ Use the four-ring release workflow for user-downloadable macOS artifacts:
 1. Ring 0, local fast checks: `pnpm run verify:source`. No VMs.
 2. Ring 1, GitHub Actions build gate: `.github/workflows/mac-release.yml` runs on pinned `macos-15`, verifies Hermes contracts against a real Hermes checkout, builds connector bootstrap DMG + zip artifacts once, verifies manifests plus artifact hashes, and uploads artifacts. GitHub runners are only a build gate, not clean-install proof.
 3. Ring 2, installed-app automation: install or extract the exact connector artifact, run the smoke against `/Applications/agent-UI for Hermes.app`, and preserve its evidence directory.
-4. Ring 3, manual customer pass: use the release installer script as the primary customer path, confirm it installs to `/Applications` and opens without Apple's malware-verification dialog, then confirm TCC microphone prompts, tray/menu behavior, text/voice sessions, follow-up, cancel, background mode, quit/reopen, and clear first-run errors for missing credentials, offline mode, port conflicts, and denied permissions. Keep the DMG as a fallback artifact only; if testing it manually, expect Gatekeeper friction unless a Developer ID/notarized build is produced.
+4. Ring 3, fresh-VM customer pass: download the public DMG from the exact URL users receive, open it, drag the app to `/Applications`, eject the DMG, open `/Applications` in Finder, right-click the app, click Open, click Open again if macOS warns, confirm the first usable screen, quit, relaunch by double-clicking, then destroy the VM. Terminal commands, disabling Gatekeeper, clearing quarantine, and copying from a build folder do not satisfy this gate.
 
 After installing a release candidate into `/Applications`, run the installed-app
 automation before the human Ring 3 pass:
@@ -231,9 +242,9 @@ This writes `dist/release-manifest.json` with app mode, app version, git SHA, ap
 
 The customer-facing download link should be the GitHub Release page, not a
 GitHub Actions artifact link. For bootstrap beta releases, the release page
-should lead with the generated installer script command instead of the DMG
-drag-and-open path, because the script verifies hashes before clearing
-quarantine while the browser-downloaded DMG can repeatedly hit Gatekeeper.
+should lead with the DMG download and the Finder right-click Open approval flow.
+If the browser-downloaded DMG repeatedly hits Gatekeeper in the fresh-VM gate,
+do not publish it as the supported unpaid install path.
 After all local and GitHub gates pass, refresh the GitHub Release assets from the verified manifest:
 
 ```bash
@@ -256,9 +267,9 @@ pnpm run verify:interaction:lmstudio -- "/Applications/agent-UI for Hermes.app"
 
 `verify:live:release` is the preferred release gate for the live installed-app path. It runs first-launch, deterministic voice transcript insertion, live voice-submit, follow-up, cancel, post-cancel, reopen, three-session concurrency, no-provider onboarding with an actionable setup state or auth handoff, required stage coverage, and Hermes log-blocker checks in one installed-app smoke run, after one LM Studio preflight.
 
-The live gate is intentionally stricter than the stage report table alone: required customer stages cannot be missing, and unexpected Hermes `ERROR`/`WARNING` log lines fail the run instead of being buried in the evidence directory. Bootstrap artifacts remain ad-hoc signed, so a passing live gate must be paired with either the checksum-verified installer-script path or a Developer ID/notarized build; the DMG right-click Open flow is fallback documentation, not the primary customer install path.
+The live gate is intentionally stricter than the stage report table alone: required customer stages cannot be missing, and unexpected Hermes `ERROR`/`WARNING` log lines fail the run instead of being buried in the evidence directory. Bootstrap artifacts remain ad-hoc signed, so a passing live gate must be paired with the fresh-VM DMG right-click Open acceptance test or replaced by a Developer ID/notarized build.
 
-`verify:live:lmstudio` and `verify:concurrency:3` remain targeted demo gates. They require LM Studio serving `google/gemma-4-26b-a4b` at `http://127.0.0.1:1234/v1`, loaded with at least 64K context and parallelism for three requests, then drive the installed app through real Hermes and real model responses.
+`verify:live:lmstudio` and `verify:concurrency:3` remain targeted demo gates. They require LM Studio serving a loaded chat model at `http://127.0.0.1:1234/v1`, loaded with at least 64K context and parallelism for three requests, then drive the installed app through real Hermes and real model responses. Set `AGENT_UI_LMSTUDIO_MODEL` to force a specific model.
 
 The gateway client/runtime are part of the Electron main process bundle. `pnpm run verify:source` checks that the build emits:
 

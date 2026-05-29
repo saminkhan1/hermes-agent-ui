@@ -101,9 +101,11 @@ pnpm run release:github:refresh -- v1.0.0-beta.1
 pnpm run verify:installed -- "/Applications/agent-UI for Hermes.app"
 ```
 
-Real LM Studio gates require LM Studio serving `google/gemma-4-26b-a4b` on
-`http://127.0.0.1:1234/v1` with 64K context. The interaction gate also requires
-macOS Accessibility permission and the direct NousResearch Hermes clone:
+Real LM Studio gates require LM Studio serving a loaded chat model on
+`http://127.0.0.1:1234/v1` with 64K context and parallelism for three requests.
+Set `AGENT_UI_LMSTUDIO_MODEL` to force a specific model. The interaction gate
+also requires macOS Accessibility permission and the direct NousResearch Hermes
+clone:
 
 ```bash
 pnpm run verify:live:release -- "/Applications/agent-UI for Hermes.app"

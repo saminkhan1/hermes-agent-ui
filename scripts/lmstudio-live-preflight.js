@@ -2,8 +2,14 @@
 
 const { spawnSync } = require('node:child_process');
 
-const model = String(process.env.AGENT_UI_LMSTUDIO_MODEL || 'google/gemma-4-26b-a4b').trim();
+let model = String(process.env.AGENT_UI_LMSTUDIO_MODEL || '').trim();
 const baseUrl = String(process.env.AGENT_UI_LMSTUDIO_BASE_URL || process.env.LM_BASE_URL || 'http://127.0.0.1:1234/v1')
+  .trim()
+  .replace(/\/+$/, '');
+const nativeBaseUrl = String(
+  process.env.AGENT_UI_LMSTUDIO_NATIVE_BASE_URL ||
+    (baseUrl.endsWith('/v1') ? `${baseUrl.slice(0, -3)}/api/v1` : 'http://127.0.0.1:1234/api/v1'),
+)
   .trim()
   .replace(/\/+$/, '');
 const minContextLength = 64000;
@@ -23,10 +29,12 @@ function run(command, args) {
   });
 }
 
-async function requestJson(url) {
+async function requestJson(url, opts = {}) {
   const res = await fetch(url, {
-    method: 'GET',
-    signal: AbortSignal.timeout(5000),
+    method: opts.method || 'GET',
+    headers: opts.headers,
+    body: opts.body,
+    signal: AbortSignal.timeout(opts.timeoutMs || 5000),
   });
   const text = await res.text();
   let json;
@@ -48,8 +56,6 @@ function parseLoadedModels(stdout) {
 }
 
 (async () => {
-  if (!model) fail('AGENT_UI_LMSTUDIO_MODEL is empty.');
-
   const version = run('lms', ['--version']);
   if (version.status !== 0) {
     fail('`lms` CLI is not available. Install LM Studio CLI and make sure `lms` is on PATH.');
@@ -59,6 +65,49 @@ function parseLoadedModels(stdout) {
   if (status.status !== 0 || !/running/i.test(`${status.stdout}\n${status.stderr}`)) {
     fail('LM Studio server is not running.', 'Start it with: lms server start --port 1234');
   }
+
+  const ps = run('lms', ['ps', '--json']);
+  if (ps.status !== 0) {
+    fail('Could not inspect loaded LM Studio models with `lms ps --json`.', ps.stderr || ps.stdout);
+  }
+  const loaded = parseLoadedModels(ps.stdout);
+
+  let nativeModelsResponse;
+  try {
+    nativeModelsResponse = await requestJson(`${nativeBaseUrl}/models`);
+  } catch (error) {
+    fail(
+      `LM Studio native REST API is unreachable at ${nativeBaseUrl}.`,
+      error && error.message ? error.message : String(error),
+    );
+  }
+  if (
+    !nativeModelsResponse ||
+    nativeModelsResponse.status < 200 ||
+    nativeModelsResponse.status >= 300 ||
+    !nativeModelsResponse.json ||
+    !Array.isArray(nativeModelsResponse.json.models)
+  ) {
+    fail(
+      `LM Studio /api/v1/models failed at ${nativeBaseUrl}.`,
+      `${nativeModelsResponse.status} ${nativeModelsResponse.text}`,
+    );
+  }
+
+  if (!model) {
+    const loadedLlm = loaded.find((entry) => entry && entry.type === 'llm' && String(entry.identifier || '').trim());
+    const apiLoadedLlm = nativeModelsResponse.json.models.find((entry) => {
+      return (
+        entry && entry.type === 'llm' && Array.isArray(entry.loaded_instances) && entry.loaded_instances.length > 0
+      );
+    });
+    model = String(
+      (loadedLlm && loadedLlm.identifier) ||
+        (apiLoadedLlm && apiLoadedLlm.loaded_instances[0] && apiLoadedLlm.loaded_instances[0].id) ||
+        '',
+    ).trim();
+  }
+  if (!model) fail('LM Studio has no loaded chat model. Set AGENT_UI_LMSTUDIO_MODEL or load a model with `lms load`.');
 
   let modelsResponse;
   try {
@@ -84,11 +133,6 @@ function parseLoadedModels(stdout) {
     fail(`LM Studio server does not expose ${model}.`, `Visible models: ${apiModelIds.join(', ') || '<none>'}`);
   }
 
-  const ps = run('lms', ['ps', '--json']);
-  if (ps.status !== 0) {
-    fail('Could not inspect loaded LM Studio models with `lms ps --json`.', ps.stderr || ps.stdout);
-  }
-  const loaded = parseLoadedModels(ps.stdout);
   const loadedEntry = loaded.find((entry) => {
     return [
       entry && entry.identifier,
@@ -117,12 +161,44 @@ function parseLoadedModels(stdout) {
     );
   }
 
+  let nativeChatResponse;
+  try {
+    nativeChatResponse = await requestJson(`${nativeBaseUrl}/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        input: 'Reply with AGENT_UI_LMSTUDIO_PREFLIGHT_OK only.',
+        temperature: 0,
+        max_output_tokens: 16,
+        reasoning: 'off',
+        store: false,
+      }),
+      timeoutMs: 120000,
+    });
+  } catch (error) {
+    fail(`LM Studio /api/v1/chat failed at ${nativeBaseUrl}.`, error && error.message ? error.message : String(error));
+  }
+  if (
+    !nativeChatResponse ||
+    nativeChatResponse.status < 200 ||
+    nativeChatResponse.status >= 300 ||
+    !nativeChatResponse.json ||
+    !Array.isArray(nativeChatResponse.json.output)
+  ) {
+    fail(
+      `LM Studio /api/v1/chat failed at ${nativeBaseUrl}.`,
+      `${nativeChatResponse.status} ${nativeChatResponse.text}`,
+    );
+  }
+
   console.log(
     JSON.stringify(
       {
         ok: true,
         provider: 'lmstudio',
         baseUrl,
+        nativeBaseUrl,
         model,
         lms: String(version.stdout || version.stderr || '').trim(),
         loadedStatus: loadedEntry.status || null,

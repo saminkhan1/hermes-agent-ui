@@ -71,6 +71,11 @@ const liveSentinels = {
     'AGENT_UI_LMSTUDIO_CONCURRENT_3_OK',
   ],
 };
+
+function exactResponsePrompt(sentinel) {
+  return `Return only this exact token with no explanation, no punctuation, and no extra words: ${sentinel}`;
+}
+
 const defaultSmokePhases = providerSmoke ? 'first,reopen' : 'onboarding';
 const smokePhases = new Set(
   listFromCsv(process.env.AGENT_UI_INSTALLED_SMOKE_PHASES || defaultSmokePhases).map((phase) => phase.toLowerCase()),
@@ -210,10 +215,13 @@ function writeNoProviderConfig(home) {
     [
       'agent:',
       '  max_turns: 2',
-      '  reasoning_effort: low',
+      '  reasoning_effort: none',
       'platforms:',
       '  local_desktop:',
       '    enabled: true',
+      'platform_toolsets:',
+      '  local_desktop:',
+      '    - no_mcp',
       '',
     ].join('\n'),
   );
@@ -344,7 +352,7 @@ async function configureProviderSmoke() {
       '  context_length: 64000',
       'agent:',
       '  max_turns: 4',
-      '  reasoning_effort: low',
+      '  reasoning_effort: none',
       'auxiliary:',
       '  compression:',
       `    model: ${model}`,
@@ -363,6 +371,9 @@ async function configureProviderSmoke() {
       'platforms:',
       '  local_desktop:',
       '    enabled: true',
+      'platform_toolsets:',
+      '  local_desktop:',
+      '    - no_mcp',
       '',
     ].join('\n'),
   );
@@ -724,7 +735,7 @@ async function waitForUiTarget(label, predicate, timeoutMs = 10000) {
 
 async function runFirstLaunchChecks() {
   const voicePrompt = liveResponseSmoke
-    ? `Reply exactly: ${liveSentinels.voice}`
+    ? exactResponsePrompt(liveSentinels.voice)
     : 'Release deterministic voice smoke from installed app.';
   await startApp('first', { evalTranscript: voicePrompt });
 
@@ -781,7 +792,8 @@ async function runFirstLaunchChecks() {
     'start-background',
     await postJson('/start', {
       conversationId: 'bg-smoke',
-      prompt: '/background Release background smoke from installed app.',
+      prompt:
+        '/background Return only this exact token with no explanation, no punctuation, and no extra words: AGENT_UI_BACKGROUND_OK. Do not use tools. Do not ask clarifying questions.',
       closeModal: true,
     }),
   );
@@ -794,10 +806,10 @@ async function runFirstLaunchChecks() {
   assertCondition(hasText(background.conversation, /Background task started/), 'background mode did not start');
 
   const followInitialPrompt = liveResponseSmoke
-    ? `Reply exactly: ${liveSentinels.initial}`
+    ? exactResponsePrompt(liveSentinels.initial)
     : 'Release followup smoke initial.';
   const followupPrompt = liveResponseSmoke
-    ? `Reply exactly: ${liveSentinels.followup}`
+    ? exactResponsePrompt(liveSentinels.followup)
     : 'Release follow-up smoke second.';
   saveJson(
     'start-followup',
@@ -855,7 +867,7 @@ async function runFirstLaunchChecks() {
       'start-post-cancel',
       await postJson('/start', {
         conversationId: 'post-cancel-smoke',
-        prompt: `Reply exactly: ${liveSentinels.postCancel}`,
+        prompt: exactResponsePrompt(liveSentinels.postCancel),
         closeModal: true,
       }),
     );
@@ -872,8 +884,15 @@ async function runFirstLaunchChecks() {
     await postJson('/open-conversation', { conversationId: 'follow-smoke' }),
   );
   assertCondition(opened && opened.ok === true, 'open-conversation endpoint failed');
-  await sleep(1000);
-  const uiTargets = saveJson('ui-open-conversation', await getJson('/ui-targets'));
+  const uiTargets = saveJson(
+    'ui-open-conversation',
+    await waitForUiTarget(
+      'open-conversation',
+      (targets) =>
+        targets && targets.conversation && targets.conversation.visible === true && targets.conversation.followupRect,
+      15000,
+    ),
+  );
   assertCondition(
     uiTargets && uiTargets.conversation && uiTargets.conversation.visible === true,
     'conversation window was not visible',
@@ -893,7 +912,7 @@ async function runFirstLaunchChecks() {
 async function runReopenChecks() {
   await startApp('second');
   const reopenPrompt = liveResponseSmoke
-    ? `Reply exactly: ${liveSentinels.reopen}`
+    ? exactResponsePrompt(liveSentinels.reopen)
     : 'Release reopen smoke after app restart.';
   saveJson(
     'start-reopen',
@@ -993,7 +1012,7 @@ async function runConcurrencyChecks() {
   const runs = liveSentinels.concurrent.map((sentinel, index) => ({
     conversationId: `concurrent-${index + 1}`,
     sentinel,
-    prompt: `Reply exactly: ${sentinel}`,
+    prompt: exactResponsePrompt(sentinel),
   }));
 
   const startedAt = Date.now();

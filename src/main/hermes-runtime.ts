@@ -6,7 +6,7 @@ import type { MutableJsonObject } from '../shared/contracts.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
-import { spawn, spawnSync, execFile } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { parseEnv, promisify } from 'node:util';
@@ -78,6 +78,7 @@ type StreamProbeResult = {
   pending?: boolean;
 };
 const GATEWAY_READY_ATTEMPTS = 80;
+let connectorHermesCommandCache: MutableJsonObject | null = null;
 const GATEWAY_READY_INTERVAL_MS = 250;
 const GATEWAY_READY_REQUEST_TIMEOUT_MS = 500;
 const GATEWAY_OCCUPIED_PORT_PREFLIGHT_TIMEOUT_MS = 150;
@@ -267,25 +268,19 @@ function connectorCommandFound(command: string, details: MutableJsonObject = {})
 }
 
 function connectorCommandUsable(command: string) {
-  if (!executableExists(command)) return false;
-  const result = spawnSync(command, ['version'], {
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      HOME: realUserHomeDir(),
-      HERMES_HOME: defaultHermesHome(),
-      PATH: safeRuntimePath(),
-    },
-    timeout: 5000,
-  });
-  return result.status === 0 && /Hermes Agent/i.test(`${result.stdout || ''}\n${result.stderr || ''}`);
+  return executableExists(command);
 }
 
 function resolveConnectorHermesCommand() {
+  const cachedCommand = String((connectorHermesCommandCache && connectorHermesCommandCache.command) || '').trim();
+  if (cachedCommand && executableExists(cachedCommand)) return { ...connectorHermesCommandCache };
+  connectorHermesCommandCache = null;
+
   for (const candidate of defaultConnectorHermesCandidates()) {
     const resolved = absoluteCommandPath(candidate);
     if (connectorCommandUsable(resolved)) {
-      return connectorCommandFound(resolved);
+      connectorHermesCommandCache = connectorCommandFound(resolved);
+      return { ...connectorHermesCommandCache };
     }
   }
 
